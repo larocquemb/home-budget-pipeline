@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""Shared deterministic budget category logic used by Costco and Instacart scripts."""
+
+from __future__ import annotations
+
+import difflib
+import re
+from typing import Dict, List, Optional, Tuple
+
+DEFAULT_CATEGORY = 'Groceries'
+CATEGORY_ORDER = ['Medical Products', 'Health & Fitness', 'Clothing', 'Indoor Supplies', 'Outdoor Supplies', 'Groceries']
+FUZZY_THRESHOLD = 0.75
+FUZZY_MIN_GAP = 0.08
+
+CATEGORY_KEYWORDS = {
+    'Medical Products': [
+        'readers', 'reading glasses', 'glasses', 'cetaphil', 'bandage', 'bandages',
+        'first aid', 'pain relief', 'ibuprofen', 'acetaminophen', 'tylenol',
+        'advil', 'allergy', 'cold', 'flu', 'cough'
+    ],
+    'Health & Fitness': [
+        'protein powder', 'protein powders', 'electrolyte', 'electrolytes',
+        'electrolyte mix', 'electrolyte mixes', 'vitamin', 'vitamins',
+        'omega', 'creatine', 'supplement', 'supplements', 'workout supplement',
+        'workout supplements', 'gummies', 'multivitamin',
+        'protein shake', 'protein shakes', 'shake', 'powder', 'collagen', 'magnesium', 'wakewater', 'built puff',
+        'quest', 'fairlife', 'premier protein'
+    ],
+    'Clothing': [
+        'shirt', 'pant', 'pants', 'jeans', 'jacket', 'coat', 'hoodie', 'sock', 'socks', 'underwear',
+        'brief', 'boxer', 'bra', 'shoe', 'shoes', 'boot', 'boots', 'slipper', 'hat',
+        'glove', 'gloves', 'sweater', 'legging', 'leggings', 'short', 'shorts', 'dress', 'pajama',
+        'tee', 't-shirt', 'parka', 'fleece', 'crew', 'crewneck', 'polo', 'lounge', 'dkny', 'clothing',
+        'mondetta', 'vest', 'top', 'adidas', 'tshirt', 'tee shirt', 'tshrit', 'thong', 'tankini', 'swimwear',
+        'knix'
+    ],
+    'Indoor Supplies': [
+        'paper towel', 'toilet paper', 'tissue', 'napkin', 'detergent', 'laundry',
+        'dish soap', 'dishwasher', 'soap', 'cleaner', 'cleaning', 'garbage bag', 'garbage bags',
+        'kitchen bag', 'ziplock', 'foil', 'plastic wrap', 'parchment', 'sponge', 'sponges',
+        'batteries', 'battery', 'light bulb', 'lightbulb', 'bulb', 'bulbs', 'kleenex',
+        'wipes', 'sanitizer', 'disinfect', 'trash bag', 'trash bags', 'plate', 'plates', 'bounty'
+    ],
+    'Outdoor Supplies': [
+        'soil', 'mulch', 'garden', 'planter', 'hose', 'bbq', 'propane', 'charcoal', 'patio',
+        'deck', 'outdoor', 'lawn', 'grass seed', 'fertilizer', 'seed', 'pool', 'camping',
+        'cooler', 'bug spray', 'insect', 'weed', 'landscape'
+    ],
+    'Groceries': [
+        'milk', 'bread', 'banana', 'bananas', 'apple', 'apples', 'orange', 'oranges', 'berry',
+        'berries', 'chicken', 'beef', 'pork', 'fish', 'salmon', 'shrimp', 'cheese', 'yogurt',
+        'egg', 'eggs', 'butter', 'cream', 'lettuce', 'tomato', 'potato', 'rice', 'pasta',
+        'bean', 'beans',
+        'pizza', 'cereal', 'chips', 'cracker', 'cookies', 'snack', 'granola', 'juice', 'water',
+        'coffee', 'tea', 'soup', 'broth', 'frozen', 'fruit', 'vegetable', 'veggie', 'meat',
+        'tim hortons',
+        'bakery', 'muffin', 'croissant', 'bagel', 'bagels', 'wrap', 'tortilla', 'pita',
+        'salsa', 'sauce', 'olive oil', 'oil', 'vinegar', 'nuts', 'almond', 'cashew', 'peanut',
+        'candy', 'chocolate', 'pop', 'soda', 'sparkling', 'drink', 'beverage', 'watermelon',
+        'straw', 'hydro'
+    ]
+}
+
+# User-verified item classifications.
+VERIFIED_CATEGORY_OVERRIDES = {
+    '16 grain': 'Groceries',
+    '4oz choc muf': 'Groceries',
+    'alani nu': 'Health & Fitness',
+    'artisan bgt': 'Groceries',
+    'asiancashw2p': 'Groceries',
+    'avocados': 'Groceries',
+    'b s breasts': 'Groceries',
+    'bick s dills': 'Groceries',
+    'boursin': 'Groceries',
+    'brioche bun': 'Groceries',
+    'broccoli': 'Groceries',
+    'built sour': 'Groceries',
+    'canned chckn': 'Groceries',
+    'carrot 510g': 'Groceries',
+    'cauliflower': 'Groceries',
+    'cdn lt rye': 'Groceries',
+    'cedar valley': 'Groceries',
+    'chk bites': 'Groceries',
+    'chkn pot pie': 'Groceries',
+    'chow mein': 'Groceries',
+    'cinnamon dan': 'Groceries',
+    'connie ckn b': 'Groceries',
+    'crmydillpckl': 'Groceries',
+    'croutons': 'Groceries',
+    'drive thru': 'Indoor Supplies',
+    'gf ckn flngs': 'Groceries',
+    'gogo squeez': 'Groceries',
+    'green grapes': 'Groceries',
+    'green seedless grapes': 'Groceries',
+    'green kiwi': 'Groceries',
+    'ground ckn': 'Groceries',
+    'haddock': 'Groceries',
+    'hv ranch': 'Groceries',
+    'kinder ghssl': 'Groceries',
+    'kodiak cakes': 'Groceries',
+    'ks adult gum': 'Health & Fitness',
+    'ks boneless': 'Groceries',
+    'ks chia': 'Groceries',
+    'ks chk tend': 'Groceries',
+    'ks drawstrng': 'Clothing',
+    'ks full zip': 'Clothing',
+    'ks grk ygrt': 'Groceries',
+    'lac free 2': 'Groceries',
+    'love corn': 'Groceries',
+    'med ch slice': 'Groceries',
+    'michelob': 'Groceries',
+    'mini cukes': 'Groceries',
+    'mini wontons': 'Groceries',
+    'nonni raspbr': 'Groceries',
+    'org mangos': 'Groceries',
+    'oroweat tort': 'Groceries',
+    'philly choc': 'Groceries',
+    'quepasa lime': 'Groceries',
+    'quiche vty': 'Groceries',
+    'remedy': 'Medical Products',
+    'romaine': 'Groceries',
+    'slcd bck bcn': 'Groceries',
+    'sliced mango': 'Groceries',
+    'smkd gouda': 'Groceries',
+    'spn feta ssg': 'Groceries',
+    'stuff pepper': 'Groceries',
+    'sunions': 'Groceries',
+    'sweet fries': 'Groceries',
+    'sweet pepper': 'Groceries',
+    'sweetkaleduo': 'Groceries',
+    'terra dates': 'Groceries',
+    'tonkotsu ram': 'Groceries',
+    'tropicana og': 'Groceries',
+    'twigz pickle': 'Groceries',
+    'unsalted btr': 'Groceries',
+    'vaseline dsr': 'Medical Products',
+    'vector jumbo': 'Groceries',
+    'hrvst crunch': 'Groceries',
+    'wahl cordless pro home barber kit 1 each': 'Indoor Supplies',
+}
+
+
+def normalize_for_match(text: str) -> str:
+    return re.sub(r'[^a-z0-9]+', ' ', text.lower()).strip()
+
+
+def phrase_ngrams(tokens: List[str], n: int) -> List[str]:
+    if len(tokens) < n:
+        return []
+    return [' '.join(tokens[i:i + n]) for i in range(len(tokens) - n + 1)]
+
+
+def try_exact_keyword_category(desc: str) -> Optional[str]:
+    d = desc.lower()
+    for category in CATEGORY_ORDER:
+        for keyword in CATEGORY_KEYWORDS[category]:
+            if keyword in d:
+                return category
+    return None
+
+
+def try_fuzzy_keyword_category(desc: str) -> Optional[str]:
+    normalized = normalize_for_match(desc)
+    if not normalized:
+        return None
+
+    tokens = normalized.split()
+    candidates = set(tokens)
+    candidates.update(phrase_ngrams(tokens, 2))
+    candidates.update(phrase_ngrams(tokens, 3))
+    candidates.add(normalized)
+
+    best_per_category: Dict[str, float] = {c: 0.0 for c in CATEGORY_ORDER}
+
+    for category in CATEGORY_ORDER:
+        for keyword in CATEGORY_KEYWORDS[category]:
+            kw = normalize_for_match(keyword)
+            kw_tokens = kw.split()
+            kw_prefixes = {t[:3] for t in kw_tokens if len(t) >= 3}
+            for cand in candidates:
+                cand_tokens = cand.split()
+                cand_prefixes = {t[:3] for t in cand_tokens if len(t) >= 3}
+
+                if (
+                    len(cand_tokens) == 1
+                    and len(kw_tokens) == 1
+                    and cand
+                    and kw
+                    and cand[0] != kw[0]
+                ):
+                    continue
+
+                score = difflib.SequenceMatcher(None, cand, kw).ratio()
+
+                has_affinity = (
+                    bool(cand_prefixes & kw_prefixes)
+                    or any(t in kw_tokens for t in cand_tokens)
+                    or cand in kw
+                    or kw in cand
+                )
+                if not has_affinity:
+                    score -= 0.18
+
+                if score > best_per_category[category]:
+                    best_per_category[category] = score
+
+    ranked = sorted(best_per_category.items(), key=lambda x: x[1], reverse=True)
+    best_category, best_score = ranked[0]
+    second_best_score = ranked[1][1] if len(ranked) > 1 else 0.0
+
+    if best_score >= FUZZY_THRESHOLD and (best_score - second_best_score) >= FUZZY_MIN_GAP:
+        return best_category
+    return None
+
+
+def deterministic_category(desc: str) -> Tuple[str, str]:
+    d = desc.lower()
+    if 'protein bar' in d or 'protein bars' in d:
+        return 'Groceries', 'exact'
+    if 'enviro fee' in d:
+        return 'Groceries', 'exact'
+    if 'crest' in d:
+        return 'Indoor Supplies', 'exact'
+
+    cache_key = normalize_for_match(desc)
+    cached_category = VERIFIED_CATEGORY_OVERRIDES.get(cache_key)
+    if cached_category in CATEGORY_ORDER:
+        return cached_category, 'verified_cache'
+
+    exact = try_exact_keyword_category(desc)
+    if exact:
+        return exact, 'exact'
+
+    fuzzy = try_fuzzy_keyword_category(desc)
+    if fuzzy:
+        return fuzzy, 'fuzzy'
+
+    return DEFAULT_CATEGORY, 'default'
