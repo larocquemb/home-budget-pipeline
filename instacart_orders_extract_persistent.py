@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from openpyxl import Workbook
 from playwright.sync_api import BrowserContext, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 from budget_category_ai import AICategoryEngine
-from budget_category_logic import CATEGORY_ORDER, deterministic_category, normalize_for_match
+from budget_category_logic import CATEGORY_ORDER, DEFAULT_CATEGORY, canonicalize_category, deterministic_category, normalize_for_match
 
 INSTACART_BASE = "https://www.instacart.ca"
 DEFAULT_ORDERS_URLS = [
@@ -159,17 +159,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--write-db",
         action="store_true",
-        help="Write parsed orders/items into Postgres (grocery schema).",
+        help="Write parsed canonical expense records into Postgres.",
     )
     parser.add_argument(
         "--db-dsn",
-        default=os.environ.get("HOME_BUDGET_PG_DSN", "dbname=home_budget"),
-        help="Postgres DSN for --write-db (default: env HOME_BUDGET_PG_DSN or dbname=home_budget).",
+        default=os.environ.get("HOME_BUDGET_PG_DSN", ""),
+        help=(
+            "Postgres DSN for --write-db. Do not include password here. "
+            "Use ~/.pgpass or PGPASSWORD/HOME_BUDGET_PGPASSWORD env vars. "
+            "Default: env HOME_BUDGET_PG_DSN or dbname=home_budget."
+        ),
     )
     parser.add_argument(
         "--db-schema",
-        default="grocery",
-        help="Target schema for --write-db (default: grocery).",
+        default="budget",
+        help="Target schema for --write-db (default: budget).",
+    )
+    parser.add_argument(
+        "--default-store-name",
+        default="",
+        help="Fallback store name to use when a parsed order has no store name (example: Costco).",
     )
     return parser.parse_args()
 
@@ -964,6 +973,24 @@ def parse_store_name_from_dom(page: Page) -> Optional[str]:
     return value if value else None
 
 
+def wait_for_store_name(page: Page, timeout_seconds: float = 12.0) -> Optional[str]:
+    deadline = time.time() + max(1.0, timeout_seconds)
+    while time.time() < deadline:
+        candidate = (
+            parse_store_name_from_dom(page)
+            or text_or_none(page, "[data-testid*='store']")
+            or text_or_none(page, "[data-testid*='retailer']")
+            or text_or_none(page, "[data-testid*='merchant']")
+            or text_or_none(page, "h1")
+            or text_or_none(page, "h2")
+        )
+        cleaned = clean_store_name(candidate)
+        if cleaned:
+            return cleaned
+        time.sleep(0.35)
+    return None
+
+
 def clean_store_name(store_name: Optional[str]) -> Optional[str]:
     if not store_name:
         return None
@@ -1015,6 +1042,16 @@ def clean_store_name(store_name: Optional[str]) -> Optional[str]:
         if tokens and tokens.issubset(section_words):
             return None
     return value
+
+
+def infer_store_name_from_items(items: List[OrderItem]) -> Optional[str]:
+    if not items:
+        return None
+    names = " ".join((item.name or "").lower() for item in items)
+    # Instacart Costco orders frequently include Kirkland-branded SKUs.
+    if "kirkland" in names:
+        return "Costco"
+    return None
 
 
 def parse_money_value(value: Optional[str]) -> Optional[float]:
@@ -1315,7 +1352,7 @@ def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngi
     cleaned = list(grouped.values())
     for item in cleaned:
         cat, source = deterministic_category(item.name)
-        item.budget_category = cat
+        item.budget_category = canonicalize_category(cat) or DEFAULT_CATEGORY
         item.category_source = source
 
     if ai_engine is not None:
@@ -1325,7 +1362,7 @@ def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngi
             if item.category_source != 'default':
                 continue
             cache_key = normalize_for_match(item.name)
-            cached = ai_engine.get_cached_category_by_key(cache_key)
+            cached = canonicalize_category(ai_engine.get_cached_category_by_key(cache_key))
             if cached in CATEGORY_ORDER:
                 item.budget_category = cached
                 item.category_source = 'ai_cache'
@@ -1343,7 +1380,7 @@ def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngi
             for batch in ai_engine.chunk_list(list(batch_items.values())):
                 batch_results.update(ai_engine.try_category_batch(batch, source_label='Instacart item'))
             for cache_key, item_list in pending_by_key.items():
-                ai_category = batch_results.get(cache_key)
+                ai_category = canonicalize_category(batch_results.get(cache_key))
                 if ai_category in CATEGORY_ORDER:
                     ai_engine.set_cached_category_by_key(cache_key, ai_category)
                     for item in item_list:
@@ -2096,12 +2133,10 @@ def extract_order_metadata(
         inferred_total = parse_order_total(text) if text else None
         inferred_store = (
             parse_store_name(text)
-            or parse_store_name_from_dom(page)
             or clean_store_name(store_hint)
-            or text_or_none(page, "[data-testid*='store']")
-            or text_or_none(page, "h1")
-            or text_or_none(page, "h2")
         )
+        if not inferred_store:
+            inferred_store = wait_for_store_name(page, timeout_seconds=12.0)
         inferred_store = clean_store_name(inferred_store)
         inferred_date = parse_order_date(text) if text else None
         return inferred_total, inferred_store, inferred_date
@@ -2131,6 +2166,8 @@ def extract_order_metadata(
                 break
 
     reconcile_items_with_body_text(items, body_text)
+    if not store_name:
+        store_name = infer_store_name_from_items(items)
 
     if not order_date:
         order_date = parse_order_date_from_order_id(order_id)
@@ -2355,7 +2392,14 @@ def save_outputs(orders: List[OrderRecord], out_json: Path, out_csv: Path, out_x
     wb.save(out_xlsx)
 
 
-def fill_missing_store_names(orders: List[OrderRecord]) -> None:
+def fill_missing_store_names(orders: List[OrderRecord], default_store_name: Optional[str] = None) -> None:
+    explicit_fallback = clean_store_name(default_store_name) if default_store_name else None
+    if explicit_fallback:
+        for order in orders:
+            if not (order.store_name or "").strip():
+                order.store_name = explicit_fallback
+        return
+
     known = sorted({(o.store_name or "").strip() for o in orders if (o.store_name or "").strip()})
     if len(known) != 1:
         return
@@ -2371,7 +2415,29 @@ def _require_valid_schema_name(schema: str) -> str:
     return schema
 
 
+def _dsn_contains_password(dsn: str) -> bool:
+    if not dsn:
+        return False
+    key_value_password = re.search(r"(^|\s)password\s*=", dsn, re.IGNORECASE)
+    uri_password = re.search(r"://[^/\s:@]+:[^@\s/]*@", dsn)
+    return bool(key_value_password or uri_password)
+
+
+def _resolve_postgres_dsn(raw_dsn: str) -> str:
+    dsn = (raw_dsn or "").strip()
+    if _dsn_contains_password(dsn):
+        raise ValueError(
+            "Unsafe --db-dsn: inline password detected. "
+            "Use ~/.pgpass (recommended) or PGPASSWORD/HOME_BUDGET_PGPASSWORD env vars."
+        )
+    return dsn or "dbname=home_budget"
+
+
 def _connect_postgres(dsn: str):
+    dsn = _resolve_postgres_dsn(dsn)
+    hb_pg_password = os.environ.get("HOME_BUDGET_PGPASSWORD", "").strip()
+    if hb_pg_password and not os.environ.get("PGPASSWORD"):
+        os.environ["PGPASSWORD"] = hb_pg_password
     try:
         import psycopg  # type: ignore
 
@@ -2385,7 +2451,8 @@ def _connect_postgres(dsn: str):
             return conn
         except Exception as e:
             raise RuntimeError(
-                "Could not connect to Postgres. Install psycopg (or psycopg2-binary) and verify --db-dsn."
+                "Could not connect to Postgres. Install psycopg (or psycopg2-binary) and verify --db-dsn. "
+                "For auth, prefer ~/.pgpass or libpq env vars."
             ) from e
 
 
@@ -2396,12 +2463,12 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
     inserted_items = 0
 
     order_sql = f"""
-        INSERT INTO {schema}.orders (
+        INSERT INTO {schema}.expenses (
             source, order_id, order_date, store_name, order_url,
             receipt_item_subtotal, receipt_discount_total, receipt_tip,
             receipt_service_fee, receipt_recycling_fee, receipt_service_fee_tax,
             receipt_gst, receipt_pst, receipt_total_charged,
-            order_total, raw_page_title, raw_payload
+            expense_total, raw_page_title, raw_payload
         ) VALUES (
             %s, %s, %s, %s, %s,
             %s, %s, %s,
@@ -2423,15 +2490,15 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
             receipt_gst = EXCLUDED.receipt_gst,
             receipt_pst = EXCLUDED.receipt_pst,
             receipt_total_charged = EXCLUDED.receipt_total_charged,
-            order_total = EXCLUDED.order_total,
+            expense_total = EXCLUDED.expense_total,
             raw_page_title = EXCLUDED.raw_page_title,
             raw_payload = EXCLUDED.raw_payload
         RETURNING id
     """
-    delete_items_sql = f"DELETE FROM {schema}.order_items WHERE order_pk = %s"
+    delete_items_sql = f"DELETE FROM {schema}.expense_items WHERE expense_pk = %s"
     item_sql = f"""
-        INSERT INTO {schema}.order_items (
-            order_pk, item_name, budget_category, category_source,
+        INSERT INTO {schema}.expense_items (
+            expense_pk, item_name, budget_category, category_source,
             unit_qty, unit_cost, weight_qty, weight_unit, line_total, original_line_total
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
@@ -2478,15 +2545,15 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
                 row = cur.fetchone()
                 if row is None:
                     continue
-                order_pk = int(row[0])
+                expense_pk = int(row[0])
                 inserted_orders += 1
 
-                cur.execute(delete_items_sql, (order_pk,))
+                cur.execute(delete_items_sql, (expense_pk,))
                 for item in order.items:
                     cur.execute(
                         item_sql,
                         (
-                            order_pk,
+                            expense_pk,
                             item.name,
                             item.budget_category,
                             item.category_source,
@@ -2589,7 +2656,7 @@ def main() -> None:
             )
             orders = all_scraped_orders
 
-        fill_missing_store_names(orders)
+        fill_missing_store_names(orders, default_store_name=args.default_store_name)
         try:
             save_outputs(orders, out_json=out_json, out_csv=out_csv, out_xlsx=out_xlsx)
         except PermissionError as e:
@@ -2604,7 +2671,7 @@ def main() -> None:
                 schema=args.db_schema,
             )
             print(
-                f"Wrote Postgres: schema={args.db_schema}, orders={written_orders}, items={written_items}",
+                f"Wrote Postgres: schema={args.db_schema}, expenses={written_orders}, expense_items={written_items}",
                 flush=True,
             )
         ai_engine.save_suggestions()

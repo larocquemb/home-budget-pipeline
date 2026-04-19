@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from budget_category_logic import CATEGORY_ORDER, normalize_for_match
+from budget_category_logic import CATEGORY_ORDER, canonicalize_category, normalize_for_match
 
 
 class AICategoryEngine:
@@ -60,8 +60,9 @@ class AICategoryEngine:
                 return
             cleaned: Dict[str, Optional[str]] = {}
             for key, value in payload.items():
-                if isinstance(key, str) and value in CATEGORY_ORDER:
-                    cleaned[key] = value
+                normalized = canonicalize_category(value)
+                if isinstance(key, str) and normalized in CATEGORY_ORDER:
+                    cleaned[key] = normalized
             self.cache = cleaned
         except Exception:
             self.cache = {}
@@ -84,9 +85,10 @@ class AICategoryEngine:
         return self.get_cached_category_by_key(key)
 
     def get_cached_category_by_key(self, key: str) -> Optional[str]:
-        if key in self.cache and self.cache[key] in CATEGORY_ORDER:
+        normalized = canonicalize_category(self.cache.get(key))
+        if key in self.cache and normalized in CATEGORY_ORDER:
             self.stats['ai_cache_hits'] += 1
-            return self.cache[key]
+            return normalized
         return None
 
     def set_cached_category(self, desc: str, category: Optional[str]) -> None:
@@ -245,7 +247,7 @@ class AICategoryEngine:
                 results_by_id: Dict[str, Optional[str]] = {item['id']: None for item in items}
                 for rec in raw_results:
                     rec_id = str(rec.get('id', ''))
-                    category = rec.get('category')
+                    category = canonicalize_category(rec.get('category'))
                     confidence = float(rec.get('confidence', 0.0))
                     if rec_id in results_by_id and category in CATEGORY_ORDER and confidence >= self.confidence_threshold:
                         results_by_id[rec_id] = category

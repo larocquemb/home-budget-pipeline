@@ -8,7 +8,69 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 DEFAULT_CATEGORY = 'Groceries'
-CATEGORY_ORDER = ['Medical Products', 'Health & Fitness', 'Clothing', 'Indoor Supplies', 'Outdoor Supplies', 'Groceries']
+CATEGORY_ORDER = [
+    'Child Support',
+    'Autopac',
+    'Car Payment',
+    'Car Repair',
+    'Car Replacement Fund',
+    'Real Estate Tax',
+    'Rental Expenses',
+    'Cleaning',
+    'Clothing',
+    'Debt',
+    'Dining',
+    'Misc Paul & Rox',
+    'Medical ProfSvcs',
+    'University / Books',
+    'Emergency Fund',
+    'Fuel',
+    'Fun / Entertainment',
+    'Furniture / Appliances',
+    'Birthday / Celebrations',
+    'Groceries',
+    'IncomeTax Due',
+    'Home Insurance',
+    'Mortgage PrePayment',
+    'Interest Expense',
+    'Life Insurance',
+    'Medical Products',
+    'LTD Insurance',
+    'Home Mortgage',
+    'Lake',
+    'Sinking Fund',
+    'Donations',
+    'Vacation',
+    'Christmas',
+    'Home Improvement',
+    'RRSP GIC',
+    'RRSP',
+    'Health & Fitness',
+    'Accounting',
+    'Hydro',
+    'Online Svcs',
+    'Wireless',
+    'TV',
+    'Water',
+    'Bank Fee',
+    'MLCC',
+    'Cash/Unknown',
+    'Kids Clothing',
+    'Kids Sports',
+    'Emp Reimburse',
+    'Principal Expense',
+    'Student Expense',
+    'Hair/Salon/Body Care',
+    'Future Use1',
+    'Indoor Supplies',
+    'Outdoor Supplies',
+    'Future Use2',
+    'Parking',
+    'Shareholder loan',
+    'TFSA',
+    'Asset Purchase',
+]
+VALID_CATEGORIES = set(CATEGORY_ORDER)
 FUZZY_THRESHOLD = 0.75
 FUZZY_MIN_GAP = 0.08
 
@@ -59,6 +121,14 @@ CATEGORY_KEYWORDS = {
         'candy', 'chocolate', 'pop', 'soda', 'sparkling', 'drink', 'beverage', 'watermelon',
         'straw', 'hydro'
     ]
+}
+
+CATEGORY_ALIASES = {
+    'online services': 'Online Svcs',
+    'medical prof svcs': 'Medical ProfSvcs',
+    'medical prof services': 'Medical ProfSvcs',
+    'cash unknown': 'Cash/Unknown',
+    'shareholder loan': 'Shareholder loan',
 }
 
 # User-verified item classifications.
@@ -144,6 +214,19 @@ def normalize_for_match(text: str) -> str:
     return re.sub(r'[^a-z0-9]+', ' ', text.lower()).strip()
 
 
+def canonicalize_category(category: Optional[str]) -> Optional[str]:
+    if not category:
+        return None
+    cleaned = category.strip()
+    if cleaned in VALID_CATEGORIES:
+        return cleaned
+    lowered = normalize_for_match(cleaned)
+    for candidate in CATEGORY_ORDER:
+        if normalize_for_match(candidate) == lowered:
+            return candidate
+    return CATEGORY_ALIASES.get(lowered)
+
+
 def phrase_ngrams(tokens: List[str], n: int) -> List[str]:
     if len(tokens) < n:
         return []
@@ -152,8 +235,8 @@ def phrase_ngrams(tokens: List[str], n: int) -> List[str]:
 
 def try_exact_keyword_category(desc: str) -> Optional[str]:
     d = desc.lower()
-    for category in CATEGORY_ORDER:
-        for keyword in CATEGORY_KEYWORDS[category]:
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
             if keyword in d:
                 return category
     return None
@@ -170,10 +253,10 @@ def try_fuzzy_keyword_category(desc: str) -> Optional[str]:
     candidates.update(phrase_ngrams(tokens, 3))
     candidates.add(normalized)
 
-    best_per_category: Dict[str, float] = {c: 0.0 for c in CATEGORY_ORDER}
+    best_per_category: Dict[str, float] = {c: 0.0 for c in CATEGORY_KEYWORDS}
 
-    for category in CATEGORY_ORDER:
-        for keyword in CATEGORY_KEYWORDS[category]:
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
             kw = normalize_for_match(keyword)
             kw_tokens = kw.split()
             kw_prefixes = {t[:3] for t in kw_tokens if len(t) >= 3}

@@ -1,12 +1,12 @@
--- Phase 1 canonical schema for grocery ingestion (Costco, Instacart, Sobeys)
+-- Phase 1 canonical schema for budget ingestion (Costco, Instacart, Sobeys)
 -- Apply:
 --   psql -d postgres -f sql/schema_phase1.sql
 
 BEGIN;
 
-CREATE SCHEMA IF NOT EXISTS grocery;
+CREATE SCHEMA IF NOT EXISTS budget;
 
-CREATE TABLE IF NOT EXISTS grocery.orders (
+CREATE TABLE IF NOT EXISTS budget.expenses (
     id BIGSERIAL PRIMARY KEY,
     source TEXT NOT NULL CHECK (source IN ('instacart', 'costco', 'sobeys')),
     order_id TEXT NOT NULL,
@@ -25,8 +25,7 @@ CREATE TABLE IF NOT EXISTS grocery.orders (
     receipt_pst NUMERIC(12, 2),
     receipt_total_charged NUMERIC(12, 2),
 
-    -- Kept for compatibility with current script output
-    order_total NUMERIC(12, 2),
+    expense_total NUMERIC(12, 2),
 
     raw_page_title TEXT,
     raw_payload JSONB,
@@ -34,13 +33,13 @@ CREATE TABLE IF NOT EXISTS grocery.orders (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    -- Natural key to support idempotent upsert by source + retailer order id
-    CONSTRAINT uq_orders_source_order_id UNIQUE (source, order_id)
+    -- Natural key to support idempotent upsert by source + retailer expense id
+    CONSTRAINT uq_expenses_source_order_id UNIQUE (source, order_id)
 );
 
-CREATE TABLE IF NOT EXISTS grocery.order_items (
+CREATE TABLE IF NOT EXISTS budget.expense_items (
     id BIGSERIAL PRIMARY KEY,
-    order_pk BIGINT NOT NULL REFERENCES grocery.orders(id) ON DELETE CASCADE,
+    expense_pk BIGINT NOT NULL REFERENCES budget.expenses(id) ON DELETE CASCADE,
 
     item_name TEXT NOT NULL,
     item_name_norm TEXT GENERATED ALWAYS AS (lower(trim(item_name))) STORED,
@@ -63,26 +62,26 @@ CREATE TABLE IF NOT EXISTS grocery.order_items (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_orders_source_date
-    ON grocery.orders (source, order_date DESC);
+CREATE INDEX IF NOT EXISTS idx_expenses_source_date
+    ON budget.expenses (source, order_date DESC);
 
-CREATE INDEX IF NOT EXISTS idx_orders_store_date
-    ON grocery.orders (store_name, order_date DESC);
+CREATE INDEX IF NOT EXISTS idx_expenses_store_date
+    ON budget.expenses (store_name, order_date DESC);
 
-CREATE INDEX IF NOT EXISTS idx_order_items_order_pk
-    ON grocery.order_items (order_pk);
+CREATE INDEX IF NOT EXISTS idx_expense_items_expense_pk
+    ON budget.expense_items (expense_pk);
 
-CREATE INDEX IF NOT EXISTS idx_order_items_category
-    ON grocery.order_items (budget_category);
+CREATE INDEX IF NOT EXISTS idx_expense_items_category
+    ON budget.expense_items (budget_category);
 
-CREATE INDEX IF NOT EXISTS idx_order_items_name_norm
-    ON grocery.order_items (item_name_norm);
+CREATE INDEX IF NOT EXISTS idx_expense_items_name_norm
+    ON budget.expense_items (item_name_norm);
 
 -- Natural key for idempotent upsert at item level.
 -- Use a UNIQUE INDEX (not UNIQUE CONSTRAINT) because expression keys are needed.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_order_items_natural
-    ON grocery.order_items (
-        order_pk,
+CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_items_natural
+    ON budget.expense_items (
+        expense_pk,
         item_name_norm,
         COALESCE(unit_qty, -1),
         COALESCE(weight_qty, -1),
@@ -91,7 +90,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_order_items_natural
         COALESCE(line_total, -1)
     );
 
-CREATE OR REPLACE FUNCTION grocery.set_updated_at()
+CREATE OR REPLACE FUNCTION budget.set_updated_at()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
@@ -101,16 +100,128 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_orders_set_updated_at ON grocery.orders;
-CREATE TRIGGER trg_orders_set_updated_at
-BEFORE UPDATE ON grocery.orders
+DROP TRIGGER IF EXISTS trg_expenses_set_updated_at ON budget.expenses;
+CREATE TRIGGER trg_expenses_set_updated_at
+BEFORE UPDATE ON budget.expenses
 FOR EACH ROW
-EXECUTE FUNCTION grocery.set_updated_at();
+EXECUTE FUNCTION budget.set_updated_at();
 
-DROP TRIGGER IF EXISTS trg_order_items_set_updated_at ON grocery.order_items;
-CREATE TRIGGER trg_order_items_set_updated_at
-BEFORE UPDATE ON grocery.order_items
+DROP TRIGGER IF EXISTS trg_expense_items_set_updated_at ON budget.expense_items;
+CREATE TRIGGER trg_expense_items_set_updated_at
+BEFORE UPDATE ON budget.expense_items
 FOR EACH ROW
-EXECUTE FUNCTION grocery.set_updated_at();
+EXECUTE FUNCTION budget.set_updated_at();
+
+CREATE TABLE IF NOT EXISTS budget.receipts (
+    id BIGSERIAL PRIMARY KEY,
+    source TEXT,
+    receipt_id TEXT,
+    receipt_date DATE,
+    merchant_name TEXT,
+    description TEXT,
+    subtotal NUMERIC(12, 2),
+    tax_total NUMERIC(12, 2),
+    total_charged NUMERIC(12, 2) NOT NULL,
+    currency_code TEXT NOT NULL DEFAULT 'CAD',
+    raw_payload JSONB,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_receipts_source_receipt_id UNIQUE (source, receipt_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_receipts_date
+    ON budget.receipts (receipt_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_receipts_merchant_date
+    ON budget.receipts (merchant_name, receipt_date DESC);
+
+DROP TRIGGER IF EXISTS trg_receipts_set_updated_at ON budget.receipts;
+CREATE TRIGGER trg_receipts_set_updated_at
+BEFORE UPDATE ON budget.receipts
+FOR EACH ROW
+EXECUTE FUNCTION budget.set_updated_at();
+
+CREATE TABLE IF NOT EXISTS budget.expense_categories (
+    id BIGSERIAL PRIMARY KEY,
+    category_name TEXT NOT NULL UNIQUE,
+    notes TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DROP TRIGGER IF EXISTS trg_expense_categories_set_updated_at ON budget.expense_categories;
+CREATE TRIGGER trg_expense_categories_set_updated_at
+BEFORE UPDATE ON budget.expense_categories
+FOR EACH ROW
+EXECUTE FUNCTION budget.set_updated_at();
+
+INSERT INTO budget.expense_categories (category_name, notes)
+VALUES
+    ('Child Support', 'Combined'),
+    ('Autopac', 'CRV, F-150, GM, trailers. No motorcycle or skidoo'),
+    ('Car Payment', NULL),
+    ('Car Repair', 'includes oil changes, rocker panels'),
+    ('Car Replacement Fund', 'Will start saving for once Child Support is done'),
+    ('Real Estate Tax', 'Home and Rental'),
+    ('Rental Expenses', 'Furnace inspection, sewer'),
+    ('Cleaning', 'Cleaning Bee'),
+    ('Clothing', 'Charge to House VISA'),
+    ('Debt', 'Line of Credit'),
+    ('Dining', 'Was $9500 last year'),
+    ('Misc Paul & Rox', 'If overbudget in month this will be reduced so we don''t accumulate debt'),
+    ('Medical ProfSvcs', 'Doctor, Dentist, Optometrist, Physio'),
+    ('University / Books', 'Funded by Business use of Home tax credit for Tetreault post-secondary only if no break in school'),
+    ('Emergency Fund', 'Savings, CIBC eAdvantage short term account for transfers'),
+    ('Fuel', 'Paul gas $0 paid by Corp, Mylene pays gas after grad'),
+    ('Fun / Entertainment', 'Concerts, Comedy Clubs, Festival, Movies, Jets, Bombers, Folklorama, Recreation, Golf'),
+    ('Furniture / Appliances', NULL),
+    ('Birthday / Celebrations', 'Birthdays, sing alongs, thanksgiving, grad, easter, BDC. Gift/hosting costs'),
+    ('Groceries', 'Does not include food for celebrations'),
+    ('IncomeTax Due', 'Ensure we buy RRSP so we don''t pay'),
+    ('Home Insurance', 'Wawaneesa'),
+    ('Mortgage PrePayment', NULL),
+    ('Interest Expense', NULL),
+    ('Life Insurance', '$1M Paul'),
+    ('Medical Products', 'Prescriptions BlueCross net cost, contacts, prescription glasses, over counter drugs'),
+    ('LTD Insurance', 'Disability insurance Paul'),
+    ('Home Mortgage', NULL),
+    ('Lake', 'Plan to sell after Comcast'),
+    ('Sinking Fund', 'Caisse 3% Savings Plus account'),
+    ('Donations', 'Paroisse'),
+    ('Vacation', 'Rox Girls vacation, Ottawa'),
+    ('Christmas', NULL),
+    ('Home Improvement', 'Home renovations'),
+    ('RRSP GIC', NULL),
+    ('RRSP', 'Savings, growth for retirement, refund mortgage prepayment'),
+    ('Health & Fitness', 'gym, fitness apps, equipment, protein, Weight Watchers, vitamins'),
+    ('Accounting', 'tax filing'),
+    ('Hydro', NULL),
+    ('Online Svcs', 'Streaming services Netflix, Spotify, Corp pays Amazon, Disney'),
+    ('Wireless', 'Rox iPhone'),
+    ('TV', 'Corp Pays TV and Internet'),
+    ('Water', 'RM water'),
+    ('Bank Fee', 'VISA annual fee'),
+    ('MLCC', 'MLCC, SOBR'),
+    ('Cash/Unknown', NULL),
+    ('Kids Clothing', 'Charge to House VISA'),
+    ('Kids Sports', 'Charge to House VISA, House cheques'),
+    ('Emp Reimburse', NULL),
+    ('Principal Expense', 'Staff parties, gift, eatiing out'),
+    ('Student Expense', 'School supplies, field trips, pictures'),
+    ('Hair/Salon/Body Care', 'hair coloring, nails, spa, massages, makeup, leg laser'),
+    ('Future Use1', NULL),
+    ('Indoor Supplies', 'cleaning, laundry, toothpaste, tampons'),
+    ('Outdoor Supplies', 'Chemicals, fertiziler, garden flowers, shovels, hoses'),
+    ('Future Use2', 'Automotive, tools stuff for shop work.'),
+    ('Parking', NULL),
+    ('Shareholder loan', 'Corp loan'),
+    ('TFSA', 'Savings, Tax refund to be applied to mortgage in 2024'),
+    ('Asset Purchase', NULL)
+ON CONFLICT (category_name)
+DO UPDATE SET
+    notes = EXCLUDED.notes;
 
 COMMIT;
