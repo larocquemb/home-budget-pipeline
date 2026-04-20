@@ -17,16 +17,27 @@ CREATE TABLE IF NOT EXISTS budget.expenses (
 
     -- Receipt-level amounts
     receipt_item_subtotal NUMERIC(12, 2),
-    receipt_discount_total NUMERIC(12, 2),
+    receipt_discount_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
     receipt_tip NUMERIC(12, 2),
     receipt_service_fee NUMERIC(12, 2),
-    receipt_recycling_fee NUMERIC(12, 2),
-    receipt_service_fee_tax NUMERIC(12, 2),
-    receipt_gst NUMERIC(12, 2),
-    receipt_pst NUMERIC(12, 2),
+    receipt_recycling_fee NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    receipt_service_fee_tax NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    receipt_gst NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    receipt_pst NUMERIC(12, 2) NOT NULL DEFAULT 0,
     receipt_total_charged NUMERIC(12, 2),
 
     expense_total NUMERIC(12, 2),
+    total_recon_diff NUMERIC(12, 2) GENERATED ALWAYS AS (
+        COALESCE(receipt_item_subtotal, 0)
+        + COALESCE(receipt_discount_total, 0)
+        + COALESCE(receipt_tip, 0)
+        + COALESCE(receipt_service_fee, 0)
+        + COALESCE(receipt_recycling_fee, 0)
+        + COALESCE(receipt_service_fee_tax, 0)
+        + COALESCE(receipt_gst, 0)
+        + COALESCE(receipt_pst, 0)
+        - COALESCE(expense_total, 0)
+    ) STORED,
 
     raw_page_title TEXT,
     raw_payload JSONB,
@@ -43,6 +54,47 @@ ALTER TABLE budget.expenses
 
 ALTER TABLE budget.expenses
     DROP COLUMN IF EXISTS costco_order_id;
+
+ALTER TABLE budget.expenses
+    ADD COLUMN IF NOT EXISTS total_recon_diff NUMERIC(12, 2) GENERATED ALWAYS AS (
+        COALESCE(receipt_item_subtotal, 0)
+        + COALESCE(receipt_discount_total, 0)
+        + COALESCE(receipt_tip, 0)
+        + COALESCE(receipt_service_fee, 0)
+        + COALESCE(receipt_recycling_fee, 0)
+        + COALESCE(receipt_service_fee_tax, 0)
+        + COALESCE(receipt_gst, 0)
+        + COALESCE(receipt_pst, 0)
+        - COALESCE(expense_total, 0)
+    ) STORED;
+
+ALTER TABLE budget.expenses
+    ALTER COLUMN receipt_discount_total SET DEFAULT 0,
+    ALTER COLUMN receipt_recycling_fee SET DEFAULT 0,
+    ALTER COLUMN receipt_service_fee_tax SET DEFAULT 0,
+    ALTER COLUMN receipt_gst SET DEFAULT 0,
+    ALTER COLUMN receipt_pst SET DEFAULT 0;
+
+UPDATE budget.expenses
+SET
+    receipt_discount_total = COALESCE(receipt_discount_total, 0),
+    receipt_recycling_fee = COALESCE(receipt_recycling_fee, 0),
+    receipt_service_fee_tax = COALESCE(receipt_service_fee_tax, 0),
+    receipt_gst = COALESCE(receipt_gst, 0),
+    receipt_pst = COALESCE(receipt_pst, 0)
+WHERE
+    receipt_discount_total IS NULL
+    OR receipt_recycling_fee IS NULL
+    OR receipt_service_fee_tax IS NULL
+    OR receipt_gst IS NULL
+    OR receipt_pst IS NULL;
+
+ALTER TABLE budget.expenses
+    ALTER COLUMN receipt_discount_total SET NOT NULL,
+    ALTER COLUMN receipt_recycling_fee SET NOT NULL,
+    ALTER COLUMN receipt_service_fee_tax SET NOT NULL,
+    ALTER COLUMN receipt_gst SET NOT NULL,
+    ALTER COLUMN receipt_pst SET NOT NULL;
 
 CREATE TABLE IF NOT EXISTS budget.expense_items (
     id BIGSERIAL PRIMARY KEY,
@@ -135,9 +187,40 @@ CREATE TABLE IF NOT EXISTS budget.expense_categories (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS budget.expense_category_mappings (
+    id BIGSERIAL PRIMARY KEY,
+    source TEXT,
+    merchant TEXT,
+    match_type TEXT NOT NULL DEFAULT 'contains' CHECK (match_type IN ('exact', 'contains')),
+    match_text TEXT NOT NULL,
+    category_name TEXT NOT NULL REFERENCES budget.expense_categories(category_name),
+    priority INTEGER NOT NULL DEFAULT 100,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_category_mappings_match
+    ON budget.expense_category_mappings (
+        COALESCE(lower(trim(source)), ''),
+        COALESCE(lower(trim(merchant)), ''),
+        match_type,
+        lower(trim(match_text))
+    );
+
+CREATE INDEX IF NOT EXISTS idx_expense_category_mappings_active_priority
+    ON budget.expense_category_mappings (is_active, priority, id);
+
 DROP TRIGGER IF EXISTS trg_expense_categories_set_updated_at ON budget.expense_categories;
 CREATE TRIGGER trg_expense_categories_set_updated_at
 BEFORE UPDATE ON budget.expense_categories
+FOR EACH ROW
+EXECUTE FUNCTION budget.set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_expense_category_mappings_set_updated_at ON budget.expense_category_mappings;
+CREATE TRIGGER trg_expense_category_mappings_set_updated_at
+BEFORE UPDATE ON budget.expense_category_mappings
 FOR EACH ROW
 EXECUTE FUNCTION budget.set_updated_at();
 

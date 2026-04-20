@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import time
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -29,7 +30,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from budget_category_ai import AICategoryEngine
-from budget_category_logic import CATEGORY_ORDER, DEFAULT_CATEGORY, deterministic_category, normalize_for_match
+from budget_category_logic import CATEGORY_ORDER, DEFAULT_CATEGORY, deterministic_category, normalize_for_match, set_runtime_category_rules
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT = PROJECT_DIR / "receipts" / "Sobeys"
@@ -605,7 +606,7 @@ def canonicalize_ocr_item_name(desc: str) -> str:
 
 def classify_category_with_source(desc: str, allow_ai: bool = True) -> Tuple[str, str]:
     runtime_default = DEFAULT_CATEGORY if DEFAULT_CATEGORY in CATEGORY_ORDER else (CATEGORY_ORDER[0] if CATEGORY_ORDER else DEFAULT_CATEGORY)
-    deterministic, source = deterministic_category(desc)
+    deterministic, source = deterministic_category(desc, source="sobeys", merchant="Sobeys")
     if deterministic not in CATEGORY_ORDER:
         deterministic = runtime_default
         source = "default"
@@ -711,6 +712,7 @@ def parse_items(receipt_id: str, text: str, alt_text: str = "") -> List[Dict]:
                         "weight_qty": weight_qty,
                         "weight_unit": weight_unit,
                         "line_total": amount,
+                        "original_line_total": amount,
                         "budget_category": category,
                         "category_source": source,
                         "raw_line": line,
@@ -757,6 +759,7 @@ def parse_items(receipt_id: str, text: str, alt_text: str = "") -> List[Dict]:
                             "weight_qty": weight_qty,
                             "weight_unit": weight_unit,
                             "line_total": amount,
+                            "original_line_total": amount,
                             "budget_category": category,
                             "category_source": source,
                             "raw_line": f"{line} | {raw_amount_line}",
@@ -922,6 +925,15 @@ def _connect_postgres(dsn: str):
             ) from e
 
 
+def to_money_decimal(value: object, default_zero: bool = False) -> Optional[Decimal]:
+    if value is None:
+        return Decimal("0.00") if default_zero else None
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        return Decimal("0.00") if default_zero else None
+
+
 def load_expense_categories_from_postgres(dsn: str, schema: str) -> List[str]:
     schema = _require_valid_schema_name(schema)
     conn = _connect_postgres(dsn)
@@ -936,6 +948,35 @@ def load_expense_categories_from_postgres(dsn: str, schema: str) -> List[str]:
             cur.execute(sql)
             rows = cur.fetchall()
         return [str(r[0]).strip() for r in rows if r and str(r[0]).strip()]
+    finally:
+        conn.close()
+
+
+def load_expense_category_mappings_from_postgres(dsn: str, schema: str) -> List[Dict[str, object]]:
+    schema = _require_valid_schema_name(schema)
+    conn = _connect_postgres(dsn)
+    sql = f"""
+        SELECT source, merchant, match_type, match_text, category_name, priority
+        FROM {schema}.expense_category_mappings
+        WHERE is_active
+        ORDER BY priority, id
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+        return [
+            {
+                "source": r[0],
+                "merchant": r[1],
+                "match_type": r[2],
+                "match_text": r[3],
+                "category_name": r[4],
+                "priority": r[5],
+            }
+            for r in rows
+            if r and r[3] and r[4]
+        ]
     finally:
         conn.close()
 
@@ -981,8 +1022,11 @@ def load_manual_xlsx(xlsx_path: Path) -> Tuple[List[Dict], List[Dict]]:
             prev_idx = last_item_idx_by_receipt.get(receipt_key)
             if prev_idx is not None:
                 prev = items[prev_idx]
+                prev_line_before = float(prev.get("line_total") or 0.0)
                 prev["amount_cad"] = round(float(prev.get("amount_cad") or 0.0) + float(amount), 2)
-                prev["line_total"] = round(float(prev.get("line_total") or 0.0) + float(amount), 2)
+                prev["line_total"] = round(prev_line_before + float(amount), 2)
+                if prev.get("original_line_total") is None:
+                    prev["original_line_total"] = round(prev_line_before, 2)
                 existing_raw = str(prev.get("raw_line") or "")
                 tag = f"INSTANT SAVINGS {float(amount):.2f}"
                 prev["raw_line"] = f"{existing_raw} | {tag}" if existing_raw else tag
@@ -991,8 +1035,11 @@ def load_manual_xlsx(xlsx_path: Path) -> Tuple[List[Dict], List[Dict]]:
             prev_idx = last_item_idx_by_receipt.get(receipt_key)
             if prev_idx is not None:
                 prev = items[prev_idx]
+                prev_line_before = float(prev.get("line_total") or 0.0)
+                prev_original_before = float(prev.get("original_line_total") or prev_line_before)
                 prev["amount_cad"] = round(float(prev.get("amount_cad") or 0.0) + float(amount), 2)
-                prev["line_total"] = round(float(prev.get("line_total") or 0.0) + float(amount), 2)
+                prev["line_total"] = round(prev_line_before + float(amount), 2)
+                prev["original_line_total"] = round(prev_original_before + float(amount), 2)
                 existing_raw = str(prev.get("raw_line") or "")
                 tag = f"EHC {float(amount):.2f}"
                 prev["raw_line"] = f"{existing_raw} | {tag}" if existing_raw else tag
@@ -1022,6 +1069,7 @@ def load_manual_xlsx(xlsx_path: Path) -> Tuple[List[Dict], List[Dict]]:
                 "weight_qty": weight_qty,
                 "weight_unit": weight_unit,
                 "line_total": float(amount),
+                "original_line_total": float(amount),
                 "budget_category": category,
                 "category_source": category_source,
                 "raw_line": str(row[item_idx.get("raw_line", -1)]).strip() if "raw_line" in item_idx and row[item_idx["raw_line"]] is not None else "",
@@ -1127,12 +1175,28 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                 receipt_items = items_by_receipt.get(receipt_id, [])
                 subtotal = rec.get("subtotal_cad")
                 total = rec.get("total_cad")
-                if total is None and subtotal is not None and rec.get("tax_cad") is not None:
-                    total = round(float(subtotal) + float(rec["tax_cad"]), 2)
-                if subtotal is None:
-                    subtotal = round(sum(float(i.get("amount_cad") or 0.0) for i in receipt_items), 2) if receipt_items else None
-                gst_total = round(sum(float(i.get("GST") or 0.0) for i in receipt_items), 2) if receipt_items else None
-                pst_total = round(sum(float(i.get("PST") or 0.0) for i in receipt_items), 2) if receipt_items else None
+                subtotal_dec = to_money_decimal(subtotal)
+                total_dec = to_money_decimal(total)
+                if total_dec is None and subtotal_dec is not None and rec.get("tax_cad") is not None:
+                    tax_dec = to_money_decimal(rec.get("tax_cad"))
+                    if tax_dec is not None:
+                        total_dec = (subtotal_dec + tax_dec).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                if subtotal_dec is None and receipt_items:
+                    subtotal_dec = sum(
+                        (to_money_decimal(i.get("amount_cad"), default_zero=True) or Decimal("0.00")) for i in receipt_items
+                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                gst_total = (
+                    sum((to_money_decimal(i.get("GST"), default_zero=True) or Decimal("0.00")) for i in receipt_items)
+                    .quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    if receipt_items
+                    else Decimal("0.00")
+                )
+                pst_total = (
+                    sum((to_money_decimal(i.get("PST"), default_zero=True) or Decimal("0.00")) for i in receipt_items)
+                    .quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    if receipt_items
+                    else Decimal("0.00")
+                )
                 payload = {"receipt": rec, "items": receipt_items}
 
                 cur.execute(
@@ -1144,11 +1208,11 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                         date_from_receipt_id(receipt_id),
                         "Sobeys",
                         None,
-                        subtotal,
+                        subtotal_dec,
                         gst_total,
                         pst_total,
-                        total,
-                        total,
+                        total_dec,
+                        total_dec,
                         json.dumps(payload, ensure_ascii=True),
                     ),
                 )
@@ -1171,6 +1235,7 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                     weight_qty_val = float(item["weight_qty"]) if item.get("weight_qty") is not None else None
                     weight_unit_val = str(item.get("weight_unit") or "").lower() or None
                     line_total_val = float(item.get("line_total")) if item.get("line_total") is not None else None
+                    original_line_total_val = float(item.get("original_line_total")) if item.get("original_line_total") is not None else line_total_val
                     key = (
                         item_name.lower(),
                         item.get("budget_category"),
@@ -1192,12 +1257,15 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                             "weight_qty": weight_qty_val,
                             "weight_unit": weight_unit_val,
                             "line_total": line_total_val,
+                            "original_line_total": original_line_total_val,
                         }
                     else:
                         if slot.get("unit_qty") is not None and item.get("unit_qty") is not None:
                             slot["unit_qty"] = float(slot.get("unit_qty") or 0.0) + float(item["unit_qty"])
                         if line_total_val is not None:
                             slot["line_total"] = float(slot.get("line_total") or 0.0) + line_total_val
+                        if original_line_total_val is not None:
+                            slot["original_line_total"] = float(slot.get("original_line_total") or 0.0) + original_line_total_val
 
                 for merged in grouped.values():
                     cur.execute(
@@ -1209,11 +1277,11 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                             merged["budget_category"],
                             merged["category_source"],
                             merged["unit_qty"],
-                            merged["unit_cost"],
+                            to_money_decimal(merged["unit_cost"]),
                             merged["weight_qty"],
                             merged["weight_unit"],
-                            merged["line_total"],
-                            None,
+                            to_money_decimal(merged["line_total"]),
+                            to_money_decimal(merged["original_line_total"]),
                         ),
                     )
                     written_items += 1
@@ -1241,6 +1309,13 @@ def main() -> None:
             print("Warning: no active rows in expense_categories; using built-in categories.", flush=True)
     except Exception as e:
         print(f"Warning: could not load categories from DB; using built-in categories. {type(e).__name__}: {e}", flush=True)
+    try:
+        mapping_rules = load_expense_category_mappings_from_postgres(args.db_dsn, args.db_schema)
+        set_runtime_category_rules(mapping_rules)
+        print(f"Loaded category mapping rules: {len(mapping_rules)} active", flush=True)
+    except Exception as e:
+        set_runtime_category_rules([])
+        print(f"Warning: could not load category mapping rules; continuing without them. {type(e).__name__}: {e}", flush=True)
 
     if import_xlsx is None and not input_path.exists():
         raise FileNotFoundError(f"Missing input path: {input_path}")
@@ -1279,6 +1354,7 @@ def main() -> None:
                         "Code": "",
                         "GST": 0.0,
                         "PST": 0.0,
+                        "original_line_total": float(total),
                         "budget_category": fallback_category(),
                         "category_source": "ocr_fallback",
                         "raw_line": "OCR fallback: no item lines detected; using receipt total.",
@@ -1295,6 +1371,7 @@ def main() -> None:
                         "Code": "",
                         "GST": 0.0,
                         "PST": 0.0,
+                        "original_line_total": fallback_total,
                         "budget_category": fallback_category(),
                         "category_source": "ocr_no_items_filename_total" if filename_total is not None else "ocr_no_items",
                         "raw_line": (
@@ -1317,6 +1394,7 @@ def main() -> None:
                             "Code": "",
                             "GST": 0.0,
                             "PST": 0.0,
+                            "original_line_total": mismatch,
                             "budget_category": fallback_category(),
                             "category_source": "ocr_remainder",
                             "raw_line": (

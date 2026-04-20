@@ -73,6 +73,7 @@ CATEGORY_ORDER = [
 VALID_CATEGORIES = set(CATEGORY_ORDER)
 FUZZY_THRESHOLD = 0.75
 FUZZY_MIN_GAP = 0.08
+RUNTIME_CATEGORY_RULES: List[Dict[str, object]] = []
 
 CATEGORY_KEYWORDS = {
     'Medical Products': [
@@ -227,6 +228,68 @@ def canonicalize_category(category: Optional[str]) -> Optional[str]:
     return CATEGORY_ALIASES.get(lowered)
 
 
+def set_runtime_category_rules(rules: List[Dict[str, object]]) -> None:
+    normalized_rules: List[Dict[str, object]] = []
+    for idx, raw in enumerate(rules):
+        category_name = canonicalize_category(str(raw.get('category_name') or ''))
+        if category_name not in VALID_CATEGORIES:
+            continue
+        match_type = str(raw.get('match_type') or 'contains').strip().lower()
+        if match_type not in {'exact', 'contains'}:
+            continue
+        match_text_norm = normalize_for_match(str(raw.get('match_text') or ''))
+        if not match_text_norm:
+            continue
+        source_norm = normalize_for_match(str(raw.get('source') or ''))
+        merchant_norm = normalize_for_match(str(raw.get('merchant') or ''))
+        priority_raw = raw.get('priority')
+        try:
+            priority = int(priority_raw) if priority_raw is not None else 100
+        except Exception:
+            priority = 100
+        normalized_rules.append(
+            {
+                'category_name': category_name,
+                'match_type': match_type,
+                'match_text_norm': match_text_norm,
+                'source_norm': source_norm or None,
+                'merchant_norm': merchant_norm or None,
+                'priority': priority,
+                '_idx': idx,
+            }
+        )
+    normalized_rules.sort(key=lambda r: (int(r['priority']), int(r['_idx'])))
+    RUNTIME_CATEGORY_RULES[:] = normalized_rules
+
+
+def match_runtime_category_rule(
+    desc: str,
+    source: Optional[str] = None,
+    merchant: Optional[str] = None,
+) -> Optional[str]:
+    if not RUNTIME_CATEGORY_RULES:
+        return None
+    desc_norm = normalize_for_match(desc)
+    if not desc_norm:
+        return None
+    source_norm = normalize_for_match(source or '') or None
+    merchant_norm = normalize_for_match(merchant or '') or None
+    for rule in RUNTIME_CATEGORY_RULES:
+        rule_source = rule.get('source_norm')
+        if rule_source and rule_source != source_norm:
+            continue
+        rule_merchant = rule.get('merchant_norm')
+        if rule_merchant and rule_merchant != merchant_norm:
+            continue
+        match_text = str(rule['match_text_norm'])
+        match_type = str(rule['match_type'])
+        if match_type == 'exact' and desc_norm == match_text:
+            return str(rule['category_name'])
+        if match_type == 'contains' and match_text in desc_norm:
+            return str(rule['category_name'])
+    return None
+
+
 def phrase_ngrams(tokens: List[str], n: int) -> List[str]:
     if len(tokens) < n:
         return []
@@ -296,7 +359,11 @@ def try_fuzzy_keyword_category(desc: str) -> Optional[str]:
     return None
 
 
-def deterministic_category(desc: str) -> Tuple[str, str]:
+def deterministic_category(
+    desc: str,
+    source: Optional[str] = None,
+    merchant: Optional[str] = None,
+) -> Tuple[str, str]:
     d = desc.lower()
     if 'protein bar' in d or 'protein bars' in d:
         return 'Groceries', 'exact'
@@ -309,6 +376,10 @@ def deterministic_category(desc: str) -> Tuple[str, str]:
     cached_category = VERIFIED_CATEGORY_OVERRIDES.get(cache_key)
     if cached_category in CATEGORY_ORDER:
         return cached_category, 'verified_cache'
+
+    mapped = match_runtime_category_rule(desc, source=source, merchant=merchant)
+    if mapped in CATEGORY_ORDER:
+        return mapped, 'mapping_rule'
 
     exact = try_exact_keyword_category(desc)
     if exact:

@@ -31,13 +31,21 @@ import re
 import time
 from datetime import datetime
 from dataclasses import dataclass, asdict
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openpyxl import Workbook
 from playwright.sync_api import BrowserContext, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 from budget_category_ai import AICategoryEngine
-from budget_category_logic import CATEGORY_ORDER, DEFAULT_CATEGORY, canonicalize_category, deterministic_category, normalize_for_match
+from budget_category_logic import (
+    CATEGORY_ORDER,
+    DEFAULT_CATEGORY,
+    canonicalize_category,
+    deterministic_category,
+    normalize_for_match,
+    set_runtime_category_rules,
+)
 
 INSTACART_BASE = "https://www.instacart.ca"
 DEFAULT_ORDERS_URLS = [
@@ -745,6 +753,8 @@ def parse_receipt_breakdown(body_text: str) -> Dict[str, Optional[str]]:
         "tip": re.compile(r"^tip\b", re.I),
         "service_fee": re.compile(r"^service fee\b(?!\s*tax)", re.I),
         "recycling_fee": re.compile(r"^recycling fee\b", re.I),
+        "checkout_bag_fee": re.compile(r"^checkout bag fee\b", re.I),
+        "checkout_bag_fee_tax": re.compile(r"^checkout bag fee tax\b", re.I),
         "service_fee_tax": re.compile(r"^service fee tax\b", re.I),
         "gst": re.compile(r"\bgoods and services tax\b|\bgst\b", re.I),
         "pst": re.compile(r"\bprovincial sales tax\b|\bpst\b", re.I),
@@ -782,6 +792,10 @@ def parse_receipt_breakdown(body_text: str) -> Dict[str, Optional[str]]:
             key = "service_fee"
         elif re.fullmatch(r"recycling fee", ll):
             key = "recycling_fee"
+        elif re.fullmatch(r"checkout bag fee", ll):
+            key = "checkout_bag_fee"
+        elif re.fullmatch(r"checkout bag fee tax", ll):
+            key = "checkout_bag_fee_tax"
         elif re.fullmatch(r"service fee tax", ll):
             key = "service_fee_tax"
         elif re.search(r"goods and services tax|\bgst\b", ll):
@@ -839,6 +853,20 @@ def parse_receipt_breakdown(body_text: str) -> Dict[str, Optional[str]]:
         found_discount = True
     if found_discount:
         out["discount_total"] = format_signed_money(discount_total)
+
+    # Roll checkout bag fee into recycling_fee so canonical expense header totals
+    # continue to reconcile without schema changes.
+    cbf = parse_signed_money(out.get("checkout_bag_fee") or "")
+    rcf = parse_signed_money(out.get("recycling_fee") or "")
+    if cbf is not None:
+        out["recycling_fee"] = format_signed_money((rcf or 0.0) + cbf)
+
+    # Roll checkout bag fee tax into PST for canonical storage/reconciliation.
+    cbft = parse_signed_money(out.get("checkout_bag_fee_tax") or "")
+    pst = parse_signed_money(out.get("pst") or "")
+    if cbft is not None:
+        out["pst"] = format_signed_money((pst or 0.0) + cbft)
+
     return out
 
 
@@ -1069,10 +1097,70 @@ def parse_money_value(value: Optional[str]) -> Optional[float]:
         return None
 
 
+def to_money_decimal(value: Optional[float], default_zero: bool = False) -> Optional[Decimal]:
+    if value is None:
+        return Decimal("0.00") if default_zero else None
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        return Decimal("0.00") if default_zero else None
+
+
 def format_money(value: Optional[float]) -> Optional[str]:
     if value is None:
         return None
     return f"${value:.2f}"
+
+
+def is_refunded_item_name(name: Optional[str]) -> bool:
+    return bool(name and re.search(r"\brefunded\b", name, re.I))
+
+
+def normalize_refund_item_pricing(item: OrderItem) -> None:
+    if not is_refunded_item_name(item.name):
+        return
+
+    qty = int(item.quantity) if item.quantity and str(item.quantity).isdigit() else 1
+    if qty <= 0:
+        qty = 1
+
+    total = parse_money_value(item.total_price)
+    original_total = parse_money_value(item.original_total_price)
+    unit = parse_money_value(item.unit_price)
+
+    # Prefer original undiscounted line amount as refund magnitude.
+    if original_total is not None and original_total > 0:
+        total = -abs(original_total)
+    elif total is not None and total != 0:
+        total = -abs(total)
+    elif unit is not None and unit != 0:
+        total = -abs(unit) * qty
+    else:
+        return
+
+    item.total_price = format_money(total)
+
+    unit_from_total = total / qty if qty > 0 else total
+    item.unit_price = format_money(unit_from_total)
+
+
+def item_totals_sum(items: List[OrderItem]) -> float:
+    total = 0.0
+    for item in items:
+        v = parse_money_value(item.total_price)
+        if v is not None:
+            total += v
+    return round(total, 2)
+
+
+def is_implausible_item_parse(items: List[OrderItem], receipt_item_subtotal: Optional[str]) -> bool:
+    subtotal = parse_money_value(receipt_item_subtotal)
+    if subtotal is None or subtotal < 20:
+        return False
+    parsed = item_totals_sum(items)
+    if parsed <= 0.0:
+        return True
+    return parsed < (subtotal * 0.5)
 
 
 def derive_unit_qty(item: OrderItem) -> Optional[float]:
@@ -1168,6 +1256,7 @@ def is_summary_item_name(name: str) -> bool:
         r"\btip\b",
         r"\bservice fee\b",
         r"\bdelivery fee\b",
+        r"\bcheckout bag fee\b",
         r"\bmembership\b",
         r"\bfinal item price\b",
         r"\bpayment method\b",
@@ -1224,6 +1313,13 @@ def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngi
                     )
                 qty = rounded
 
+        if qty is not None and qty > 9 and not quantity_locked and not is_weighted:
+            if debug_item_match(name):
+                debug_item_log(
+                    f"qty clamp applied -> name={name!r}, inferred_qty={qty}, resetting to 1"
+                )
+            qty = 1
+
         if qty is not None and unit is not None and not is_weighted:
             expected = unit * qty
             if total is None or total < unit or abs(total - expected) > 0.02:
@@ -1240,6 +1336,7 @@ def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngi
             original_total_price=format_money(original_total) if original_total is not None else None,
             quantity_locked=quantity_locked,
         )
+        normalize_refund_item_pricing(candidate)
 
         existing = grouped.get(key)
         if existing is None:
@@ -1285,6 +1382,18 @@ def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngi
                 choose_candidate = True
             elif existing_weighted and not candidate_weighted:
                 choose_candidate = False
+            elif (
+                candidate_total is not None
+                and existing_total is not None
+                and candidate_unit is not None
+                and existing_unit is not None
+                and abs(candidate_unit - existing_unit) < 0.001
+                and abs(candidate_total - existing_total) <= 0.05
+                and candidate_total > existing_total
+            ):
+                # Tiny weighted differences are usually rounding/rendering variants.
+                # Prefer explicit higher current-price total over computed fallback.
+                choose_candidate = True
             elif (
                 candidate_total is not None
                 and existing_total is not None
@@ -1351,7 +1460,9 @@ def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngi
 
     cleaned = list(grouped.values())
     for item in cleaned:
-        cat, source = deterministic_category(item.name)
+        normalize_refund_item_pricing(item)
+    for item in cleaned:
+        cat, source = deterministic_category(item.name, source="instacart")
         item.budget_category = canonicalize_category(cat) or DEFAULT_CATEGORY
         item.category_source = source
 
@@ -1401,6 +1512,7 @@ _BANNED_ITEM_NAME_PATTERNS: Tuple[str, ...] = (
     r"^friends can get .*terms apply\.?$",
     r".*\bterms apply\.?$",
     r"^recycling fee$",
+    r"^replaced\s*\(\d+\).*$",
     r"^[\.\d\s]*kg$",
     r"^found\s*\(\d+\)$",
     r"^current price:?$",
@@ -1476,6 +1588,8 @@ def _collect_item_candidates(page: Page) -> List[Dict[str, Any]]:
 
 
 def _normalize_candidate_text(txt: str) -> Tuple[str, List[str]]:
+    txt = re.sub(r"(Your\s+items)\s*(Found\s*\(\d+\))", r"\1\n\2", txt, flags=re.I)
+    txt = re.sub(r"(Found\s*\(\d+\))([A-Za-z])", r"\1\n\2", txt, flags=re.I)
     txt = re.sub(r"([A-Za-z])(\$\s?\d)", r"\1\n\2", txt)
     txt = re.sub(r"(•\s*each)(\s*Quantity\s*:?)", r"\1\n\2", txt, flags=re.I)
     txt = re.sub(r"(•\s*each)\s*(\d{1,2})\s*(\$\s?\d)", r"\1\n\2\n\3", txt, flags=re.I)
@@ -1492,6 +1606,8 @@ def _extract_name(lines: List[str]) -> Tuple[Optional[str], int]:
             continue
         if re.fullmatch(r"x\s*\d+", ln, re.I):
             continue
+        if re.match(r"^replaced\s*\(\d+\)", ln, re.I):
+            continue
         if re.search(r"\bcurrent\s+price\b", ln, re.I):
             continue
         if any(re.fullmatch(pat, ln, re.I) for pat in _BANNED_ITEM_NAME_PATTERNS):
@@ -1502,6 +1618,10 @@ def _extract_name(lines: List[str]) -> Tuple[Optional[str], int]:
 
 
 def _sanitize_name(name: str) -> Optional[str]:
+    name = re.sub(r"^replaced\s*\(\d+\)\s*", " ", name, flags=re.I)
+    name = re.sub(r"^replacement\s*:\s*", " ", name, flags=re.I)
+    name = re.sub(r"^your\s+items\b", " ", name, flags=re.I)
+    name = re.sub(r"^found\s*\(\d+\)\s*", " ", name, flags=re.I)
     name = re.sub(r"quantity\s*:?\s*\d+\b", " ", name, flags=re.I)
     name = re.sub(r"current\s+price\s*:?\s*\$?\s*\d+(?:,\d{3})*(?:\.\d{2})?", " ", name, flags=re.I)
     name = re.sub(r"original\s+price\s*:?\s*\$?\s*\d+(?:,\d{3})*(?:\.\d{2})?", " ", name, flags=re.I)
@@ -1516,6 +1636,8 @@ def _sanitize_name(name: str) -> Optional[str]:
     name = re.sub(r"\s+", " ", name).strip(" -:|")
     if (
         not name
+        or re.search(r"^your\s+items\b", name, re.I)
+        or re.search(r"^found\s*\(\d+\)\s*$", name, re.I)
         or re.search(r"\b(?:quantity|current\s+price|original\s+price)\b", name, re.I)
         or re.search(r"\bearned\.?$", name, re.I)
         or re.search(r"\bterms apply\.?$", name, re.I)
@@ -1529,6 +1651,17 @@ def _sanitize_name(name: str) -> Optional[str]:
 
 def _merge_fragment_into_previous_item(items: List[OrderItem], txt: str, lines: List[str]) -> None:
     if not items:
+        return
+    if re.search(r"\b(tip|tax|service fee|delivery fee|recycling fee|total|subtotal|discount|coupon)\b", txt, re.I):
+        return
+    # Ignore orphan price fragments like "Current price: $3.14" that are not
+    # anchored to an item card. These can belong to adjacent items and should
+    # not overwrite the previous parsed item.
+    if (
+        len(lines) <= 2
+        and re.search(r"\bcurrent\s+price\b", txt, re.I)
+        and not any(re.search(r"[A-Za-z]{3,}", ln) and not re.search(r"\bcurrent\s+price\b", ln, re.I) for ln in lines)
+    ):
         return
     qty_only_lines = [ln for ln in lines if re.fullmatch(r"\d{1,2}", ln)]
     if qty_only_lines and not any(re.search(r"[A-Za-z]", ln) for ln in lines):
@@ -1574,11 +1707,14 @@ def _queue_fragment(items: List[OrderItem], txt: str, lines: List[str], pending_
     ]
     qty_tokens = [int(ln) for ln in lines if re.fullmatch(r"\d{1,2}", ln)]
     if qty_tokens:
-        fragment_qty = max(qty_tokens)
+        bounded = [q for q in qty_tokens if q <= 9]
+        fragment_qty = max(bounded) if bounded else None
     else:
         m_qty = re.search(r"\b(\d{1,2})\b(?=[^\n$]{0,8}\$\s?\d)", txt)
         if m_qty:
-            fragment_qty = int(m_qty.group(1))
+            inferred = int(m_qty.group(1))
+            if inferred <= 9:
+                fragment_qty = inferred
 
     _merge_fragment_into_previous_item(items, txt, lines)
     if fragment_qty is None and not fragment_vals:
@@ -1620,6 +1756,8 @@ def _extract_initial_quantity(txt: str, lines: List[str], name_idx: int, is_weig
                 continue
             val = int(ln)
             if val < 1 or val > 99:
+                continue
+            if val > 9:
                 continue
             has_text_before = any(re.search(r"[A-Za-z]", x) for x in lines[:i])
             next_money_idxs = [m for m in money_line_idxs if m > i]
@@ -2041,13 +2179,56 @@ def reconcile_items_with_body_text(items: List[OrderItem], body_text: str) -> No
             continue
         anchor = r"\s+".join(re.escape(t) for t in tokens[:2])
 
+        # Weighted-item reconciliation: pull explicit "$X/kg ... Y kg ... $Z" style data
+        # from nearby text and prefer it over noisy generic quantity inference.
+        for m in re.finditer(anchor, text, flags=re.I):
+            start = max(0, m.start() - 60)
+            end = min(len(text), m.end() + 300)
+            window = text[start:end]
+            weight_pat = re.search(
+                r"\$?\s*(\d+(?:,\d{3})*\.\d{2})\s*/\s*(kg|g|lb|lbs|oz)\b.*?\b(\d+(?:\.\d+)?)\s*(kg|g|lb|lbs|oz)\b.*?\$?\s*(\d+(?:,\d{3})*\.\d{2})",
+                window,
+                re.I,
+            )
+            if not weight_pat:
+                continue
+            try:
+                unit_val = float(weight_pat.group(1).replace(",", ""))
+                unit_uom = weight_pat.group(2).lower()
+                qty_val = float(weight_pat.group(3))
+                qty_uom = weight_pat.group(4).lower()
+                total_val = float(weight_pat.group(5).replace(",", ""))
+            except Exception:
+                continue
+            if qty_val <= 0 or unit_val <= 0 or total_val <= 0:
+                continue
+            if unit_uom != qty_uom:
+                continue
+            if abs((unit_val * qty_val) - total_val) > 0.25:
+                continue
+            item.quantity = None
+            item.weight_qty = round(qty_val, 3)
+            item.weight_unit = unit_uom
+            item.unit_price = format_money(unit_val)
+            item.total_price = format_money(total_val)
+            if debug_item_match(item.name):
+                debug_item_log(
+                    f"weighted reconciliation -> name={item.name!r}, unit={unit_val}/{unit_uom}, qty={qty_val}, total={total_val}"
+                )
+            # Once weighted info is confirmed, skip quantity-upgrade heuristics for this item.
+            unit = unit_val
+            break
+
+        if item.weight_unit:
+            continue
+
         best_qty = cur_qty
         best_total: Optional[float] = parse_money_value(item.total_price)
         for m in re.finditer(anchor, text, flags=re.I):
             start = max(0, m.start() - 40)
             end = min(len(text), m.end() + 220)
             window = text[start:end]
-            qtys = [int(x) for x in re.findall(r"\b([1-9]\d?)\b", window)]
+            qtys = [int(x) for x in re.findall(r"\b([1-9]\d?)\b", window) if int(x) <= 9]
             prices = [parse_money_value(p) for p in re.findall(r"\$\s?\d+(?:,\d{3})*(?:\.\d{2})?", window)]
             prices = [p for p in prices if p is not None and p > 0]
             if not qtys or not prices:
@@ -2115,6 +2296,31 @@ def reconcile_items_with_body_text(items: List[OrderItem], body_text: str) -> No
                         break
 
 
+def append_checkout_bag_fee_item(items: List[OrderItem], receipt_breakdown: Dict[str, Optional[str]]) -> None:
+    bag_fee = parse_money_value(receipt_breakdown.get("checkout_bag_fee"))
+    bag_tax = parse_money_value(receipt_breakdown.get("checkout_bag_fee_tax"))
+    if bag_fee is None and bag_tax is None:
+        return
+    total = round((bag_fee or 0.0) + (bag_tax or 0.0), 2)
+    if total <= 0:
+        return
+    for existing in items:
+        if normalize_for_match(existing.name) == normalize_for_match("Checkout Bag Fee (incl tax)"):
+            return
+    items.append(
+        OrderItem(
+            name="Checkout Bag Fee (incl tax)",
+            quantity="1",
+            unit_price=format_money(total),
+            total_price=format_money(total),
+            original_total_price=format_money(total),
+            budget_category="Cash/Unknown",
+            category_source="receipt_fee",
+            quantity_locked=True,
+        )
+    )
+
+
 def extract_order_metadata(
     page: Page,
     order_url: str,
@@ -2127,6 +2333,15 @@ def extract_order_metadata(
     receipt_breakdown = parse_receipt_breakdown(f"{body_text}\n{receipt_text}")
     raw_items = wait_for_items_to_render(page, timeout_seconds=20.0)
     items = clean_order_items(raw_items, ai_engine=ai_engine)
+    if is_implausible_item_parse(items, receipt_breakdown.get("item_subtotal")):
+        print(
+            "Warning: low-confidence item parse; retrying extraction with longer timeout.",
+            flush=True,
+        )
+        retry_raw_items = wait_for_items_to_render(page, timeout_seconds=40.0)
+        retry_items = clean_order_items(retry_raw_items, ai_engine=ai_engine)
+        if item_totals_sum(retry_items) > item_totals_sum(items):
+            items = retry_items
     order_id = parse_order_id(title=title, body_text=body_text, order_url=order_url)
 
     def infer_fields(text: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -2166,6 +2381,7 @@ def extract_order_metadata(
                 break
 
     reconcile_items_with_body_text(items, body_text)
+    append_checkout_bag_fee_item(items, receipt_breakdown)
     if not store_name:
         store_name = infer_store_name_from_items(items)
 
@@ -2520,11 +2736,22 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
                             break
                         except ValueError:
                             continue
-                subtotal_value = parse_money_value(order.receipt_item_subtotal)
-                gst_value = parse_money_value(order.receipt_gst)
-                pst_value = parse_money_value(order.receipt_pst)
-                service_fee_tax_value = parse_money_value(order.receipt_service_fee_tax)
-                total_charged_value = parse_money_value(order.receipt_total_charged) or parse_money_value(order.order_total)
+                subtotal_value = to_money_decimal(parse_money_value(order.receipt_item_subtotal))
+                gst_value = to_money_decimal(parse_money_value(order.receipt_gst), default_zero=True)
+                pst_value = to_money_decimal(parse_money_value(order.receipt_pst), default_zero=True)
+                service_fee_tax_value = to_money_decimal(parse_money_value(order.receipt_service_fee_tax), default_zero=True)
+                total_charged_value = to_money_decimal(
+                    parse_money_value(order.receipt_total_charged) or parse_money_value(order.order_total)
+                )
+                parsed_items_total = item_totals_sum(order.items)
+                subtotal_check = float(subtotal_value) if subtotal_value is not None else None
+                if subtotal_check is not None and subtotal_check >= 20 and parsed_items_total < (subtotal_check * 0.5):
+                    print(
+                        f"Warning: skipping DB write for order {order.order_id} due to low-confidence parsed items "
+                        f"(items_total={parsed_items_total:.2f}, subtotal={subtotal_check:.2f}).",
+                        flush=True,
+                    )
+                    continue
 
                 cur.execute(
                     order_sql,
@@ -2536,15 +2763,15 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
                         order.store_name,
                         order.order_url,
                         subtotal_value,
-                        parse_money_value(order.receipt_discount_total),
-                        parse_money_value(order.receipt_tip),
-                        parse_money_value(order.receipt_service_fee),
-                        parse_money_value(order.receipt_recycling_fee),
+                        to_money_decimal(parse_money_value(order.receipt_discount_total), default_zero=True),
+                        to_money_decimal(parse_money_value(order.receipt_tip), default_zero=True),
+                        to_money_decimal(parse_money_value(order.receipt_service_fee), default_zero=True),
+                        to_money_decimal(parse_money_value(order.receipt_recycling_fee), default_zero=True),
                         service_fee_tax_value,
                         gst_value,
                         pst_value,
                         total_charged_value,
-                        parse_money_value(order.order_total),
+                        to_money_decimal(parse_money_value(order.order_total)),
                         order.raw_page_title,
                         json.dumps(asdict(order), ensure_ascii=True),
                     ),
@@ -2565,11 +2792,11 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
                             item.budget_category,
                             item.category_source,
                             derive_unit_qty(item),
-                            parse_money_value(item.unit_price),
+                            to_money_decimal(parse_money_value(item.unit_price)),
                             derive_weight_qty(item),
                             item.weight_unit.lower() if item.weight_unit else None,
-                            parse_money_value(item.total_price),
-                            parse_money_value(item.original_total_price),
+                            to_money_decimal(parse_money_value(item.total_price)),
+                            to_money_decimal(parse_money_value(item.original_total_price)),
                         ),
                     )
                     inserted_items += 1
@@ -2580,6 +2807,35 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
     finally:
         conn.close()
     return inserted_orders, inserted_items
+
+
+def load_expense_category_mappings_from_postgres(dsn: str, schema: str) -> List[Dict[str, object]]:
+    schema = _require_valid_schema_name(schema)
+    conn = _connect_postgres(dsn)
+    sql = f"""
+        SELECT source, merchant, match_type, match_text, category_name, priority
+        FROM {schema}.expense_category_mappings
+        WHERE is_active
+        ORDER BY priority, id
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+        return [
+            {
+                "source": r[0],
+                "merchant": r[1],
+                "match_type": r[2],
+                "match_text": r[3],
+                "category_name": r[4],
+                "priority": r[5],
+            }
+            for r in rows
+            if r and r[3] and r[4]
+        ]
+    finally:
+        conn.close()
 
 
 def main() -> None:
@@ -2597,6 +2853,13 @@ def main() -> None:
 
     profile_dir.mkdir(parents=True, exist_ok=True)
     ai_engine.load_suggestions()
+    try:
+        mapping_rules = load_expense_category_mappings_from_postgres(args.db_dsn, args.db_schema)
+        set_runtime_category_rules(mapping_rules)
+        print(f"Loaded category mapping rules: {len(mapping_rules)} active", flush=True)
+    except Exception as e:
+        set_runtime_category_rules([])
+        print(f"Warning: could not load category mapping rules; continuing without them. {type(e).__name__}: {e}", flush=True)
 
     pw = None
     context: Optional[BrowserContext] = None

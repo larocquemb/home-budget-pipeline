@@ -2,7 +2,7 @@
 """
 Costco receipt extractor with simplified budget categories and product hyperlinks.
 
-Reads Costco PDF receipts from a ZIP archive, extracts item-level rows, infers SKUs when
+Reads Costco PDF receipts from a ZIP archive or PDF path, extracts item-level rows, infers SKUs when
 present in the receipt text, assigns one of these categories:
 
 - Groceries
@@ -31,6 +31,7 @@ import re
 import time
 import zipfile
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
@@ -38,7 +39,7 @@ from urllib.parse import quote_plus
 import pdfplumber
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from budget_category_logic import CATEGORY_ORDER, DEFAULT_CATEGORY, deterministic_category
+from budget_category_logic import CATEGORY_ORDER, DEFAULT_CATEGORY, deterministic_category, set_runtime_category_rules
 from budget_category_ai import AICategoryEngine
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -377,6 +378,20 @@ def extract_zip(zip_path: Path, out_dir: Path) -> List[Path]:
     return sorted(p for p in out_dir.rglob('*.pdf') if '__MACOSX' not in str(p))
 
 
+def collect_input_pdfs(input_path: Path, extract_dir: Path) -> List[Path]:
+    if not input_path.exists():
+        raise FileNotFoundError(f'Missing input path: {input_path}')
+    if input_path.is_file():
+        if input_path.suffix.lower() == '.zip':
+            return extract_zip(input_path, extract_dir)
+        if input_path.suffix.lower() == '.pdf':
+            return [input_path]
+        raise RuntimeError(f'Unsupported input file type: {input_path}')
+    if input_path.is_dir():
+        return sorted(p for p in input_path.rglob('*.pdf'))
+    raise RuntimeError(f'Unsupported input path: {input_path}')
+
+
 def pdf_text(pdf_path: Path) -> str:
     text_parts: List[str] = []
     with pdfplumber.open(str(pdf_path)) as pdf:
@@ -514,7 +529,7 @@ def classify_category_with_source(
     allow_ai: bool = True,
 ) -> Tuple[str, str]:
     runtime_default = DEFAULT_CATEGORY if DEFAULT_CATEGORY in CATEGORY_ORDER else (CATEGORY_ORDER[0] if CATEGORY_ORDER else DEFAULT_CATEGORY)
-    deterministic, source = deterministic_category(desc)
+    deterministic, source = deterministic_category(desc, source='costco', merchant='Costco')
     if deterministic not in CATEGORY_ORDER:
         deterministic = runtime_default
         source = 'default'
@@ -777,7 +792,7 @@ def add_notes_sheet(wb: Workbook, notes: List[str]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Extract Costco receipt data and optionally write canonical DB records.')
-    parser.add_argument('--zip-path', default=str(ZIP_PATH), help='Input ZIP path containing Costco receipt PDFs.')
+    parser.add_argument('--zip-path', default=str(ZIP_PATH), help='Input path: ZIP file, single PDF, or directory of PDFs.')
     parser.add_argument('--extract-dir', default=str(EXTRACT_DIR), help='Directory to extract PDFs to.')
     parser.add_argument('--out-xlsx', default=str(OUT_XLSX), help='Output Excel workbook path.')
     parser.add_argument('--write-db', action='store_true', help='Write parsed canonical expense records into Postgres.')
@@ -839,6 +854,15 @@ def _connect_postgres(dsn: str):
             ) from e
 
 
+def to_money_decimal(value: object, default_zero: bool = False) -> Optional[Decimal]:
+    if value is None:
+        return Decimal('0.00') if default_zero else None
+    try:
+        return Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        return Decimal('0.00') if default_zero else None
+
+
 def load_expense_categories_from_postgres(dsn: str, schema: str) -> List[str]:
     schema = _require_valid_schema_name(schema)
     conn = _connect_postgres(dsn)
@@ -853,6 +877,35 @@ def load_expense_categories_from_postgres(dsn: str, schema: str) -> List[str]:
             cur.execute(sql)
             rows = cur.fetchall()
         return [str(r[0]).strip() for r in rows if r and str(r[0]).strip()]
+    finally:
+        conn.close()
+
+
+def load_expense_category_mappings_from_postgres(dsn: str, schema: str) -> List[Dict[str, object]]:
+    schema = _require_valid_schema_name(schema)
+    conn = _connect_postgres(dsn)
+    sql = f"""
+        SELECT source, merchant, match_type, match_text, category_name, priority
+        FROM {schema}.expense_category_mappings
+        WHERE is_active
+        ORDER BY priority, id
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+        return [
+            {
+                'source': r[0],
+                'merchant': r[1],
+                'match_type': r[2],
+                'match_text': r[3],
+                'category_name': r[4],
+                'priority': r[5],
+            }
+            for r in rows
+            if r and r[3] and r[4]
+        ]
     finally:
         conn.close()
 
@@ -919,8 +972,12 @@ def write_costco_to_postgres(
                 receipt_items = items_by_receipt.get(receipt_id, [])
                 subtotal = receipt.get('subtotal_cad')
                 total = receipt.get('total_cad')
-                if total is None and subtotal is not None and receipt.get('tax_cad') is not None:
-                    total = round(float(subtotal) + float(receipt['tax_cad']), 2)
+                subtotal_dec = to_money_decimal(subtotal)
+                total_dec = to_money_decimal(total)
+                if total_dec is None and subtotal_dec is not None and receipt.get('tax_cad') is not None:
+                    tax_dec = to_money_decimal(receipt.get('tax_cad'))
+                    if tax_dec is not None:
+                        total_dec = (subtotal_dec + tax_dec).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                 payload = {
                     'receipt': receipt,
                     'items': receipt_items,
@@ -934,9 +991,9 @@ def write_costco_to_postgres(
                         _receipt_date_from_id(receipt_id),
                         'Costco',
                         None,
-                        subtotal,
-                        total,
-                        total,
+                        subtotal_dec,
+                        total_dec,
+                        total_dec,
                         json.dumps(payload, ensure_ascii=True),
                     ),
                 )
@@ -988,8 +1045,8 @@ def write_costco_to_postgres(
                             merged['budget_category'],
                             merged['category_source'],
                             merged['unit_qty'],
-                            merged['unit_cost'],
-                            merged['line_total'],
+                            to_money_decimal(merged['unit_cost']),
+                            to_money_decimal(merged['line_total']),
                         ),
                     )
                     written_items += 1
@@ -1004,7 +1061,7 @@ def write_costco_to_postgres(
 
 def main() -> None:
     args = parse_args()
-    zip_path = Path(args.zip_path).expanduser().resolve()
+    input_path = Path(args.zip_path).expanduser().resolve()
     extract_dir = Path(args.extract_dir).expanduser().resolve()
     out_xlsx = Path(args.out_xlsx).expanduser().resolve()
 
@@ -1017,6 +1074,13 @@ def main() -> None:
             print('Warning: no active rows in expense_categories; using built-in categories.', flush=True)
     except Exception as e:
         print(f'Warning: could not load categories from DB; using built-in categories. {type(e).__name__}: {e}', flush=True)
+    try:
+        mapping_rules = load_expense_category_mappings_from_postgres(args.db_dsn, args.db_schema)
+        set_runtime_category_rules(mapping_rules)
+        print(f'Loaded category mapping rules: {len(mapping_rules)} active', flush=True)
+    except Exception as e:
+        set_runtime_category_rules([])
+        print(f'Warning: could not load category mapping rules; continuing without them. {type(e).__name__}: {e}', flush=True)
 
     run_started = time.perf_counter()
     extract_seconds = 0.0
@@ -1025,12 +1089,9 @@ def main() -> None:
     xlsx_write_seconds = 0.0
     suggestions_save_seconds = 0.0
 
-    if not zip_path.exists():
-        raise FileNotFoundError(f'Missing input zip: {zip_path}')
-
     AI_ENGINE.load_suggestions()
     extract_started = time.perf_counter()
-    pdfs = extract_zip(zip_path, extract_dir)
+    pdfs = collect_input_pdfs(input_path, extract_dir)
     extract_seconds = time.perf_counter() - extract_started
 
     all_items: List[Dict] = []
