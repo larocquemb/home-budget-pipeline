@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS budget.expense_items (
 
     item_name TEXT NOT NULL,
     item_name_norm TEXT GENERATED ALWAYS AS (lower(trim(item_name))) STORED,
+    tax_code TEXT,
 
     budget_category TEXT,
     category_source TEXT,
@@ -68,6 +69,9 @@ CREATE TABLE IF NOT EXISTS budget.expense_items (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE budget.expense_items
+    ADD COLUMN IF NOT EXISTS tax_code TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_expenses_source_date
     ON budget.expenses (source, order_date DESC);

@@ -132,6 +132,7 @@ AI_ENGINE = AICategoryEngine(AI_SUGGESTIONS_PATH)
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract Sobeys receipt data and optionally write canonical DB records.")
     parser.add_argument("--input-path", default=str(DEFAULT_INPUT), help="PDF file or directory containing Sobeys receipt PDFs.")
+    parser.add_argument("--import-xlsx", default="", help="Optional edited workbook to import instead of OCR parsing.")
     parser.add_argument("--out-xlsx", default=str(DEFAULT_OUT_XLSX), help="Output Excel workbook path.")
     parser.add_argument("--write-db", action="store_true", help="Write parsed canonical expense records into Postgres.")
     parser.add_argument(
@@ -168,6 +169,17 @@ def parse_money_value(value: Optional[str]) -> Optional[float]:
     if m.group("prefix") or m.group("suffix"):
         out = -out
     return out
+
+
+def parse_numeric_cell(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    return parse_money_value(text) if any(ch in text for ch in "$-") else (float(text) if re.search(r"\d", text) else None)
 
 
 def extract_inputs(input_path: Path) -> List[Path]:
@@ -421,6 +433,55 @@ def parse_count_detail_line(line: str) -> Optional[Tuple[float, float]]:
         return qty, unit_cost
     except Exception:
         return None
+
+
+def parse_embedded_item_details(item_name: str, amount: Optional[float]) -> Tuple[str, Optional[float], Optional[float], Optional[float], Optional[str]]:
+    """
+    Parse embedded quantity detail from manual item names such as:
+      - 'Apples Honeycrisp 1.275 kg @ $8.80 / kg'
+      - 'Onions Green 2 @ 1/ $1.79'
+    Returns: clean_name, unit_qty, unit_cost, weight_qty, weight_unit
+    """
+    text = normalize_line(item_name)
+
+    weight_m = re.match(
+        r"^(?P<desc>.+?)\s+(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>kg|g|lb|lbs)\s*@\s*\$?(?P<unit_cost>\d+\.\d{2})(?:\s*/\s*(?P<per_unit>kg|g|lb|lbs))?\s*$",
+        text,
+        re.I,
+    )
+    if weight_m:
+        desc = normalize_line(weight_m.group("desc"))
+        try:
+            return (
+                desc,
+                None,
+                float(weight_m.group("unit_cost")),
+                float(weight_m.group("qty")),
+                weight_m.group("unit").lower(),
+            )
+        except Exception:
+            pass
+
+    count_m = re.match(
+        r"^(?P<desc>.+?)\s+(?P<qty>\d+(?:\.\d+)?)\s*@\s*(?P<bundle>\d+)\s*/\s*\$?(?P<unit_cost>\d+\.\d{2})\s*$",
+        text,
+        re.I,
+    )
+    if count_m:
+        desc = normalize_line(count_m.group("desc"))
+        try:
+            return (
+                desc,
+                float(count_m.group("qty")),
+                float(count_m.group("unit_cost")),
+                None,
+                None,
+            )
+        except Exception:
+            pass
+
+    fallback_amount = float(amount) if amount is not None else None
+    return text, 1.0, fallback_amount, None, None
 
 
 def find_item_details(
@@ -765,10 +826,10 @@ def autosize(ws) -> None:
 def add_items_sheet(wb: Workbook, items: List[Dict]) -> None:
     ws = wb.active
     ws.title = "Items"
-    headers = ["receipt_id", "line_no", "item", "amount_cad", "budget_category", "category_source", "raw_line"]
+    headers = ["receipt_id", "line_no", "item", "amount_cad", "Code", "GST", "PST", "budget_category", "category_source", "raw_line"]
     ws.append(headers)
     for row in items:
-        ws.append([row[h] for h in headers])
+        ws.append([row.get(h) for h in headers])
     style_header(ws)
     autosize(ws)
 
@@ -778,7 +839,7 @@ def add_receipts_sheet(wb: Workbook, receipts: List[Dict]) -> None:
     headers = ["receipt_id", "order_id", "receipt_filename", "filename_total_cad", "subtotal_cad", "tax_cad", "total_cad", "parsed_item_count"]
     ws.append(headers)
     for row in receipts:
-        ws.append([row[h] for h in headers])
+        ws.append([row.get(h) for h in headers])
     style_header(ws)
     autosize(ws)
 
@@ -879,6 +940,123 @@ def load_expense_categories_from_postgres(dsn: str, schema: str) -> List[str]:
         conn.close()
 
 
+def load_manual_xlsx(xlsx_path: Path) -> Tuple[List[Dict], List[Dict]]:
+    from openpyxl import load_workbook
+
+    wb = load_workbook(xlsx_path, data_only=True)
+    if "Items" not in wb.sheetnames or "Receipts" not in wb.sheetnames:
+        raise RuntimeError("Workbook must contain Items and Receipts sheets.")
+
+    ws_items = wb["Items"]
+    item_headers = [str(c.value).strip() if c.value is not None else "" for c in ws_items[1]]
+    item_idx = {h: i for i, h in enumerate(item_headers)}
+    required_item = {"receipt_id", "line_no", "item", "amount_cad"}
+    missing_item = sorted(required_item - set(item_idx))
+    if missing_item:
+        raise RuntimeError(f"Items sheet missing required columns: {missing_item}")
+
+    def is_instant_savings(text: str) -> bool:
+        return bool(re.search(r"\binstant\s+savings?\b", normalize_line(text), re.I))
+
+    def is_ehc_charge(text: str) -> bool:
+        return bool(re.search(r"^\s*ehc\b", normalize_line(text), re.I))
+
+    items: List[Dict] = []
+    last_item_idx_by_receipt: Dict[str, int] = {}
+    for row in ws_items.iter_rows(min_row=2, values_only=True):
+        receipt_id = row[item_idx["receipt_id"]]
+        item_name = row[item_idx["item"]]
+        amount = parse_numeric_cell(row[item_idx["amount_cad"]])
+        if not receipt_id or not item_name or amount is None:
+            continue
+        receipt_key = str(receipt_id).strip()
+        code_val = row[item_idx["Code"]] if "Code" in item_idx else None
+        code_text = str(code_val).strip().upper() if code_val is not None else ""
+        gst_val = parse_numeric_cell(row[item_idx["GST"]]) if "GST" in item_idx else None
+        pst_val = parse_numeric_cell(row[item_idx["PST"]]) if "PST" in item_idx else None
+        if code_text in {"", "C"}:
+            gst_val = 0.0
+            pst_val = 0.0
+        if is_instant_savings(str(item_name)) and float(amount) < 0:
+            prev_idx = last_item_idx_by_receipt.get(receipt_key)
+            if prev_idx is not None:
+                prev = items[prev_idx]
+                prev["amount_cad"] = round(float(prev.get("amount_cad") or 0.0) + float(amount), 2)
+                prev["line_total"] = round(float(prev.get("line_total") or 0.0) + float(amount), 2)
+                existing_raw = str(prev.get("raw_line") or "")
+                tag = f"INSTANT SAVINGS {float(amount):.2f}"
+                prev["raw_line"] = f"{existing_raw} | {tag}" if existing_raw else tag
+                continue
+        if is_ehc_charge(str(item_name)) and float(amount) > 0:
+            prev_idx = last_item_idx_by_receipt.get(receipt_key)
+            if prev_idx is not None:
+                prev = items[prev_idx]
+                prev["amount_cad"] = round(float(prev.get("amount_cad") or 0.0) + float(amount), 2)
+                prev["line_total"] = round(float(prev.get("line_total") or 0.0) + float(amount), 2)
+                existing_raw = str(prev.get("raw_line") or "")
+                tag = f"EHC {float(amount):.2f}"
+                prev["raw_line"] = f"{existing_raw} | {tag}" if existing_raw else tag
+                continue
+        parsed_name, unit_qty, unit_cost, weight_qty, weight_unit = parse_embedded_item_details(str(item_name), amount)
+        raw_category = str(row[item_idx["budget_category"]]).strip() if "budget_category" in item_idx and row[item_idx["budget_category"]] is not None else ""
+        if raw_category and raw_category in CATEGORY_ORDER:
+            category = raw_category
+            category_source = (
+                str(row[item_idx["category_source"]]).strip()
+                if "category_source" in item_idx and row[item_idx["category_source"]] is not None and str(row[item_idx["category_source"]]).strip()
+                else "manual"
+            )
+        else:
+            category, category_source = classify_category_with_source(parsed_name, allow_ai=True)
+        items.append(
+            {
+                "receipt_id": receipt_key,
+                "line_no": int(float(row[item_idx["line_no"]])) if row[item_idx["line_no"]] is not None else 0,
+                "item": parsed_name,
+                "amount_cad": float(amount),
+                "Code": str(code_val).strip() if code_val is not None else "",
+                "GST": gst_val,
+                "PST": pst_val,
+                "unit_qty": unit_qty,
+                "unit_cost": unit_cost,
+                "weight_qty": weight_qty,
+                "weight_unit": weight_unit,
+                "line_total": float(amount),
+                "budget_category": category,
+                "category_source": category_source,
+                "raw_line": str(row[item_idx.get("raw_line", -1)]).strip() if "raw_line" in item_idx and row[item_idx["raw_line"]] is not None else "",
+            }
+        )
+        last_item_idx_by_receipt[receipt_key] = len(items) - 1
+
+    ws_receipts = wb["Receipts"]
+    rec_headers = [str(c.value).strip() if c.value is not None else "" for c in ws_receipts[1]]
+    rec_idx = {h: i for i, h in enumerate(rec_headers)}
+    required_rec = {"receipt_id", "order_id", "receipt_filename"}
+    missing_rec = sorted(required_rec - set(rec_idx))
+    if missing_rec:
+        raise RuntimeError(f"Receipts sheet missing required columns: {missing_rec}")
+
+    receipts: List[Dict] = []
+    for row in ws_receipts.iter_rows(min_row=2, values_only=True):
+        receipt_id = row[rec_idx["receipt_id"]]
+        if not receipt_id:
+            continue
+        receipts.append(
+            {
+                "receipt_id": str(receipt_id).strip(),
+                "order_id": str(row[rec_idx["order_id"]]).strip() if row[rec_idx["order_id"]] is not None else str(receipt_id).strip(),
+                "receipt_filename": str(row[rec_idx["receipt_filename"]]).strip() if row[rec_idx["receipt_filename"]] is not None else f"{receipt_id}.pdf",
+                "filename_total_cad": parse_numeric_cell(row[rec_idx["filename_total_cad"]]) if "filename_total_cad" in rec_idx else None,
+                "subtotal_cad": parse_numeric_cell(row[rec_idx["subtotal_cad"]]) if "subtotal_cad" in rec_idx else None,
+                "tax_cad": parse_numeric_cell(row[rec_idx["tax_cad"]]) if "tax_cad" in rec_idx else None,
+                "total_cad": parse_numeric_cell(row[rec_idx["total_cad"]]) if "total_cad" in rec_idx else None,
+                "parsed_item_count": int(float(row[rec_idx["parsed_item_count"]])) if "parsed_item_count" in rec_idx and row[rec_idx["parsed_item_count"]] is not None else 0,
+            }
+        )
+    return items, receipts
+
+
 def date_from_receipt_id(receipt_id: str) -> Optional[datetime.date]:
     m = DATE_PREFIX_RE.match(receipt_id)
     if not m:
@@ -913,10 +1091,10 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
     expense_sql = f"""
         INSERT INTO {schema}.expenses (
             source, order_id, receipt_filename, order_date, store_name, order_url,
-            receipt_item_subtotal, receipt_total_charged, expense_total, raw_payload
+            receipt_item_subtotal, receipt_gst, receipt_pst, receipt_total_charged, expense_total, raw_payload
         ) VALUES (
             %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s::jsonb
+            %s, %s, %s, %s, %s, %s::jsonb
         )
         ON CONFLICT (source, order_id)
         DO UPDATE SET
@@ -925,6 +1103,8 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
             store_name = EXCLUDED.store_name,
             order_url = EXCLUDED.order_url,
             receipt_item_subtotal = EXCLUDED.receipt_item_subtotal,
+            receipt_gst = EXCLUDED.receipt_gst,
+            receipt_pst = EXCLUDED.receipt_pst,
             receipt_total_charged = EXCLUDED.receipt_total_charged,
             expense_total = EXCLUDED.expense_total,
             raw_payload = EXCLUDED.raw_payload
@@ -933,9 +1113,9 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
     delete_items_sql = f"DELETE FROM {schema}.expense_items WHERE expense_pk = %s"
     item_sql = f"""
         INSERT INTO {schema}.expense_items (
-            expense_pk, item_name, budget_category, category_source,
+            expense_pk, item_name, tax_code, budget_category, category_source,
             unit_qty, unit_cost, weight_qty, weight_unit, line_total, original_line_total
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
 
     try:
@@ -949,6 +1129,10 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                 total = rec.get("total_cad")
                 if total is None and subtotal is not None and rec.get("tax_cad") is not None:
                     total = round(float(subtotal) + float(rec["tax_cad"]), 2)
+                if subtotal is None:
+                    subtotal = round(sum(float(i.get("amount_cad") or 0.0) for i in receipt_items), 2) if receipt_items else None
+                gst_total = round(sum(float(i.get("GST") or 0.0) for i in receipt_items), 2) if receipt_items else None
+                pst_total = round(sum(float(i.get("PST") or 0.0) for i in receipt_items), 2) if receipt_items else None
                 payload = {"receipt": rec, "items": receipt_items}
 
                 cur.execute(
@@ -961,6 +1145,8 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                         "Sobeys",
                         None,
                         subtotal,
+                        gst_total,
+                        pst_total,
                         total,
                         total,
                         json.dumps(payload, ensure_ascii=True),
@@ -975,7 +1161,7 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                 cur.execute(delete_items_sql, (expense_pk,))
 
                 grouped: Dict[
-                    Tuple[str, Optional[str], Optional[str], Optional[float], Optional[float], Optional[str]],
+                    Tuple[str, Optional[str], Optional[str], Optional[float], Optional[float], Optional[str], Optional[str]],
                     Dict[str, Optional[float] | Optional[str]],
                 ] = {}
                 for item in receipt_items:
@@ -992,11 +1178,13 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                         unit_cost_val,
                         weight_qty_val,
                         weight_unit_val,
+                        str(item.get("Code") or "").upper() or None,
                     )
                     slot = grouped.get(key)
                     if slot is None:
                         grouped[key] = {
                             "item_name": item_name,
+                            "tax_code": str(item.get("Code") or "").upper() or None,
                             "budget_category": item.get("budget_category"),
                             "category_source": item.get("category_source"),
                             "unit_qty": float(item["unit_qty"]) if item.get("unit_qty") is not None else None,
@@ -1017,6 +1205,7 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
                         (
                             expense_pk,
                             merged["item_name"],
+                            merged["tax_code"],
                             merged["budget_category"],
                             merged["category_source"],
                             merged["unit_qty"],
@@ -1040,6 +1229,7 @@ def write_sobeys_to_postgres(receipt_rows: List[Dict], item_rows: List[Dict], ds
 def main() -> None:
     args = parse_args()
     input_path = Path(args.input_path).expanduser().resolve()
+    import_xlsx = Path(args.import_xlsx).expanduser().resolve() if args.import_xlsx else None
     out_xlsx = Path(args.out_xlsx).expanduser().resolve()
 
     try:
@@ -1052,89 +1242,103 @@ def main() -> None:
     except Exception as e:
         print(f"Warning: could not load categories from DB; using built-in categories. {type(e).__name__}: {e}", flush=True)
 
-    if not input_path.exists():
+    if import_xlsx is None and not input_path.exists():
         raise FileNotFoundError(f"Missing input path: {input_path}")
 
     AI_ENGINE.load_suggestions()
     started = time.perf_counter()
-    files = extract_inputs(input_path)
-    if not files:
-        raise RuntimeError(f"No receipt files found under: {input_path}")
-
     all_items: List[Dict] = []
     receipt_rows: List[Dict] = []
     notes: List[str] = []
+    if import_xlsx is not None:
+        if not import_xlsx.exists():
+            raise FileNotFoundError(f"Missing import workbook: {import_xlsx}")
+        all_items, receipt_rows = load_manual_xlsx(import_xlsx)
+        notes.append(f"Imported manual workbook: {import_xlsx}")
+    else:
+        files = extract_inputs(input_path)
+        if not files:
+            raise RuntimeError(f"No receipt files found under: {input_path}")
 
-    for file_path in files:
-        receipt_id = file_path.stem
-        text = document_text(file_path)
-        alt_text = document_text_alt(file_path)
-        items = parse_items(receipt_id, text, alt_text=alt_text)
-        subtotal, tax, total = parse_receipt_amounts(text)
-        filename_total = total_from_receipt_id(receipt_id)
-        if total is None and filename_total is not None:
-            total = filename_total
-        if not items and total is not None:
-            items = [
-                {
-                    "receipt_id": receipt_id,
-                    "line_no": 1,
-                    "item": "UNPARSED SOBEYS RECEIPT",
-                    "amount_cad": float(total),
-                    "budget_category": fallback_category(),
-                    "category_source": "ocr_fallback",
-                    "raw_line": "OCR fallback: no item lines detected; using receipt total.",
-                }
-            ]
-        elif not items:
-            fallback_total = filename_total if filename_total is not None else 0.0
-            items = [
-                {
-                    "receipt_id": receipt_id,
-                    "line_no": 1,
-                    "item": "UNPARSED SOBEYS RECEIPT",
-                    "amount_cad": fallback_total,
-                    "budget_category": fallback_category(),
-                    "category_source": "ocr_no_items_filename_total" if filename_total is not None else "ocr_no_items",
-                    "raw_line": (
-                        f"OCR fallback: no item lines; using filename total {filename_total:.2f}."
-                        if filename_total is not None
-                        else "OCR fallback: no item lines or total detected."
-                    ),
-                }
-            ]
-        elif total is not None:
-            parsed_sum = round(sum(float(i.get("amount_cad") or 0.0) for i in items), 2)
-            mismatch = round(float(total) - parsed_sum, 2)
-            if abs(mismatch) > max(2.0, float(total) * 0.20):
-                items.append(
+        for file_path in files:
+            receipt_id = file_path.stem
+            text = document_text(file_path)
+            alt_text = document_text_alt(file_path)
+            items = parse_items(receipt_id, text, alt_text=alt_text)
+            subtotal, tax, total = parse_receipt_amounts(text)
+            filename_total = total_from_receipt_id(receipt_id)
+            if total is None and filename_total is not None:
+                total = filename_total
+            if not items and total is not None:
+                items = [
                     {
                         "receipt_id": receipt_id,
-                        "line_no": 999999,
-                        "item": "UNPARSED SOBEYS RECEIPT REMAINDER",
-                        "amount_cad": mismatch,
+                        "line_no": 1,
+                        "item": "UNPARSED SOBEYS RECEIPT",
+                        "amount_cad": float(total),
+                        "Code": "",
+                        "GST": 0.0,
+                        "PST": 0.0,
                         "budget_category": fallback_category(),
-                        "category_source": "ocr_remainder",
+                        "category_source": "ocr_fallback",
+                        "raw_line": "OCR fallback: no item lines detected; using receipt total.",
+                    }
+                ]
+            elif not items:
+                fallback_total = filename_total if filename_total is not None else 0.0
+                items = [
+                    {
+                        "receipt_id": receipt_id,
+                        "line_no": 1,
+                        "item": "UNPARSED SOBEYS RECEIPT",
+                        "amount_cad": fallback_total,
+                        "Code": "",
+                        "GST": 0.0,
+                        "PST": 0.0,
+                        "budget_category": fallback_category(),
+                        "category_source": "ocr_no_items_filename_total" if filename_total is not None else "ocr_no_items",
                         "raw_line": (
-                            "OCR remainder fallback: parsed item sum does not reconcile to receipt total. "
-                            f"parsed_sum={parsed_sum:.2f}, total={float(total):.2f}"
+                            f"OCR fallback: no item lines; using filename total {filename_total:.2f}."
+                            if filename_total is not None
+                            else "OCR fallback: no item lines or total detected."
                         ),
                     }
-                )
-        all_items.extend(items)
+                ]
+            elif total is not None:
+                parsed_sum = round(sum(float(i.get("amount_cad") or 0.0) for i in items), 2)
+                mismatch = round(float(total) - parsed_sum, 2)
+                if abs(mismatch) > max(2.0, float(total) * 0.20):
+                    items.append(
+                        {
+                            "receipt_id": receipt_id,
+                            "line_no": 999999,
+                            "item": "UNPARSED SOBEYS RECEIPT REMAINDER",
+                            "amount_cad": mismatch,
+                            "Code": "",
+                            "GST": 0.0,
+                            "PST": 0.0,
+                            "budget_category": fallback_category(),
+                            "category_source": "ocr_remainder",
+                            "raw_line": (
+                                "OCR remainder fallback: parsed item sum does not reconcile to receipt total. "
+                                f"parsed_sum={parsed_sum:.2f}, total={float(total):.2f}"
+                            ),
+                        }
+                    )
+            all_items.extend(items)
 
-        receipt_rows.append(
-            {
-                "receipt_id": receipt_id,
-                "order_id": receipt_id,
-                "receipt_filename": file_path.name,
-                "subtotal_cad": subtotal,
-                "tax_cad": tax,
-                "total_cad": total,
-                "filename_total_cad": filename_total,
-                "parsed_item_count": len(items),
-            }
-        )
+            receipt_rows.append(
+                {
+                    "receipt_id": receipt_id,
+                    "order_id": receipt_id,
+                    "receipt_filename": file_path.name,
+                    "subtotal_cad": subtotal,
+                    "tax_cad": tax,
+                    "total_cad": total,
+                    "filename_total_cad": filename_total,
+                    "parsed_item_count": len(items),
+                }
+            )
 
     all_items.sort(key=lambda x: (x["receipt_id"], x["line_no"]))
     receipt_rows.sort(key=lambda x: x["receipt_id"])
