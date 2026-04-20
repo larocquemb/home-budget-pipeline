@@ -23,11 +23,14 @@ Default outputs:
 
 from __future__ import annotations
 
+import argparse
 import difflib
 import json
+import os
 import re
 import time
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
@@ -38,14 +41,17 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from budget_category_logic import CATEGORY_ORDER, DEFAULT_CATEGORY, deterministic_category
 from budget_category_ai import AICategoryEngine
 
-ZIP_PATH = Path('/Users/paul/Documents/Finance/Budget/2026/Groceries/Archive.zip')
-EXTRACT_DIR = Path('/Users/paul/Documents/Finance/Budget/2026/Groceries/costco_receipts_extracted_categorized')
-OUT_XLSX = Path('/Users/paul/Documents/Finance/Budget/2026/Groceries/costco_receipt_items_categorized.xlsx')
-AI_SUGGESTIONS_PATH = Path('/Users/paul/Documents/Finance/Budget/2026/Groceries/ai_category_cache.json')
+PROJECT_DIR = Path(__file__).resolve().parent
+ZIP_PATH = PROJECT_DIR / 'Archive.zip'
+EXTRACT_DIR = PROJECT_DIR / 'costco_receipts_extracted_categorized'
+OUT_XLSX = PROJECT_DIR / 'costco_receipt_items_categorized.xlsx'
+AI_SUGGESTIONS_PATH = PROJECT_DIR / 'ai_category_cache.json'
 
 AMOUNT_RE = re.compile(r'(\$?-?\d+\.\d{2}-?)\s*(?:[A-Z])?\s*$')
 DATE_NAME_RE = re.compile(r'^(\d{8}[a-z]?)\.pdf$', re.I)
 SKU_RE = re.compile(r'\b(\d{3,8})\b')
+LONG_NUM_RE = re.compile(r'\b(\d{20,30})\b')
+LONG_NUM_FUZZY_RE = re.compile(r'((?:\d[\s\-]*){20,36})')
 
 SKIP_PATTERNS = [
     r'\bSUBTOTAL\b',
@@ -279,8 +285,8 @@ def phrase_ngrams(tokens: List[str], n: int) -> List[str]:
 
 def try_exact_keyword_category(desc: str) -> Optional[str]:
     d = desc.lower()
-    for category in CATEGORY_ORDER:
-        for keyword in CATEGORY_KEYWORDS[category]:
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
             if keyword in d:
                 return category
     return None
@@ -297,10 +303,10 @@ def try_fuzzy_keyword_category(desc: str) -> Optional[str]:
     candidates.update(phrase_ngrams(tokens, 3))
     candidates.add(normalized)
 
-    best_per_category: Dict[str, float] = {c: 0.0 for c in CATEGORY_ORDER}
+    best_per_category: Dict[str, float] = {c: 0.0 for c in CATEGORY_KEYWORDS}
 
-    for category in CATEGORY_ORDER:
-        for keyword in CATEGORY_KEYWORDS[category]:
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
             kw = normalize_for_match(keyword)
             kw_tokens = kw.split()
             kw_prefixes = {t[:3] for t in kw_tokens if len(t) >= 3}
@@ -424,6 +430,72 @@ def parse_receipt_amounts(text: str) -> Tuple[Optional[float], Optional[float], 
     return subtotal, tax, total
 
 
+def parse_costco_order_id(text: str) -> Optional[str]:
+    if not text:
+        return None
+
+    def normalize_candidate_digits(raw_digits: str) -> Optional[str]:
+        digits = re.sub(r'\D', '', raw_digits or '')
+        if not digits:
+            return None
+        # Costco receipt order ids observed in this dataset are 23 digits starting with "22".
+        if len(digits) == 23 and digits.startswith('22'):
+            return digits
+        idx = digits.find('22')
+        if idx != -1 and len(digits) >= idx + 23:
+            cand = digits[idx:idx + 23]
+            if cand.startswith('22'):
+                return cand
+        if 20 <= len(digits) <= 30:
+            return digits
+        return None
+
+    lines = [normalize_line(ln) for ln in text.splitlines() if normalize_line(ln)]
+
+    # Strong signal: order id near barcode label.
+    for i, line in enumerate(lines):
+        if re.search(r'(?i)\bbarcode\b', line):
+            window = ' '.join(lines[i:i + 4])
+            for m in LONG_NUM_FUZZY_RE.finditer(window):
+                normalized = normalize_candidate_digits(m.group(1))
+                if normalized:
+                    return normalized
+
+    patterns = [
+        r'(?i)\border\s*(?:number|no\.?|#)?\b[^\d]{0,20}(\d{14,30})',
+        r'(?i)\bonline\s*order\b[^\d]{0,20}(\d{14,30})',
+        r'(?i)\border\s*id\b[^\d]{0,20}(\d{14,30})',
+    ]
+    for pat in patterns:
+        m = re.search(pat, text)
+        if m:
+            normalized = normalize_candidate_digits(m.group(1))
+            if normalized:
+                return normalized
+
+    # Fallback: very long numeric token (e.g., Costco online order id).
+    m2 = LONG_NUM_RE.search(text)
+    if m2:
+        normalized = normalize_candidate_digits(m2.group(1))
+        if normalized:
+            return normalized
+
+    # Last resort: long numeric token with spaces/hyphens (common in OCR/text extraction).
+    best: Optional[str] = None
+    for m3 in LONG_NUM_FUZZY_RE.finditer(text):
+        normalized = normalize_candidate_digits(m3.group(1))
+        if normalized:
+            if best is None:
+                best = normalized
+            elif len(normalized) > len(best):
+                best = normalized
+            elif normalized.startswith('22') and not best.startswith('22'):
+                best = normalized
+    if best:
+        return best
+    return None
+
+
 def likely_item_line(line: str) -> bool:
     if not line:
         return False
@@ -441,7 +513,11 @@ def classify_category_with_source(
     sku: Optional[str] = None,
     allow_ai: bool = True,
 ) -> Tuple[str, str]:
+    runtime_default = DEFAULT_CATEGORY if DEFAULT_CATEGORY in CATEGORY_ORDER else (CATEGORY_ORDER[0] if CATEGORY_ORDER else DEFAULT_CATEGORY)
     deterministic, source = deterministic_category(desc)
+    if deterministic not in CATEGORY_ORDER:
+        deterministic = runtime_default
+        source = 'default'
     if source == 'verified_cache':
         APP_STATS['verified_hits'] += 1
     if source != 'default':
@@ -654,7 +730,7 @@ def add_items_sheet(wb: Workbook, item_rows: List[Dict]) -> None:
 
 def add_receipts_sheet(wb: Workbook, receipt_rows: List[Dict]) -> None:
     ws = wb.create_sheet('Receipts')
-    headers = ['receipt_id', 'subtotal_cad', 'tax_cad', 'total_cad', 'parsed_item_count']
+    headers = ['receipt_id', 'order_id', 'subtotal_cad', 'tax_cad', 'total_cad', 'parsed_item_count']
     ws.append(headers)
     for row in receipt_rows:
         ws.append([row[h] for h in headers])
@@ -664,7 +740,9 @@ def add_receipts_sheet(wb: Workbook, receipt_rows: List[Dict]) -> None:
 
 def add_category_summary_sheet(wb: Workbook, item_rows: List[Dict]) -> None:
     ws = wb.create_sheet('Receipt Category Totals')
-    categories = ['Groceries', 'Medical Products', 'Health & Fitness', 'Clothing', 'Indoor Supplies', 'Outdoor Supplies']
+    categories = list(CATEGORY_ORDER)
+    if not categories:
+        categories = [DEFAULT_CATEGORY]
     headers = ['receipt_id'] + categories + ['Total']
     ws.append(headers)
 
@@ -697,7 +775,249 @@ def add_notes_sheet(wb: Workbook, notes: List[str]) -> None:
     autosize(ws)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Extract Costco receipt data and optionally write canonical DB records.')
+    parser.add_argument('--zip-path', default=str(ZIP_PATH), help='Input ZIP path containing Costco receipt PDFs.')
+    parser.add_argument('--extract-dir', default=str(EXTRACT_DIR), help='Directory to extract PDFs to.')
+    parser.add_argument('--out-xlsx', default=str(OUT_XLSX), help='Output Excel workbook path.')
+    parser.add_argument('--write-db', action='store_true', help='Write parsed canonical expense records into Postgres.')
+    parser.add_argument(
+        '--db-dsn',
+        default=os.environ.get('HOME_BUDGET_PG_DSN', ''),
+        help=(
+            'Postgres DSN for --write-db. Do not include password here. '
+            'Use ~/.pgpass or PGPASSWORD/HOME_BUDGET_PGPASSWORD env vars. '
+            'Default: env HOME_BUDGET_PG_DSN or dbname=home_budget.'
+        ),
+    )
+    parser.add_argument('--db-schema', default='budget', help='Target schema for --write-db (default: budget).')
+    return parser.parse_args()
+
+
+def _require_valid_schema_name(schema: str) -> str:
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', schema or ''):
+        raise ValueError(f'Invalid --db-schema value: {schema!r}')
+    return schema
+
+
+def _dsn_contains_password(dsn: str) -> bool:
+    if not dsn:
+        return False
+    key_value_password = re.search(r'(^|\s)password\s*=', dsn, re.IGNORECASE)
+    uri_password = re.search(r'://[^/\s:@]+:[^@\s/]*@', dsn)
+    return bool(key_value_password or uri_password)
+
+
+def _resolve_postgres_dsn(raw_dsn: str) -> str:
+    dsn = (raw_dsn or '').strip()
+    if _dsn_contains_password(dsn):
+        raise ValueError(
+            'Unsafe --db-dsn: inline password detected. '
+            'Use ~/.pgpass (recommended) or PGPASSWORD/HOME_BUDGET_PGPASSWORD env vars.'
+        )
+    return dsn or 'dbname=home_budget'
+
+
+def _connect_postgres(dsn: str):
+    dsn = _resolve_postgres_dsn(dsn)
+    hb_pg_password = os.environ.get('HOME_BUDGET_PGPASSWORD', '').strip()
+    if hb_pg_password and not os.environ.get('PGPASSWORD'):
+        os.environ['PGPASSWORD'] = hb_pg_password
+    try:
+        import psycopg  # type: ignore
+
+        return psycopg.connect(dsn)
+    except Exception:
+        try:
+            import psycopg2  # type: ignore
+
+            return psycopg2.connect(dsn)
+        except Exception as e:
+            raise RuntimeError(
+                'Could not connect to Postgres. Install psycopg (or psycopg2-binary) and verify --db-dsn. '
+                'For auth, prefer ~/.pgpass or libpq env vars.'
+            ) from e
+
+
+def load_expense_categories_from_postgres(dsn: str, schema: str) -> List[str]:
+    schema = _require_valid_schema_name(schema)
+    conn = _connect_postgres(dsn)
+    sql = f"""
+        SELECT category_name
+        FROM {schema}.expense_categories
+        WHERE is_active
+        ORDER BY id
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+        return [str(r[0]).strip() for r in rows if r and str(r[0]).strip()]
+    finally:
+        conn.close()
+
+
+def _receipt_date_from_id(receipt_id: str) -> Optional[datetime.date]:
+    m = DATE_NAME_RE.match(f'{receipt_id}.pdf')
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1)[:8], '%Y%m%d').date()
+    except ValueError:
+        return None
+
+
+def write_costco_to_postgres(
+    receipt_rows: List[Dict],
+    all_items: List[Dict],
+    dsn: str,
+    schema: str,
+) -> Tuple[int, int]:
+    schema = _require_valid_schema_name(schema)
+    conn = _connect_postgres(dsn)
+    written_expenses = 0
+    written_items = 0
+
+    items_by_receipt: Dict[str, List[Dict]] = {}
+    for item in all_items:
+        items_by_receipt.setdefault(item['receipt_id'], []).append(item)
+
+    expense_sql = f"""
+        INSERT INTO {schema}.expenses (
+            source, order_id, receipt_filename, order_date, store_name, order_url,
+            receipt_item_subtotal, receipt_total_charged, expense_total, raw_payload
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s::jsonb
+        )
+        ON CONFLICT (source, order_id)
+        DO UPDATE SET
+            receipt_filename = EXCLUDED.receipt_filename,
+            order_date = EXCLUDED.order_date,
+            store_name = EXCLUDED.store_name,
+            order_url = EXCLUDED.order_url,
+            receipt_item_subtotal = EXCLUDED.receipt_item_subtotal,
+            receipt_total_charged = EXCLUDED.receipt_total_charged,
+            expense_total = EXCLUDED.expense_total,
+            raw_payload = EXCLUDED.raw_payload
+        RETURNING id
+    """
+    delete_items_sql = f'DELETE FROM {schema}.expense_items WHERE expense_pk = %s'
+    item_sql = f"""
+        INSERT INTO {schema}.expense_items (
+            expense_pk, item_name, budget_category, category_source,
+            unit_qty, unit_cost, line_total
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+
+    try:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            for receipt in receipt_rows:
+                receipt_id = receipt['receipt_id']
+                order_id = str(receipt.get('order_id') or receipt_id)
+                receipt_items = items_by_receipt.get(receipt_id, [])
+                subtotal = receipt.get('subtotal_cad')
+                total = receipt.get('total_cad')
+                if total is None and subtotal is not None and receipt.get('tax_cad') is not None:
+                    total = round(float(subtotal) + float(receipt['tax_cad']), 2)
+                payload = {
+                    'receipt': receipt,
+                    'items': receipt_items,
+                }
+                cur.execute(
+                    expense_sql,
+                    (
+                        'costco',
+                        order_id,
+                        f'{receipt_id}.pdf',
+                        _receipt_date_from_id(receipt_id),
+                        'Costco',
+                        None,
+                        subtotal,
+                        total,
+                        total,
+                        json.dumps(payload, ensure_ascii=True),
+                    ),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    continue
+                expense_pk = int(row[0])
+                written_expenses += 1
+
+                cur.execute(delete_items_sql, (expense_pk,))
+                # Collapse exact duplicate lines within one receipt into a single canonical row.
+                # This avoids unique-index collisions and preserves spend by summing qty/line total.
+                grouped_items: Dict[Tuple[str, Optional[str], Optional[str], Optional[float]], Dict[str, Optional[float]]] = {}
+                for item in receipt_items:
+                    raw_name = str(item.get('item') or '').strip()
+                    item_name = re.sub(r'\s+', ' ', raw_name)
+                    unit_cost = item.get('amount_cad')
+                    try:
+                        unit_cost_val = float(unit_cost) if unit_cost is not None else None
+                    except Exception:
+                        unit_cost_val = None
+                    key = (
+                        item_name.lower(),
+                        item.get('budget_category'),
+                        item.get('category_source'),
+                        unit_cost_val,
+                    )
+                    slot = grouped_items.get(key)
+                    if slot is None:
+                        grouped_items[key] = {
+                            'item_name': item_name,
+                            'budget_category': item.get('budget_category'),
+                            'category_source': item.get('category_source'),
+                            'unit_qty': 1.0,
+                            'unit_cost': unit_cost_val,
+                            'line_total': unit_cost_val,
+                        }
+                    else:
+                        slot['unit_qty'] = float(slot.get('unit_qty') or 0.0) + 1.0
+                        if unit_cost_val is not None:
+                            slot['line_total'] = float(slot.get('line_total') or 0.0) + unit_cost_val
+
+                for merged in grouped_items.values():
+                    cur.execute(
+                        item_sql,
+                        (
+                            expense_pk,
+                            merged['item_name'],
+                            merged['budget_category'],
+                            merged['category_source'],
+                            merged['unit_qty'],
+                            merged['unit_cost'],
+                            merged['line_total'],
+                        ),
+                    )
+                    written_items += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return written_expenses, written_items
+
+
 def main() -> None:
+    args = parse_args()
+    zip_path = Path(args.zip_path).expanduser().resolve()
+    extract_dir = Path(args.extract_dir).expanduser().resolve()
+    out_xlsx = Path(args.out_xlsx).expanduser().resolve()
+
+    try:
+        db_categories = load_expense_categories_from_postgres(args.db_dsn, args.db_schema)
+        if db_categories:
+            CATEGORY_ORDER[:] = db_categories
+            print(f'Loaded categories from {args.db_schema}.expense_categories: {len(db_categories)} active', flush=True)
+        else:
+            print('Warning: no active rows in expense_categories; using built-in categories.', flush=True)
+    except Exception as e:
+        print(f'Warning: could not load categories from DB; using built-in categories. {type(e).__name__}: {e}', flush=True)
+
     run_started = time.perf_counter()
     extract_seconds = 0.0
     pdf_read_seconds = 0.0
@@ -705,12 +1025,12 @@ def main() -> None:
     xlsx_write_seconds = 0.0
     suggestions_save_seconds = 0.0
 
-    if not ZIP_PATH.exists():
-        raise FileNotFoundError(f'Missing input zip: {ZIP_PATH}')
+    if not zip_path.exists():
+        raise FileNotFoundError(f'Missing input zip: {zip_path}')
 
     AI_ENGINE.load_suggestions()
     extract_started = time.perf_counter()
-    pdfs = extract_zip(ZIP_PATH, EXTRACT_DIR)
+    pdfs = extract_zip(zip_path, extract_dir)
     extract_seconds = time.perf_counter() - extract_started
 
     all_items: List[Dict] = []
@@ -744,6 +1064,7 @@ def main() -> None:
         parse_started = time.perf_counter()
         items = parse_receipt_items(stem, text)
         subtotal, tax, total = parse_receipt_amounts(text)
+        parsed_order_id = parse_costco_order_id(text) or stem
         parse_seconds += time.perf_counter() - parse_started
 
         all_items.extend(items)
@@ -751,6 +1072,7 @@ def main() -> None:
         item_sum = round(sum(r['amount_cad'] for r in items), 2)
         receipt_rows.append({
             'receipt_id': stem,
+            'order_id': parsed_order_id,
             'subtotal_cad': subtotal,
             'tax_cad': tax,
             'total_cad': total,
@@ -815,7 +1137,7 @@ def main() -> None:
     add_category_summary_sheet(wb, all_items)
     add_notes_sheet(wb, notes)
     xlsx_started = time.perf_counter()
-    wb.save(OUT_XLSX)
+    wb.save(out_xlsx)
     xlsx_write_seconds = time.perf_counter() - xlsx_started
     suggestions_started = time.perf_counter()
     AI_ENGINE.save_suggestions()
@@ -829,7 +1151,18 @@ def main() -> None:
         f'suggestions_save={suggestions_save_seconds:.2f}s'
     )
 
-    print(f'Wrote workbook: {OUT_XLSX}')
+    if args.write_db:
+        written_expenses, written_items = write_costco_to_postgres(
+            receipt_rows=receipt_rows,
+            all_items=all_items,
+            dsn=args.db_dsn,
+            schema=args.db_schema,
+        )
+        print(
+            f'Wrote Postgres: schema={args.db_schema}, expenses={written_expenses}, expense_items={written_items}'
+        )
+
+    print(f'Wrote workbook: {out_xlsx}')
 
 
 if __name__ == '__main__':

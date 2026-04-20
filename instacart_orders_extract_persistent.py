@@ -2464,13 +2464,13 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
 
     order_sql = f"""
         INSERT INTO {schema}.expenses (
-            source, order_id, order_date, store_name, order_url,
+            source, order_id, receipt_filename, order_date, store_name, order_url,
             receipt_item_subtotal, receipt_discount_total, receipt_tip,
             receipt_service_fee, receipt_recycling_fee, receipt_service_fee_tax,
             receipt_gst, receipt_pst, receipt_total_charged,
             expense_total, raw_page_title, raw_payload
         ) VALUES (
-            %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s,
             %s, %s, %s,
             %s, %s, %s,
             %s, %s, %s,
@@ -2478,6 +2478,7 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
         )
         ON CONFLICT (source, order_id)
         DO UPDATE SET
+            receipt_filename = EXCLUDED.receipt_filename,
             order_date = EXCLUDED.order_date,
             store_name = EXCLUDED.store_name,
             order_url = EXCLUDED.order_url,
@@ -2519,24 +2520,30 @@ def write_orders_to_postgres(orders: List[OrderRecord], dsn: str, schema: str) -
                             break
                         except ValueError:
                             continue
+                subtotal_value = parse_money_value(order.receipt_item_subtotal)
+                gst_value = parse_money_value(order.receipt_gst)
+                pst_value = parse_money_value(order.receipt_pst)
+                service_fee_tax_value = parse_money_value(order.receipt_service_fee_tax)
+                total_charged_value = parse_money_value(order.receipt_total_charged) or parse_money_value(order.order_total)
 
                 cur.execute(
                     order_sql,
                     (
                         "instacart",
                         order.order_id,
+                        None,
                         order_date_value,
                         order.store_name,
                         order.order_url,
-                        parse_money_value(order.receipt_item_subtotal),
+                        subtotal_value,
                         parse_money_value(order.receipt_discount_total),
                         parse_money_value(order.receipt_tip),
                         parse_money_value(order.receipt_service_fee),
                         parse_money_value(order.receipt_recycling_fee),
-                        parse_money_value(order.receipt_service_fee_tax),
-                        parse_money_value(order.receipt_gst),
-                        parse_money_value(order.receipt_pst),
-                        parse_money_value(order.receipt_total_charged),
+                        service_fee_tax_value,
+                        gst_value,
+                        pst_value,
+                        total_charged_value,
                         parse_money_value(order.order_total),
                         order.raw_page_title,
                         json.dumps(asdict(order), ensure_ascii=True),

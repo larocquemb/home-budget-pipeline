@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS budget.expenses (
     id BIGSERIAL PRIMARY KEY,
     source TEXT NOT NULL CHECK (source IN ('instacart', 'costco', 'sobeys')),
     order_id TEXT NOT NULL,
+    receipt_filename TEXT,
     order_date DATE,
     store_name TEXT,
     order_url TEXT,
@@ -36,6 +37,12 @@ CREATE TABLE IF NOT EXISTS budget.expenses (
     -- Natural key to support idempotent upsert by source + retailer expense id
     CONSTRAINT uq_expenses_source_order_id UNIQUE (source, order_id)
 );
+
+ALTER TABLE budget.expenses
+    ADD COLUMN IF NOT EXISTS receipt_filename TEXT;
+
+ALTER TABLE budget.expenses
+    DROP COLUMN IF EXISTS costco_order_id;
 
 CREATE TABLE IF NOT EXISTS budget.expense_items (
     id BIGSERIAL PRIMARY KEY,
@@ -112,36 +119,8 @@ BEFORE UPDATE ON budget.expense_items
 FOR EACH ROW
 EXECUTE FUNCTION budget.set_updated_at();
 
-CREATE TABLE IF NOT EXISTS budget.receipts (
-    id BIGSERIAL PRIMARY KEY,
-    source TEXT,
-    receipt_id TEXT,
-    receipt_date DATE,
-    merchant_name TEXT,
-    description TEXT,
-    subtotal NUMERIC(12, 2),
-    tax_total NUMERIC(12, 2),
-    total_charged NUMERIC(12, 2) NOT NULL,
-    currency_code TEXT NOT NULL DEFAULT 'CAD',
-    raw_payload JSONB,
-
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT uq_receipts_source_receipt_id UNIQUE (source, receipt_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_receipts_date
-    ON budget.receipts (receipt_date DESC);
-
-CREATE INDEX IF NOT EXISTS idx_receipts_merchant_date
-    ON budget.receipts (merchant_name, receipt_date DESC);
-
-DROP TRIGGER IF EXISTS trg_receipts_set_updated_at ON budget.receipts;
-CREATE TRIGGER trg_receipts_set_updated_at
-BEFORE UPDATE ON budget.receipts
-FOR EACH ROW
-EXECUTE FUNCTION budget.set_updated_at();
+-- Keep a single canonical model: expenses + expense_items.
+DROP TABLE IF EXISTS budget.receipts;
 
 CREATE TABLE IF NOT EXISTS budget.expense_categories (
     id BIGSERIAL PRIMARY KEY,
