@@ -1276,11 +1276,20 @@ def is_summary_item_name(name: str) -> bool:
 
 def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngine] = None) -> List[OrderItem]:
     grouped: Dict[str, OrderItem] = {}
+    artifact_keys: Set[str] = set()
 
     for item in items:
         name = re.sub(r"\s+", " ", item.name).strip()
         if is_summary_item_name(name):
             continue
+
+        # Instacart sometimes exposes a second copy of each item whose text is
+        # prefixed by a stray DOM marker, e.g. "MLarge Eggs".  Treat that copy
+        # as the same product.  The marker is only stripped before an uppercase
+        # letter/digit so legitimate names such as "McCain" remain unchanged.
+        has_artifact_prefix = bool(re.match(r"^M(?=[A-Z0-9])", name))
+        if has_artifact_prefix:
+            name = name[1:]
 
         quantity_locked = bool(getattr(item, "quantity_locked", False))
         qty_txt = normalize_quantity(item.quantity)
@@ -1326,6 +1335,8 @@ def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngi
                 total = expected
 
         key = normalize_for_match(name)
+        if has_artifact_prefix:
+            artifact_keys.add(key)
         candidate = OrderItem(
             name=name,
             quantity=str(qty) if qty is not None else None,
@@ -1341,6 +1352,17 @@ def clean_order_items(items: List[OrderItem], ai_engine: Optional[AICategoryEngi
         existing = grouped.get(key)
         if existing is None:
             grouped[key] = candidate
+            continue
+
+        # The receipt records promotions separately, so its item subtotal uses
+        # the higher/original value when the duplicate DOM cards show both an
+        # original and discounted price.  Keeping the higher artifact variant
+        # makes the cleaned item lines reconcile to receipt_item_subtotal.
+        if key in artifact_keys:
+            existing_total = parse_money_value(existing.total_price)
+            candidate_total = parse_money_value(candidate.total_price)
+            if candidate_total is not None and (existing_total is None or candidate_total > existing_total):
+                grouped[key] = candidate
             continue
 
         existing_qty = int(existing.quantity) if existing.quantity else 0
@@ -2605,6 +2627,47 @@ def save_outputs(orders: List[OrderRecord], out_json: Path, out_csv: Path, out_x
         ws_items.cell(row=row_idx, column=8).number_format = "$#,##0.00"
         ws_items.cell(row=row_idx, column=9).number_format = "$#,##0.00"
         ws_items.cell(row=row_idx, column=10).number_format = "$#,##0.00"
+
+    ws_categories = wb.create_sheet("Category Totals")
+    ws_categories.append(
+        ["order_id", "budget_category", "item_total", "receipt_adjustment", "adjusted_total"]
+    )
+    for order in orders:
+        category_totals: Dict[str, Decimal] = {}
+        for item in order.items:
+            amount = to_money_decimal(parse_money_value(item.total_price), default_zero=True) or Decimal("0.00")
+            category = item.budget_category or DEFAULT_CATEGORY
+            category_totals[category] = category_totals.get(category, Decimal("0.00")) + amount
+
+        item_total = sum(category_totals.values(), Decimal("0.00"))
+        charged_total = to_money_decimal(
+            parse_money_value(order.receipt_total_charged) or parse_money_value(order.order_total)
+        )
+        adjusted: Dict[str, Decimal] = {}
+        if category_totals and charged_total is not None and item_total:
+            for category, amount in category_totals.items():
+                adjusted[category] = (amount * charged_total / item_total).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+            residual = charged_total - sum(adjusted.values(), Decimal("0.00"))
+            largest_category = max(category_totals, key=category_totals.get)
+            adjusted[largest_category] += residual
+        else:
+            adjusted = dict(category_totals)
+
+        for category in sorted(category_totals):
+            raw_amount = category_totals[category].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            adjusted_amount = adjusted[category].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            ws_categories.append(
+                [order.order_id, category, float(raw_amount), float(adjusted_amount - raw_amount), float(adjusted_amount)]
+            )
+    autosize_sheet(ws_categories)
+    ws_categories.auto_filter.ref = f"A1:E{max(1, ws_categories.max_row)}"
+    if last_order_id:
+        ws_categories.auto_filter.add_filter_column(0, [str(last_order_id)])
+    for row_idx in range(2, ws_categories.max_row + 1):
+        for column in range(3, 6):
+            ws_categories.cell(row=row_idx, column=column).number_format = "$#,##0.00"
     wb.save(out_xlsx)
 
 
