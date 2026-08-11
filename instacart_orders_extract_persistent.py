@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openpyxl import Workbook
+from openpyxl.styles import Font
 from playwright.sync_api import BrowserContext, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 from budget_category_ai import AICategoryEngine
 from budget_category_logic import (
@@ -2668,6 +2669,94 @@ def save_outputs(orders: List[OrderRecord], out_json: Path, out_csv: Path, out_x
     for row_idx in range(2, ws_categories.max_row + 1):
         for column in range(3, 6):
             ws_categories.cell(row=row_idx, column=column).number_format = "$#,##0.00"
+
+    # Item-level report for importing categorized receipt amounts.  Receipt
+    # adjustments are allocated proportionally to items, with the rounding
+    # remainder placed on the largest item so each receipt totals exactly to
+    # the amount charged.
+    requested_categories = [
+        "Groceries",
+        "Health & Fitness",
+        "Indoor Supplies",
+        "Outdoor Supplies",
+    ]
+    present_categories = {
+        item.budget_category or DEFAULT_CATEGORY
+        for order in orders
+        for item in order.items
+    }
+    report_categories = requested_categories + sorted(present_categories - set(requested_categories))
+
+    def category_column_name(category: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "_", category.lower()).strip("_")
+        return f"{slug}_tot"
+
+    ws_report = wb.create_sheet("Receipt Category Report")
+    report_headers = ["receipt_id", "date", "item", "qty", "amount"] + [
+        category_column_name(category) for category in report_categories
+    ]
+    ws_report.append(report_headers)
+
+    subtotal_rows: List[int] = []
+    for order in orders:
+        raw_amounts = [
+            to_money_decimal(parse_money_value(item.total_price), default_zero=True) or Decimal("0.00")
+            for item in order.items
+        ]
+        raw_total = sum(raw_amounts, Decimal("0.00"))
+        charged_total = to_money_decimal(
+            parse_money_value(order.receipt_total_charged) or parse_money_value(order.order_total)
+        )
+        if charged_total is not None and raw_total:
+            report_amounts = [
+                (amount * charged_total / raw_total).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                for amount in raw_amounts
+            ]
+            residual = charged_total - sum(report_amounts, Decimal("0.00"))
+            if report_amounts:
+                largest_idx = max(range(len(raw_amounts)), key=raw_amounts.__getitem__)
+                report_amounts[largest_idx] += residual
+        else:
+            report_amounts = raw_amounts
+
+        category_sums = {category: Decimal("0.00") for category in report_categories}
+        for item, amount in zip(order.items, report_amounts):
+            category = item.budget_category or DEFAULT_CATEGORY
+            category_sums[category] += amount
+            category_values = [float(amount) if column_category == category else None for column_category in report_categories]
+            ws_report.append(
+                [
+                    order.order_id,
+                    order.order_date,
+                    item.name,
+                    derive_unit_qty(item) or derive_weight_qty(item),
+                    float(amount),
+                    *category_values,
+                ]
+            )
+
+        ws_report.append(
+            [
+                order.order_id,
+                order.order_date,
+                "RECEIPT SUBTOTAL",
+                None,
+                float(sum(report_amounts, Decimal("0.00"))),
+                *[float(category_sums[category]) for category in report_categories],
+            ]
+        )
+        subtotal_rows.append(ws_report.max_row)
+
+    autosize_sheet(ws_report)
+    ws_report.freeze_panes = "A2"
+    ws_report.auto_filter.ref = f"A1:{ws_report.cell(row=1, column=len(report_headers)).column_letter}{max(1, ws_report.max_row)}"
+    for row_idx in range(2, ws_report.max_row + 1):
+        ws_report.cell(row=row_idx, column=5).number_format = "$#,##0.00"
+        for column in range(6, len(report_headers) + 1):
+            ws_report.cell(row=row_idx, column=column).number_format = "$#,##0.00"
+    for row_idx in subtotal_rows:
+        for cell in ws_report[row_idx]:
+            cell.font = Font(bold=True)
     wb.save(out_xlsx)
 
 

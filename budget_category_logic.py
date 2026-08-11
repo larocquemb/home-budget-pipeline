@@ -102,7 +102,8 @@ CATEGORY_KEYWORDS = {
         'dish soap', 'dishwasher', 'soap', 'cleaner', 'cleaning', 'garbage bag', 'garbage bags',
         'kitchen bag', 'ziplock', 'foil', 'plastic wrap', 'parchment', 'sponge', 'sponges',
         'batteries', 'battery', 'light bulb', 'lightbulb', 'bulb', 'bulbs', 'kleenex',
-        'wipes', 'sanitizer', 'disinfect', 'trash bag', 'trash bags', 'plate', 'plates', 'bounty'
+        'wipes', 'sanitizer', 'disinfect', 'trash bag', 'trash bags', 'plate', 'plates', 'bounty',
+        'swiffer'
     ],
     'Outdoor Supplies': [
         'soil', 'mulch', 'garden', 'planter', 'hose', 'bbq', 'propane', 'charcoal', 'patio',
@@ -141,16 +142,21 @@ VERIFIED_CATEGORY_OVERRIDES = {
     'asiancashw2p': 'Groceries',
     'avocados': 'Groceries',
     'b s breasts': 'Groceries',
+    'bausch lomb renu fresh twin pack multi purpose contact lens solution': 'Medical Products',
     'bick s dills': 'Groceries',
+    'boiron arnicare gel': 'Medical Products',
     'boursin': 'Groceries',
     'brioche bun': 'Groceries',
     'broccoli': 'Groceries',
+    'built cookies n cream peanut butter cup puff protein bars': 'Health & Fitness',
     'built sour': 'Groceries',
     'canned chckn': 'Groceries',
     'carrot 510g': 'Groceries',
     'cauliflower': 'Groceries',
     'cdn lt rye': 'Groceries',
     'cedar valley': 'Groceries',
+    'cerave moisturizing cream': 'Indoor Supplies',
+    'cetaphil sensitive gentle skin cleanser': 'Indoor Supplies',
     'chk bites': 'Groceries',
     'chkn pot pie': 'Groceries',
     'chow mein': 'Groceries',
@@ -158,7 +164,13 @@ VERIFIED_CATEGORY_OVERRIDES = {
     'connie ckn b': 'Groceries',
     'crmydillpckl': 'Groceries',
     'croutons': 'Groceries',
+    'dawn platinum powerwash dish spray with refills': 'Indoor Supplies',
+    'delon 100 cotton premium cosmetic rounds': 'Indoor Supplies',
     'drive thru': 'Indoor Supplies',
+    'downy april fresh ultra liquid fabric conditioner': 'Indoor Supplies',
+    'dove daily moisture hydration conditioner': 'Indoor Supplies',
+    'dove daily moisture shampoo': 'Indoor Supplies',
+    'feit electric led string lights': 'Outdoor Supplies',
     'gf ckn flngs': 'Groceries',
     'gogo squeez': 'Groceries',
     'green grapes': 'Groceries',
@@ -166,7 +178,10 @@ VERIFIED_CATEGORY_OVERRIDES = {
     'green kiwi': 'Groceries',
     'ground ckn': 'Groceries',
     'haddock': 'Groceries',
+    'harvest brown n serve bread sticks': 'Groceries',
+    'hero mighty patch original invisible patch pack': 'Medical Products',
     'hv ranch': 'Groceries',
+    'imodium quick dissolve diarrhea relief loperamide hydrochloride tablets': 'Medical Products',
     'kinder ghssl': 'Groceries',
     'kodiak cakes': 'Groceries',
     'ks adult gum': 'Health & Fitness',
@@ -176,6 +191,8 @@ VERIFIED_CATEGORY_OVERRIDES = {
     'ks drawstrng': 'Clothing',
     'ks full zip': 'Clothing',
     'ks grk ygrt': 'Groceries',
+    'kirkland signature daily facial towelettes': 'Indoor Supplies',
+    'kirkland signature organic chia seeds': 'Groceries',
     'lac free 2': 'Groceries',
     'love corn': 'Groceries',
     'med ch slice': 'Groceries',
@@ -187,12 +204,15 @@ VERIFIED_CATEGORY_OVERRIDES = {
     'oroweat tort': 'Groceries',
     'philly choc': 'Groceries',
     'quepasa lime': 'Groceries',
+    'quaker harvest crunch original granola cereal': 'Groceries',
     'quiche vty': 'Groceries',
     'remedy': 'Medical Products',
     'romaine': 'Groceries',
+    'scott original shop towels': 'Outdoor Supplies',
     'slcd bck bcn': 'Groceries',
     'sliced mango': 'Groceries',
     'smkd gouda': 'Groceries',
+    'snowcrest foods organic sliced strawberries': 'Groceries',
     'spn feta ssg': 'Groceries',
     'stuff pepper': 'Groceries',
     'sunions': 'Groceries',
@@ -200,14 +220,17 @@ VERIFIED_CATEGORY_OVERRIDES = {
     'sweet pepper': 'Groceries',
     'sweetkaleduo': 'Groceries',
     'terra dates': 'Groceries',
+    'tide high efficiency turbo powder laundry detergent with acti life': 'Indoor Supplies',
     'tonkotsu ram': 'Groceries',
     'tropicana og': 'Groceries',
     'twigz pickle': 'Groceries',
     'unsalted btr': 'Groceries',
+    'vaseline dry skin repair body lotion': 'Indoor Supplies',
     'vaseline dsr': 'Medical Products',
     'vector jumbo': 'Groceries',
     'hrvst crunch': 'Groceries',
     'wahl cordless pro home barber kit 1 each': 'Indoor Supplies',
+    'x lite corporation utility lighters': 'Outdoor Supplies',
 }
 
 
@@ -365,17 +388,21 @@ def deterministic_category(
     merchant: Optional[str] = None,
 ) -> Tuple[str, str]:
     d = desc.lower()
+
+    # Explicit user-accepted classifications take precedence over broad
+    # keyword rules.  For example, "Snowcrest" contains "crest" but is food,
+    # not a Crest household/personal-care product.
+    cache_key = normalize_for_match(desc)
+    cached_category = VERIFIED_CATEGORY_OVERRIDES.get(cache_key)
+    if cached_category in CATEGORY_ORDER:
+        return cached_category, 'verified_cache'
+
     if 'protein bar' in d or 'protein bars' in d:
         return 'Groceries', 'exact'
     if 'enviro fee' in d:
         return 'Groceries', 'exact'
     if 'crest' in d:
         return 'Indoor Supplies', 'exact'
-
-    cache_key = normalize_for_match(desc)
-    cached_category = VERIFIED_CATEGORY_OVERRIDES.get(cache_key)
-    if cached_category in CATEGORY_ORDER:
-        return cached_category, 'verified_cache'
 
     mapped = match_runtime_category_rule(desc, source=source, merchant=merchant)
     if mapped in CATEGORY_ORDER:
