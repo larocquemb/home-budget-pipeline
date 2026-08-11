@@ -5,7 +5,7 @@ WITH items AS (
         e.order_date AS date,
         i.id AS item_pk,
         i.item_name AS item,
-        COALESCE(i.unit_qty, i.weight_qty) AS qty,
+        COALESCE(i.unit_qty, i.weight_qty, 0) AS qty,
         i.budget_category,
         i.line_total,
         COALESCE(e.receipt_total_charged, e.expense_total) AS receipt_total,
@@ -45,19 +45,19 @@ report AS (
         qty,
         amount,
         CASE WHEN budget_category = 'Groceries'
-             THEN amount END AS grocery_tot,
+             THEN amount ELSE 0 END AS grocery,
         CASE WHEN budget_category = 'Health & Fitness'
-             THEN amount END AS health_fitness_tot,
+             THEN amount ELSE 0 END AS health,
         CASE WHEN budget_category = 'Indoor Supplies'
-             THEN amount END AS indoor_supplies_tot,
+             THEN amount ELSE 0 END AS indoor,
         CASE WHEN budget_category = 'Outdoor Supplies'
-             THEN amount END AS outdoor_supplies_tot,
+             THEN amount ELSE 0 END AS outdoor,
         CASE WHEN budget_category = 'Cash/Unknown'
-             THEN amount END AS cash_unknown_tot,
+             THEN amount ELSE 0 END AS cash,
         CASE WHEN budget_category = 'Clothing'
-             THEN amount END AS clothing_tot,
+             THEN amount ELSE 0 END AS clothing,
         CASE WHEN budget_category = 'Medical Products'
-             THEN amount END AS medical_products_tot
+             THEN amount ELSE 0 END AS medical
     FROM final_amounts
 
     UNION ALL
@@ -69,15 +69,15 @@ report AS (
         receipt_id,
         MAX(date),
         'RECEIPT SUBTOTAL',
-        NULL,
+        0,
         SUM(amount),
-        SUM(amount) FILTER (WHERE budget_category = 'Groceries'),
-        SUM(amount) FILTER (WHERE budget_category = 'Health & Fitness'),
-        SUM(amount) FILTER (WHERE budget_category = 'Indoor Supplies'),
-        SUM(amount) FILTER (WHERE budget_category = 'Outdoor Supplies'),
-        SUM(amount) FILTER (WHERE budget_category = 'Cash/Unknown'),
-        SUM(amount) FILTER (WHERE budget_category = 'Clothing'),
-        SUM(amount) FILTER (WHERE budget_category = 'Medical Products')
+        COALESCE(SUM(amount) FILTER (WHERE budget_category = 'Groceries'), 0),
+        COALESCE(SUM(amount) FILTER (WHERE budget_category = 'Health & Fitness'), 0),
+        COALESCE(SUM(amount) FILTER (WHERE budget_category = 'Indoor Supplies'), 0),
+        COALESCE(SUM(amount) FILTER (WHERE budget_category = 'Outdoor Supplies'), 0),
+        COALESCE(SUM(amount) FILTER (WHERE budget_category = 'Cash/Unknown'), 0),
+        COALESCE(SUM(amount) FILTER (WHERE budget_category = 'Clothing'), 0),
+        COALESCE(SUM(amount) FILTER (WHERE budget_category = 'Medical Products'), 0)
     FROM final_amounts
     GROUP BY receipt_pk, receipt_id
 )
@@ -87,12 +87,12 @@ SELECT
     item,
     qty,
     amount,
-    grocery_tot,
-    health_fitness_tot,
-    indoor_supplies_tot,
-    outdoor_supplies_tot,
-    cash_unknown_tot,
-    clothing_tot,
-    medical_products_tot
+    grocery,
+    health,
+    indoor,
+    outdoor,
+    cash,
+    clothing,
+    medical
 FROM report
 ORDER BY date DESC, receipt_pk, subtotal_row, item_pk;

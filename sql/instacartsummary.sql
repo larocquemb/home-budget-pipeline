@@ -46,36 +46,36 @@ final_amounts AS (
 SELECT
     receipt_id,
     MAX(date) AS date,
-    SUM(amount) AS receipt_tot,
+    SUM(amount) AS receipt,
 
     COALESCE(SUM(amount) FILTER (
         WHERE budget_category = 'Groceries'
-    ), 0) AS grocery_tot,
+    ), 0) AS grocery,
 
     COALESCE(SUM(amount) FILTER (
         WHERE budget_category = 'Health & Fitness'
-    ), 0) AS health_tot,
+    ), 0) AS health,
 
     COALESCE(SUM(amount) FILTER (
         WHERE budget_category = 'Indoor Supplies'
-    ), 0) AS indoor_tot,
+    ), 0) AS indoor,
 
     COALESCE(SUM(amount) FILTER (
         WHERE budget_category = 'Outdoor Supplies'
-    ), 0) AS outdoor_tot,
+    ), 0) AS outdoor,
 
     COALESCE(SUM(amount) FILTER (
         WHERE budget_category = 'Cash/Unknown'
-    ), 0) AS cash_tot,
+    ), 0) AS cash,
 
     COALESCE(SUM(amount) FILTER (
         WHERE budget_category = 'Clothing'
-    ), 0) AS clothing_tot,
+    ), 0) AS clothing,
 
     COALESCE(SUM(amount) FILTER (
         WHERE budget_category = 'Medical Products'
-    ), 0) AS medical_tot
+    ), 0) AS medical
 
 FROM final_amounts
 GROUP BY receipt_pk, receipt_id
-ORDER BY receipt_id DESC;
+ORDER BY MAX(date) DESC, receipt_id DESC;
