@@ -139,7 +139,8 @@ costco_receipt_items_categorized.xlsx
 costco_receipts_extracted_categorized/
 
 # Private receipt evidence and generated OCR reports.
-# Source financial documents stay local and are never committed.
+# Source financial documents and derived OCR stay local and are never committed.
 receipts/raw/
+.ocr_cache/
 scanned_receipts_report.json
 *_scanned_receipts_report.json
