@@ -46,7 +46,12 @@ ID_PATTERNS = (
 TOTAL_WORDS = re.compile(r"\b(total|subtotal|tax|gst|pst|hst|balance|tender|change|amount\s+due)\b", re.I)
 NON_ITEM_WORDS = re.compile(r"\b(thank|visa|mastercard|debit|credit|approved|cashier|store|points?)\b", re.I)
 TENDER_LINE_RE = re.compile(
-    r"\b(?:acct\s*:.*cad\$?|visa(?:\s+credit(?:\s+card)?)?|mastercard|master\s*card|debit|interac|amex|tender)\b",
+    r"(?:\bacct\s*:.*cad\$?|\bvisa(?:\s+credit(?:\s+card)?)?|\bmastercard|\bmaster\s*card|"
+    r"\bdebit|\binterac|\bamex|\btender|\btrans\s+type\s*:\s*purchase|^\s*amount\b)",
+    re.I,
+)
+TOTAL_LIKE_RE = re.compile(
+    r"\b(?:grand\s+total|purchase\s+total|amount\s+due|balance\s+due|total\s+due|total|tot\s*al|jtal)\b",
     re.I,
 )
 
@@ -204,7 +209,6 @@ def _valid_date(year: int, month: int, day: int) -> Optional[str]:
 
 
 def extract_date(text: str) -> Optional[str]:
-    # Strongly-labelled card terminal format, e.g. DATE/TIME: 26/04/26.
     for line in text.splitlines():
         m = DATE_TIME_YYMMDD_RE.search(line)
         if m:
@@ -212,7 +216,6 @@ def extract_date(text: str) -> Optional[str]:
             if value:
                 return value
 
-    # Human-readable receipt date, e.g. 13-May-2026.
     month_map = {
         "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
         "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
@@ -224,7 +227,6 @@ def extract_date(text: str) -> Optional[str]:
             if value:
                 return value
 
-    # Existing separated numeric formats.
     for line in text.splitlines():
         for idx, pattern in enumerate(DATE_PATTERNS):
             m = pattern.search(line)
@@ -233,12 +235,10 @@ def extract_date(text: str) -> Optional[str]:
             if idx == 0:
                 value = _valid_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
             else:
-                # Retain the existing interpretation for legacy scans.
                 value = _valid_date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
             if value:
                 return value
 
-    # Some retailers embed YYYYMMDD in long receipt/register identifiers.
     for m in EMBEDDED_YYYYMMDD_RE.finditer(text):
         value = _valid_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         if value:
@@ -292,11 +292,10 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
         if re.search(r"\b(?:total\s+tax|tax|gst|pst|hst)\b", line, re.I):
             tax = (tax or 0.0) + amount
             continue
-        if re.search(r"\b(?:grand\s+total|purchase\s+total|amount\s+due|balance\s+due|total\s+due|total)\b", line, re.I):
+        if TOTAL_LIKE_RE.search(line):
             if not re.search(r"\b(?:tax|items?|savings?|discount|points?)\b", line, re.I):
                 total_candidates.append(amount)
                 continue
-        # Payment/tender amount is a strong fallback when OCR damages the printed TOTAL.
         if TENDER_LINE_RE.search(line) and not re.search(r"\b(?:change|auth|reference|card\s+number)\b", line, re.I):
             tender_candidates.append(amount)
     if total_candidates:
