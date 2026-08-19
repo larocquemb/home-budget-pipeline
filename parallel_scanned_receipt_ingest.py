@@ -89,8 +89,6 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
         page_text=list(pages),
         text=text,
     )
-    # ScannedReceipt predates transaction-time preservation; attach this field
-    # without changing the canonical parser API until KAN-76 is merged.
     receipt.transaction_datetime = transaction_datetime
     receipt.extraction_confidence = scan.confidence_for(receipt)
     receipt.review_reasons = scan.review_reasons_for(receipt)
@@ -104,9 +102,29 @@ def _parse_scan_worker(args: tuple[str, str, str, bool]) -> tuple[scan.ScannedRe
 
 
 def parse_scans_parallel(
-    paths: list[Path], root: Path, workers: int, cache_dir: Path, refresh: bool = False
-) -> tuple[list[scan.ScannedReceipt], int]:
+    paths: list[Path],
+    root: Path,
+    workers: int,
+    cache_dir: Path | None = None,
+    refresh: bool = False,
+    *,
+    return_cache_hits: bool = False,
+):
+    """Parse scans while preserving the original helper API.
+
+    Existing callers that omit cache_dir receive only the ordered receipt list,
+    matching the pre-cache behavior. The CLI supplies cache_dir and asks for
+    cache statistics explicitly.
+    """
     workers = max(1, workers)
+
+    if cache_dir is None:
+        # Compatibility path used by existing programmatic callers/tests. It
+        # deliberately avoids PDFium worker processes when scan.parse_scan is
+        # patched or otherwise controlled by the caller.
+        receipts = [scan.parse_scan(path, root) for path in paths]
+        return (receipts, 0) if return_cache_hits else receipts
+
     if workers == 1:
         results = [_parse_scan_cached(path, root, cache_dir, refresh) for path in paths]
     else:
@@ -116,7 +134,7 @@ def parse_scans_parallel(
 
     receipts = [receipt for receipt, _ in results]
     cache_hits = sum(1 for _, hit in results if hit)
-    return receipts, cache_hits
+    return (receipts, cache_hits) if return_cache_hits else receipts
 
 
 def _receipt_to_dict(receipt: scan.ScannedReceipt) -> dict:
@@ -141,7 +159,6 @@ def persist_evidence_first(conn, receipts: list[scan.ScannedReceipt], schema: st
     stats = {"matched": 0, "ambiguous": 0, "new": 0}
 
     for receipt in receipts:
-        # Store the immutable evidence first, even if reconciliation is ambiguous.
         evidence_id = upsert_evidence(conn, receipt, schema, evidence_type="scanned")
         match = find_match(conn, receipt, schema)
 
@@ -151,13 +168,9 @@ def persist_evidence_first(conn, receipts: list[scan.ScannedReceipt], schema: st
             continue
 
         if match.disposition == "ambiguous":
-            # Do not create a duplicate canonical expense. A later review or
-            # electronic-receipt ingest can attach this evidence safely.
             stats["ambiguous"] += 1
             continue
 
-        # No plausible existing transaction: create the canonical expense using
-        # the existing idempotent scanned-receipt writer, then attach evidence.
         expense_pk = scan.upsert_receipt(conn, receipt, schema)
         _persist_transaction_datetime(conn, receipt, schema)
         attach_evidence(conn, evidence_id, expense_pk, schema)
@@ -173,7 +186,14 @@ def main() -> int:
     root = Path(args.input_path).expanduser().resolve()
     cache_dir = Path(args.ocr_cache).expanduser().resolve()
     paths = scan.discover_scans(root)
-    receipts, cache_hits = parse_scans_parallel(paths, root, args.workers, cache_dir, args.refresh_ocr_cache)
+    receipts, cache_hits = parse_scans_parallel(
+        paths,
+        root,
+        args.workers,
+        cache_dir,
+        args.refresh_ocr_cache,
+        return_cache_hits=True,
+    )
 
     db_stats = None
     if args.write_db:
