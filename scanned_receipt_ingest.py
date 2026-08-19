@@ -34,11 +34,21 @@ DATE_PATTERNS = (
     re.compile(r"\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b"),
     re.compile(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})\b"),
 )
+DATE_TIME_YYMMDD_RE = re.compile(r"\b(?:DATE\s*/?\s*TIME|DATE)\s*[:#-]?\s*(\d{2})/(\d{2})/(\d{2})\b", re.I)
+MONTH_NAME_DATE_RE = re.compile(
+    r"\b(\d{1,2})[- ](Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[- ,]+(20\d{2})\b",
+    re.I,
+)
+EMBEDDED_YYYYMMDD_RE = re.compile(r"(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])")
 ID_PATTERNS = (
     re.compile(r"\b(?:receipt|transaction|trans|order|invoice)\s*(?:#|no\.?|number|id)?\s*[:#-]?\s*([A-Z0-9-]{4,})\b", re.I),
 )
 TOTAL_WORDS = re.compile(r"\b(total|subtotal|tax|gst|pst|hst|balance|tender|change|amount\s+due)\b", re.I)
 NON_ITEM_WORDS = re.compile(r"\b(thank|visa|mastercard|debit|credit|approved|cashier|store|points?)\b", re.I)
+TENDER_LINE_RE = re.compile(
+    r"\b(?:acct\s*:.*cad\$?|visa(?:\s+credit(?:\s+card)?)?|mastercard|master\s*card|debit|interac|amex|tender)\b",
+    re.I,
+)
 
 MERCHANT_ALIASES = (
     (re.compile(r"canad(?:ian|\s*tan|\w*)?\s+tire", re.I), "Canadian Tire"),
@@ -186,20 +196,53 @@ def parse_money(line: str) -> Optional[float]:
     return -value if token.startswith("-") or token.endswith("-") else value
 
 
+def _valid_date(year: int, month: int, day: int) -> Optional[str]:
+    try:
+        return datetime(year, month, day).date().isoformat()
+    except ValueError:
+        return None
+
+
 def extract_date(text: str) -> Optional[str]:
+    # Strongly-labelled card terminal format, e.g. DATE/TIME: 26/04/26.
+    for line in text.splitlines():
+        m = DATE_TIME_YYMMDD_RE.search(line)
+        if m:
+            value = _valid_date(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if value:
+                return value
+
+    # Human-readable receipt date, e.g. 13-May-2026.
+    month_map = {
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    }
+    for line in text.splitlines():
+        m = MONTH_NAME_DATE_RE.search(line)
+        if m:
+            value = _valid_date(int(m.group(3)), month_map[m.group(2)[:3].lower()], int(m.group(1)))
+            if value:
+                return value
+
+    # Existing separated numeric formats.
     for line in text.splitlines():
         for idx, pattern in enumerate(DATE_PATTERNS):
             m = pattern.search(line)
             if not m:
                 continue
-            try:
-                if idx == 0:
-                    dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-                else:
-                    dt = datetime(int(m.group(3)), int(m.group(1)), int(m.group(2)))
-                return dt.date().isoformat()
-            except ValueError:
-                continue
+            if idx == 0:
+                value = _valid_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            else:
+                # Retain the existing interpretation for legacy scans.
+                value = _valid_date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+            if value:
+                return value
+
+    # Some retailers embed YYYYMMDD in long receipt/register identifiers.
+    for m in EMBEDDED_YYYYMMDD_RE.finditer(text):
+        value = _valid_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        if value:
+            return value
     return None
 
 
@@ -237,6 +280,7 @@ def extract_merchant(text: str) -> Optional[str]:
 def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     subtotal = tax = total = None
     total_candidates: List[float] = []
+    tender_candidates: List[float] = []
     for raw in text.splitlines():
         line = normalize_line(raw)
         amount = parse_money(line)
@@ -249,10 +293,16 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
             tax = (tax or 0.0) + amount
             continue
         if re.search(r"\b(?:grand\s+total|purchase\s+total|amount\s+due|balance\s+due|total\s+due|total)\b", line, re.I):
-            if not re.search(r"\b(?:tax|items?|savings?|discount)\b", line, re.I):
+            if not re.search(r"\b(?:tax|items?|savings?|discount|points?)\b", line, re.I):
                 total_candidates.append(amount)
+                continue
+        # Payment/tender amount is a strong fallback when OCR damages the printed TOTAL.
+        if TENDER_LINE_RE.search(line) and not re.search(r"\b(?:change|auth|reference|card\s+number)\b", line, re.I):
+            tender_candidates.append(amount)
     if total_candidates:
         total = total_candidates[-1]
+    elif tender_candidates:
+        total = tender_candidates[-1]
     return subtotal, tax, total
 
 
@@ -351,9 +401,9 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
         "source_reference": receipt.source_reference,
         "source_sha256": receipt.source_sha256,
         "receipt_id": receipt.receipt_id,
-        "review_reasons": receipt.review_reasons,
         "page_text": receipt.page_text,
         "ocr_text": receipt.text,
+        "review_reasons": receipt.review_reasons,
     }
     with conn.cursor() as cur:
         cur.execute(
