@@ -50,11 +50,13 @@ CREATE TABLE IF NOT EXISTS budget.receipt_annotations (
     evidence_id BIGINT NOT NULL REFERENCES budget.receipt_evidence(id) ON DELETE CASCADE,
 
     annotation_type TEXT NOT NULL CHECK (
-        annotation_type IN ('category_label', 'separator', 'circle', 'checkmark', 'note', 'other')
+        annotation_type IN ('category_label', 'category_subtotal', 'separator', 'circle', 'checkmark', 'note', 'other')
     ),
     page_number INTEGER,
     text TEXT,
     normalized_category TEXT,
+    amount NUMERIC(12, 2),
+    line_index INTEGER,
     confidence NUMERIC(5, 4),
 
     -- Coordinates are optional normalized page coordinates (0..1), retained so
