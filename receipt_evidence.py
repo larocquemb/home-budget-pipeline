@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
+from receipt_annotations import extract_receipt_annotations
+
 
 @dataclass(frozen=True)
 class MatchResult:
@@ -129,6 +131,52 @@ def find_match(conn, receipt, schema: str = "budget") -> MatchResult:
     return MatchResult(None, best_score, "new", "no_plausible_match")
 
 
+def persist_auto_annotations(conn, evidence_id: int, text: str, schema: str = "budget") -> int:
+    """Replace only machine-extracted annotations, preserving future manual edits."""
+    schema = _safe_schema(schema)
+    annotations = extract_receipt_annotations(text)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"DELETE FROM {schema}.receipt_annotations "
+            "WHERE evidence_id = %s AND raw_payload ->> 'source' = 'auto_ocr'",
+            (evidence_id,),
+        )
+        for annotation in annotations:
+            cur.execute(
+                f"""
+                INSERT INTO {schema}.receipt_annotations (
+                    evidence_id, annotation_type, text, normalized_category,
+                    amount, line_index, confidence, raw_payload
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    evidence_id,
+                    annotation.annotation_type,
+                    annotation.text,
+                    annotation.normalized_category,
+                    annotation.amount,
+                    annotation.line_index,
+                    annotation.confidence,
+                    json.dumps({"source": "auto_ocr"}),
+                ),
+            )
+        cur.execute(
+            f"""
+            UPDATE {schema}.receipt_evidence
+               SET has_handwritten_notes = %s,
+                   has_category_markup = %s,
+                   updated_at = NOW()
+             WHERE id = %s
+            """,
+            (
+                any(a.annotation_type == "note" for a in annotations),
+                any(a.annotation_type in {"category_subtotal", "category_label", "separator"} for a in annotations),
+                evidence_id,
+            ),
+        )
+    return len(annotations)
+
+
 def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = "scanned", expense_pk: Optional[int] = None) -> int:
     schema = _safe_schema(schema)
     payload = {
@@ -169,7 +217,9 @@ def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = 
                 json.dumps(receipt.page_text), json.dumps(payload),
             ),
         )
-        return int(cur.fetchone()[0])
+        evidence_id = int(cur.fetchone()[0])
+    persist_auto_annotations(conn, evidence_id, receipt.text, schema)
+    return evidence_id
 
 
 def attach_evidence(conn, evidence_id: int, expense_pk: int, schema: str = "budget") -> None:
