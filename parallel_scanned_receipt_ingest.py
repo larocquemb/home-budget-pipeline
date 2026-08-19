@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Parallel front-end for scanned_receipt_ingest.
 
-Receipt parsing/OCR is parallelized across files. Each receipt remains internally
-sequential so page ordering and overlap handling are unchanged. Database writes
-remain sequential on one connection for predictable transactions.
+Receipt parsing/OCR is parallelized across files using worker processes because
+PDFium/pypdfium2 is not thread-safe. Each receipt remains internally sequential
+so page ordering and overlap handling are unchanged. Database writes remain
+sequential on one connection for predictable transactions.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import argparse
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import scanned_receipt_ingest as scan
@@ -21,7 +22,7 @@ import scanned_receipt_ingest as scan
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Parallel ingest of scanned paper receipts.")
     p.add_argument("input_path", help="Scan file or directory containing scanned receipts.")
-    p.add_argument("--workers", type=int, default=min(6, os.cpu_count() or 1), help="Concurrent receipt workers (default: min(6, CPU count)).")
+    p.add_argument("--workers", type=int, default=min(6, os.cpu_count() or 1), help="Concurrent receipt worker processes (default: min(6, CPU count)).")
     p.add_argument("--write-db", action="store_true", help="Upsert budget.expenses and budget.expense_items after OCR completes.")
     p.add_argument("--db-dsn", default=os.getenv("HOME_BUDGET_PG_DSN", ""))
     p.add_argument("--db-schema", default="budget")
@@ -30,14 +31,20 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _parse_scan_worker(args: tuple[str, str]) -> scan.ScannedReceipt:
+    path_str, root_str = args
+    return scan.parse_scan(Path(path_str), Path(root_str))
+
+
 def parse_scans_parallel(paths: list[Path], root: Path, workers: int) -> list[scan.ScannedReceipt]:
     workers = max(1, workers)
     if workers == 1:
         return [scan.parse_scan(path, root) for path in paths]
 
-    # executor.map preserves input ordering while OCR/rendering happens concurrently.
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="receipt") as executor:
-        return list(executor.map(lambda path: scan.parse_scan(path, root), paths))
+    work = [(str(path), str(root)) for path in paths]
+    # executor.map preserves input ordering while each process owns its own PDFium state.
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(_parse_scan_worker, work))
 
 
 def main() -> int:
@@ -69,6 +76,7 @@ def main() -> int:
         "review": sum(r.extraction_status == "review" for r in receipts),
         "unreadable": sum(r.extraction_status == "unreadable" for r in receipts),
         "workers": max(1, args.workers),
+        "executor": "process",
         "elapsed_seconds": elapsed_seconds,
         "receipts_per_second": receipts_per_second,
         "receipts": [scan.receipt_to_dict(r) for r in receipts],
