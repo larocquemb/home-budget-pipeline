@@ -18,6 +18,7 @@ from pathlib import Path
 
 import scanned_receipt_ingest as scan
 from receipt_datetime import date_part, extract_transaction_datetime
+from receipt_evidence import attach_evidence, find_match, upsert_evidence
 from receipt_payment import extract_payment_provenance
 
 
@@ -27,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--workers", type=int, default=min(12, os.cpu_count() or 1), help="Concurrent receipt worker processes (default: min(12, CPU count)).")
     p.add_argument("--ocr-cache", default=".ocr_cache", help="Local OCR page-text cache directory (default: .ocr_cache).")
     p.add_argument("--refresh-ocr-cache", action="store_true", help="Ignore cached OCR and rebuild it from source scans.")
-    p.add_argument("--write-db", action="store_true", help="Upsert budget.expenses and budget.expense_items after OCR completes.")
+    p.add_argument("--write-db", action="store_true", help="Persist receipt evidence and reconcile it to canonical expenses.")
     p.add_argument("--db-dsn", default=os.getenv("HOME_BUDGET_PG_DSN", ""))
     p.add_argument("--db-schema", default="budget")
     p.add_argument("--json", dest="json_path", default="", help="Optional JSON report path (keep local; may contain financial data).")
@@ -135,6 +136,36 @@ def _persist_transaction_datetime(conn, receipt: scan.ScannedReceipt, schema: st
         )
 
 
+def persist_evidence_first(conn, receipts: list[scan.ScannedReceipt], schema: str) -> dict[str, int]:
+    """Persist evidence, reconciling before creating a new canonical expense."""
+    stats = {"matched": 0, "ambiguous": 0, "new": 0}
+
+    for receipt in receipts:
+        # Store the immutable evidence first, even if reconciliation is ambiguous.
+        evidence_id = upsert_evidence(conn, receipt, schema, evidence_type="scanned")
+        match = find_match(conn, receipt, schema)
+
+        if match.disposition == "matched" and match.expense_pk is not None:
+            attach_evidence(conn, evidence_id, match.expense_pk, schema)
+            stats["matched"] += 1
+            continue
+
+        if match.disposition == "ambiguous":
+            # Do not create a duplicate canonical expense. A later review or
+            # electronic-receipt ingest can attach this evidence safely.
+            stats["ambiguous"] += 1
+            continue
+
+        # No plausible existing transaction: create the canonical expense using
+        # the existing idempotent scanned-receipt writer, then attach evidence.
+        expense_pk = scan.upsert_receipt(conn, receipt, schema)
+        _persist_transaction_datetime(conn, receipt, schema)
+        attach_evidence(conn, evidence_id, expense_pk, schema)
+        stats["new"] += 1
+
+    return stats
+
+
 def main() -> int:
     args = parse_args()
     started = time.perf_counter()
@@ -144,12 +175,11 @@ def main() -> int:
     paths = scan.discover_scans(root)
     receipts, cache_hits = parse_scans_parallel(paths, root, args.workers, cache_dir, args.refresh_ocr_cache)
 
+    db_stats = None
     if args.write_db:
         conn = scan._db_connect(args.db_dsn)
         try:
-            for receipt in receipts:
-                scan.upsert_receipt(conn, receipt, args.db_schema)
-                _persist_transaction_datetime(conn, receipt, args.db_schema)
+            db_stats = persist_evidence_first(conn, receipts, args.db_schema)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -173,6 +203,9 @@ def main() -> int:
         "receipts_per_second": receipts_per_second,
         "receipts": [_receipt_to_dict(r) for r in receipts],
     }
+    if db_stats is not None:
+        report["db_reconciliation"] = db_stats
+
     if args.json_path:
         Path(args.json_path).write_text(json.dumps(report, indent=2), encoding="utf-8")
 
