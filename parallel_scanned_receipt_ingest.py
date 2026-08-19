@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -41,6 +42,8 @@ def parse_scans_parallel(paths: list[Path], root: Path, workers: int) -> list[sc
 
 def main() -> int:
     args = parse_args()
+    started = time.perf_counter()
+
     root = Path(args.input_path).expanduser().resolve()
     paths = scan.discover_scans(root)
     receipts = parse_scans_parallel(paths, root, args.workers)
@@ -57,12 +60,17 @@ def main() -> int:
         finally:
             conn.close()
 
+    elapsed_seconds = round(time.perf_counter() - started, 3)
+    receipts_per_second = round(len(paths) / elapsed_seconds, 3) if elapsed_seconds > 0 else None
+
     report = {
         "discovered": len(paths),
         "complete": sum(r.extraction_status == "complete" for r in receipts),
         "review": sum(r.extraction_status == "review" for r in receipts),
         "unreadable": sum(r.extraction_status == "unreadable" for r in receipts),
         "workers": max(1, args.workers),
+        "elapsed_seconds": elapsed_seconds,
+        "receipts_per_second": receipts_per_second,
         "receipts": [scan.receipt_to_dict(r) for r in receipts],
     }
     if args.json_path:
