@@ -9,9 +9,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Iterable
+
+PAYMENT_LINE_RE = re.compile(
+    r"(?:visa|master\s*card|mastercard|amex|american\s+express|interac|debit|cash|"
+    r"card\s+number|card\s+type|acct|account|tender|trans\s+type|entry\s+method|"
+    r"reference|author\.?\s*#|auth\s*#|a\s*i\s*d|aid\s*:|approved|[*xXKk#]{2,}\s*\d{2,4})",
+    re.I,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -20,6 +28,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--reason", default="", help="Show OCR tails only for receipts containing this review reason.")
     p.add_argument("--tail-lines", type=int, default=20, help="OCR lines to show from the end of each matching receipt.")
     p.add_argument("--limit", type=int, default=8, help="Maximum matching receipt OCR samples to print.")
+    p.add_argument(
+        "--payment-lines",
+        action="store_true",
+        help="Show OCR lines likely to contain card/payment provenance for receipts with payment data.",
+    )
+    p.add_argument(
+        "--missing-card-last4",
+        action="store_true",
+        help="With --payment-lines, limit output to receipts where a payment method was detected but card_last4 was not.",
+    )
     return p.parse_args()
 
 
@@ -64,12 +82,50 @@ def print_samples(data: dict, reason: str, tail_lines: int, limit: int) -> None:
         print("\n".join(lines[-max(1, tail_lines):]))
 
 
+def print_payment_lines(data: dict, limit: int, missing_card_last4: bool) -> None:
+    if limit <= 0:
+        return
+
+    matches = []
+    for receipt in data.get("receipts", []):
+        method = receipt.get("payment_method")
+        card_last4 = receipt.get("card_last4")
+        if not method and not card_last4:
+            continue
+        if missing_card_last4 and (not method or card_last4):
+            continue
+        lines = [
+            line.strip()
+            for line in str(receipt.get("text", "")).splitlines()
+            if PAYMENT_LINE_RE.search(line)
+        ]
+        if lines:
+            matches.append((receipt, lines))
+
+    qualifier = " with detected method but missing card_last4" if missing_card_last4 else ""
+    print(f"\nPayment OCR samples{qualifier}: {len(matches)} matching receipts")
+    for receipt, lines in matches[:limit]:
+        print("\n" + "=" * 80)
+        print(receipt.get("source_reference", "<unknown>"))
+        print(
+            f"payment={receipt.get('payment_method') or '-'} "
+            f"card={receipt.get('card_last4') or '-'} "
+            f"date={receipt.get('transaction_date') or '-'} "
+            f"merchant={receipt.get('merchant')!r}"
+        )
+        print("-" * 80)
+        for line in lines:
+            print(line)
+
+
 def main() -> int:
     args = parse_args()
     path = Path(args.report)
     data = json.loads(path.read_text(encoding="utf-8"))
     print_summary(data)
     print_samples(data, args.reason, args.tail_lines, args.limit)
+    if args.payment_lines:
+        print_payment_lines(data, args.limit, args.missing_card_last4)
     return 0
 
 
