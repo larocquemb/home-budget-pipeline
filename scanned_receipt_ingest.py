@@ -26,7 +26,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 SUPPORTED_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff"}
 MONEY_RE = re.compile(r"-?\$?\s*(\d{1,6}(?:,\d{3})*\.\d{2})-?")
@@ -66,7 +66,6 @@ class ScannedReceipt:
 
     @property
     def canonical_order_id(self) -> str:
-        # File content, not filename, is the stable natural identity for a paper scan.
         return f"scan:{self.source_sha256}"
 
 
@@ -76,7 +75,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--write-db", action="store_true", help="Upsert budget.expenses and budget.expense_items.")
     p.add_argument("--db-dsn", default=os.getenv("HOME_BUDGET_PG_DSN", ""))
     p.add_argument("--db-schema", default="budget")
-    p.add_argument("--json", dest="json_path", default="", help="Optional JSON report path.")
+    p.add_argument("--json", dest="json_path", default="", help="Optional JSON report path (keep local; may contain financial data).")
+    p.add_argument("--show-review", action="store_true", help="Print one compact line for each receipt requiring review or unreadable.")
     return p.parse_args()
 
 
@@ -100,12 +100,7 @@ def _run_tesseract(path: Path, psm: str = "6") -> str:
     binary = shutil.which("tesseract")
     if not binary:
         return ""
-    proc = subprocess.run(
-        [binary, str(path), "stdout", "--psm", psm],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    proc = subprocess.run([binary, str(path), "stdout", "--psm", psm], capture_output=True, text=True, check=False)
     return proc.stdout if proc.returncode == 0 else ""
 
 
@@ -154,12 +149,6 @@ def _line_key(line: str) -> str:
 
 
 def merge_page_text(pages: Sequence[str], max_overlap_lines: int = 25) -> str:
-    """Merge adjacent OCR pages while removing an exact/normalized boundary overlap.
-
-    Long receipts are commonly scanned in two pieces with repeated physical rows.  We
-    compare the tail of the previous page with the head of the next and remove the
-    largest repeated sequence. This prevents duplicate canonical line items.
-    """
     merged: List[str] = []
     for page in pages:
         lines = [normalize_line(x) for x in page.splitlines() if normalize_line(x)]
@@ -196,7 +185,6 @@ def extract_date(text: str) -> Optional[str]:
                 if idx == 0:
                     dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
                 else:
-                    # Canadian paper receipts normally render numeric dates as MM/DD/YYYY.
                     dt = datetime(int(m.group(3)), int(m.group(1)), int(m.group(2)))
                 return dt.date().isoformat()
             except ValueError:
@@ -253,15 +241,12 @@ def extract_items(text: str) -> List[ScannedItem]:
         if len(re.sub(r"[^A-Za-z]", "", name)) < 2:
             continue
         amount = parse_money(line)
-        if amount is None:
-            continue
-        items.append(ScannedItem(name, amount))
+        if amount is not None:
+            items.append(ScannedItem(name, amount))
     return items
 
 
 def confidence_for(receipt: ScannedReceipt) -> float:
-    # Transparent field coverage score. Items and total carry more weight because
-    # they are the minimum useful data for downstream budget allocation.
     score = 0.0
     score += 0.15 if receipt.merchant else 0.0
     score += 0.15 if receipt.transaction_date else 0.0
@@ -290,18 +275,10 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
     except ValueError:
         reference = path.name
     receipt = ScannedReceipt(
-        path=str(path),
-        source_reference=reference,
-        source_sha256=sha256_file(path),
-        merchant=extract_merchant(text),
-        transaction_date=extract_date(text),
-        receipt_id=extract_receipt_id(text),
-        subtotal=subtotal,
-        tax=tax,
-        total=total,
-        items=extract_items(text),
-        page_text=list(pages),
-        text=text,
+        path=str(path), source_reference=reference, source_sha256=sha256_file(path),
+        merchant=extract_merchant(text), transaction_date=extract_date(text),
+        receipt_id=extract_receipt_id(text), subtotal=subtotal, tax=tax, total=total,
+        items=extract_items(text), page_text=list(pages), text=text,
     )
     receipt.extraction_confidence = confidence_for(receipt)
     receipt.extraction_status = status_for(receipt)
@@ -323,11 +300,8 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
         raise ValueError("invalid database schema")
     payload = {
-        "source_reference": receipt.source_reference,
-        "source_sha256": receipt.source_sha256,
-        "receipt_id": receipt.receipt_id,
-        "page_text": receipt.page_text,
-        "ocr_text": receipt.text,
+        "source_reference": receipt.source_reference, "source_sha256": receipt.source_sha256,
+        "receipt_id": receipt.receipt_id, "page_text": receipt.page_text, "ocr_text": receipt.text,
     }
     with conn.cursor() as cur:
         cur.execute(
@@ -337,9 +311,7 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                 order_date, store_name, receipt_item_subtotal, receipt_gst,
                 receipt_total_charged, expense_total, extraction_status,
                 extraction_confidence, raw_payload
-            ) VALUES (
-                'scanned', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
+            ) VALUES ('scanned', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source, order_id) DO UPDATE SET
                 receipt_filename = EXCLUDED.receipt_filename,
                 source_reference = EXCLUDED.source_reference,
@@ -355,34 +327,19 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                 raw_payload = EXCLUDED.raw_payload
             RETURNING id
             """,
-            (
-                receipt.canonical_order_id,
-                Path(receipt.path).name,
-                receipt.source_reference,
-                receipt.source_sha256,
-                receipt.transaction_date,
-                receipt.merchant,
-                receipt.subtotal,
-                receipt.tax or 0,
-                receipt.total,
-                receipt.total,
-                receipt.extraction_status,
-                receipt.extraction_confidence,
-                json.dumps(payload),
-            ),
+            (receipt.canonical_order_id, Path(receipt.path).name, receipt.source_reference,
+             receipt.source_sha256, receipt.transaction_date, receipt.merchant, receipt.subtotal,
+             receipt.tax or 0, receipt.total, receipt.total, receipt.extraction_status,
+             receipt.extraction_confidence, json.dumps(payload)),
         )
         expense_pk = int(cur.fetchone()[0])
-        # OCR can improve between runs. Replace scan-derived items atomically instead
-        # of accumulating old interpretations of the same immutable source file.
         cur.execute(f"DELETE FROM {schema}.expense_items WHERE expense_pk = %s", (expense_pk,))
         for item in receipt.items:
             cur.execute(
-                f"""
-                INSERT INTO {schema}.expense_items (
+                f"""INSERT INTO {schema}.expense_items (
                     expense_pk, item_name, unit_qty, unit_cost, line_total,
                     original_line_total, category_source
-                ) VALUES (%s, %s, 1, %s, %s, %s, 'scanned_ocr')
-                """,
+                ) VALUES (%s, %s, 1, %s, %s, %s, 'scanned_ocr')""",
                 (expense_pk, item.item_name, item.line_total, item.line_total, item.line_total),
             )
     return expense_pk
@@ -392,6 +349,23 @@ def receipt_to_dict(receipt: ScannedReceipt) -> dict:
     data = asdict(receipt)
     data["order_id"] = receipt.canonical_order_id
     return data
+
+
+def print_review(receipts: Sequence[ScannedReceipt]) -> None:
+    flagged = [r for r in receipts if r.extraction_status != "complete"]
+    if not flagged:
+        print("No receipts require review.")
+        return
+    print("\nReceipts requiring review:")
+    for r in flagged:
+        merchant = r.merchant or "-"
+        date = r.transaction_date or "-"
+        total = f"{r.total:.2f}" if r.total is not None else "-"
+        print(
+            f"{r.source_reference}  status={r.extraction_status} "
+            f"confidence={r.extraction_confidence:.2f} merchant={merchant!r} "
+            f"date={date} total={total} items={len(r.items)}"
+        )
 
 
 def main() -> int:
@@ -422,6 +396,8 @@ def main() -> int:
     if args.json_path:
         Path(args.json_path).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps({k: v for k, v in report.items() if k != "receipts"}, indent=2))
+    if args.show_review:
+        print_review(receipts)
     return 0 if paths else 2
 
 
