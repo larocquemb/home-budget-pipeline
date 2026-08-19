@@ -62,6 +62,14 @@ TOTAL 11.48
         self.assertEqual(scan.extract_totals("TOT AL 40.00")[2], 40.00)
         self.assertEqual(scan.extract_totals("JTAL 66.85")[2], 66.85)
 
+    def test_total_extraction_tolerates_anchored_ocr_punctuation_damage(self):
+        self.assertEqual(scan.extract_totals("JTAL 66:85\nVisa ¥9809 66. 85")[2], 66.85)
+        self.assertEqual(scan.extract_totals("ACCT: MASTERCARD $ 12:13")[2], 12.13)
+        self.assertEqual(scan.extract_totals("MOUNT: $33,.59-\nMasterCard 33,59-")[2], -33.59)
+        self.assertEqual(scan.extract_totals("TOTAE P2229 .02\nMasterCard TENDER $229 .02")[2], 229.02)
+        self.assertEqual(scan.extract_totals("Toto MESA CAD$ 62.62")[2], 62.62)
+        self.assertEqual(scan.extract_totals("Visa *9809 42 .54- ‘")[2], -42.54)
+
     def test_normalize_known_merchant_ocr_variants(self):
         self.assertEqual(scan.normalize_merchant("CANAD TAN TIRE #266"), "Canadian Tire")
         self.assertEqual(scan.normalize_merchant("Tin Hortons # 104156"), "Tim Hortons")
