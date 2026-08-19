@@ -14,7 +14,7 @@ from typing import Optional
 MONEY_RE = re.compile(r"-?\$?\s*(\d{1,6}(?:,\d{3})*\.\d{2})-?")
 SUBTOTAL_RE = re.compile(r"\bsub\s*tot(?:al|ae|fl)?\b", re.I)
 TAX_RE = re.compile(r"\b(?:tax|gst|pst|hst)\b", re.I)
-PERCENT_TAX_RE = re.compile(r"\b(?:5|7|8|12|13|14|15)\s*%\b", re.I)
+PERCENT_TAX_RE = re.compile(r"\b(?:5|7|8|12|13|14|15)\s*%", re.I)
 TOTAL_CONTEXT_RE = re.compile(
     r"\b(?:total|tot\s*al|tot\s*ae|totae|jtal|tender|visa|master\s*card|mastercard|debit|interac)\b",
     re.I,
