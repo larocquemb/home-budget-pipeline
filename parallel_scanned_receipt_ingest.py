@@ -20,6 +20,7 @@ import scanned_receipt_ingest as scan
 from receipt_datetime import date_part, extract_transaction_datetime
 from receipt_evidence import attach_evidence, find_match, upsert_evidence
 from receipt_payment import extract_payment_provenance
+from receipt_total_reconcile import reconcile_total_from_text
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,6 +66,7 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
     pages, cache_hit = _read_or_create_pages(path, source_sha256, cache_dir, refresh)
     text = scan.merge_page_text(pages)
     subtotal, tax, total = scan.extract_totals(text)
+    total = reconcile_total_from_text(text, total)
     payment = extract_payment_provenance(text)
     transaction_datetime = extract_transaction_datetime(text)
     transaction_date = date_part(transaction_datetime) or scan.extract_date(text)
@@ -119,9 +121,6 @@ def parse_scans_parallel(
     workers = max(1, workers)
 
     if cache_dir is None:
-        # Compatibility path used by existing programmatic callers/tests. It
-        # deliberately avoids PDFium worker processes when scan.parse_scan is
-        # patched or otherwise controlled by the caller.
         receipts = [scan.parse_scan(path, root) for path in paths]
         return (receipts, 0) if return_cache_hits else receipts
 
