@@ -14,6 +14,7 @@ from typing import Optional
 MONEY_RE = re.compile(r"-?\$?\s*(\d{1,6}(?:,\d{3})*\.\d{2})-?")
 SUBTOTAL_RE = re.compile(r"\bsub\s*tot(?:al|ae|fl)?\b", re.I)
 TAX_RE = re.compile(r"\b(?:tax|gst|pst|hst)\b", re.I)
+PERCENT_TAX_RE = re.compile(r"\b(?:5|7|8|12|13|14|15)\s*%\b", re.I)
 TOTAL_CONTEXT_RE = re.compile(
     r"\b(?:total|tot\s*al|totae|jtal|tender|visa|master\s*card|mastercard|debit|interac)\b",
     re.I,
@@ -34,8 +35,9 @@ def reconcile_total_from_text(text: str, parsed_total: Optional[float]) -> Optio
     """Return parsed_total or a safely derived subtotal+tax total.
 
     A derived result requires exactly one readable subtotal line and exactly one
-    readable tax line. That prevents mixed/bottom-of-basket receipts containing
-    multiple independent subtotal sections from being collapsed incorrectly.
+    readable tax line. Percentage-only tax lines are accepted because OCR often
+    destroys the HST/GST/PST label while preserving the rate and amount. Receipts
+    with multiple independent subtotal/tax sections remain unresolved.
     """
     if parsed_total is not None:
         return parsed_total
@@ -52,7 +54,7 @@ def reconcile_total_from_text(text: str, parsed_total: Optional[float]) -> Optio
         if SUBTOTAL_RE.search(line):
             subtotals.append(amount)
             continue
-        if TAX_RE.search(line) and not SUBTOTAL_RE.search(line):
+        if (TAX_RE.search(line) or PERCENT_TAX_RE.search(line)) and not SUBTOTAL_RE.search(line):
             taxes.append(amount)
 
     if len(subtotals) != 1 or len(taxes) != 1:
