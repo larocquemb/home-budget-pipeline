@@ -34,6 +34,9 @@ from receipt_payment import extract_payment_provenance
 
 SUPPORTED_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff"}
 MONEY_RE = re.compile(r"-?\$?\s*(\d{1,6}(?:,\d{3})*\.\d{2})-?")
+OCR_MONEY_RE = re.compile(
+    r"(?P<lead>-)?\$?\s*(?P<whole>\d{1,6})(?:\s*[,.:]\s*\.?\s*|\s+\.\s*)(?P<cents>\d{2})(?P<trail>-)?"
+)
 DATE_PATTERNS = (
     re.compile(r"\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b"),
     re.compile(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})\b"),
@@ -50,12 +53,12 @@ ID_PATTERNS = (
 TOTAL_WORDS = re.compile(r"\b(total|subtotal|tax|gst|pst|hst|balance|tender|change|amount\s+due)\b", re.I)
 NON_ITEM_WORDS = re.compile(r"\b(thank|visa|mastercard|debit|credit|approved|cashier|store|points?)\b", re.I)
 TENDER_LINE_RE = re.compile(
-    r"(?:\bacct\s*:.*cad\$?|\bvisa(?:\s+credit(?:\s+card)?)?|\bmastercard|\bmaster\s*card|"
-    r"\bdebit|\binterac|\bamex|\btender|\btrans\s+type\s*:\s*purchase|^\s*amount\b)",
+    r"(?:\bacct\s*:.*cad\$?|\bcad\$|\bvisa(?:\s+credit(?:\s+card)?)?|\bmastercard|\bmaster\s*card|"
+    r"\bdebit|\binterac|\bamex|\btender|\btrans\s+type\s*:\s*purchase|^\s*(?:a?mount|mount)\b)",
     re.I,
 )
 TOTAL_LIKE_RE = re.compile(
-    r"\b(?:grand\s+total|purchase\s+total|amount\s+due|balance\s+due|total\s+due|total|tot\s*al|jtal)\b",
+    r"\b(?:grand\s+total|purchase\s+total|amount\s+due|balance\s+due|total\s+due|total|tot(?:\s*al|ae|fl)|jtal)\b",
     re.I,
 )
 
@@ -208,6 +211,16 @@ def parse_money(line: str) -> Optional[float]:
     return -value if token.startswith("-") or token.endswith("-") else value
 
 
+def parse_money_tolerant(line: str) -> Optional[float]:
+    """Parse OCR-damaged money only after the caller has anchored the line semantically."""
+    matches = list(OCR_MONEY_RE.finditer(line))
+    if not matches:
+        return None
+    m = matches[-1]
+    value = float(f"{m.group('whole')}.{m.group('cents')}")
+    return -value if m.group("lead") or m.group("trail") else value
+
+
 def _valid_date(year: int, month: int, day: int) -> Optional[str]:
     try:
         return datetime(year, month, day).date().isoformat()
@@ -290,7 +303,13 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
     tender_candidates: List[float] = []
     for raw in text.splitlines():
         line = normalize_line(raw)
+        total_like = bool(TOTAL_LIKE_RE.search(line))
+        tender_like = bool(TENDER_LINE_RE.search(line)) and not re.search(
+            r"\b(?:change|auth|reference|card\s+number)\b", line, re.I
+        )
         amount = parse_money(line)
+        if amount is None and (total_like or tender_like):
+            amount = parse_money_tolerant(line)
         if amount is None:
             continue
         if re.search(r"\bsub\s*total\b", line, re.I):
@@ -299,11 +318,11 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
         if re.search(r"\b(?:total\s+tax|tax|gst|pst|hst)\b", line, re.I):
             tax = (tax or 0.0) + amount
             continue
-        if TOTAL_LIKE_RE.search(line):
+        if total_like:
             if not re.search(r"\b(?:tax|items?|savings?|discount|points?)\b", line, re.I):
                 total_candidates.append(amount)
                 continue
-        if TENDER_LINE_RE.search(line) and not re.search(r"\b(?:change|auth|reference|card\s+number)\b", line, re.I):
+        if tender_like:
             tender_candidates.append(amount)
     if total_candidates:
         total = total_candidates[-1]
