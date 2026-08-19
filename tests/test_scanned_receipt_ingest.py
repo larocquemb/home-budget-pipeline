@@ -56,6 +56,11 @@ TOTAL 11.48
         self.assertEqual(scan.extract_totals("ACCT: VISA CAD$ 56.39")[2], 56.39)
         self.assertEqual(scan.extract_totals("VISA 95.89")[2], 95.89)
         self.assertEqual(scan.extract_totals("Mastercard $60.33\nCHANGE $0.06")[2], 60.33)
+        self.assertEqual(scan.extract_totals("Trans Type:Purchase $51.37")[2], 51.37)
+        self.assertEqual(scan.extract_totals("AMOUNT $22.59\nAPPROVED")[2], 22.59)
+        self.assertEqual(scan.extract_totals("Visa *9809 42.54- ‘")[2], -42.54)
+        self.assertEqual(scan.extract_totals("TOT AL 40.00")[2], 40.00)
+        self.assertEqual(scan.extract_totals("JTAL 66.85")[2], 66.85)
 
     def test_normalize_known_merchant_ocr_variants(self):
         self.assertEqual(scan.normalize_merchant("CANAD TAN TIRE #266"), "Canadian Tire")
