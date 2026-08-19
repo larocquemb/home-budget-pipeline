@@ -17,6 +17,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import scanned_receipt_ingest as scan
+from receipt_datetime import date_part, extract_transaction_datetime
 from receipt_payment import extract_payment_provenance
 
 
@@ -64,6 +65,8 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
     text = scan.merge_page_text(pages)
     subtotal, tax, total = scan.extract_totals(text)
     payment = extract_payment_provenance(text)
+    transaction_datetime = extract_transaction_datetime(text)
+    transaction_date = date_part(transaction_datetime) or scan.extract_date(text)
     try:
         reference = str(path.relative_to(root)) if root.is_dir() else path.name
     except ValueError:
@@ -74,7 +77,7 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
         source_reference=reference,
         source_sha256=source_sha256,
         merchant=scan.extract_merchant(text),
-        transaction_date=scan.extract_date(text),
+        transaction_date=transaction_date,
         receipt_id=scan.extract_receipt_id(text),
         subtotal=subtotal,
         tax=tax,
@@ -85,6 +88,9 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
         page_text=list(pages),
         text=text,
     )
+    # ScannedReceipt predates transaction-time preservation; attach this field
+    # without changing the canonical parser API until KAN-76 is merged.
+    receipt.transaction_datetime = transaction_datetime
     receipt.extraction_confidence = scan.confidence_for(receipt)
     receipt.review_reasons = scan.review_reasons_for(receipt)
     receipt.extraction_status = scan.status_for(receipt)
@@ -104,13 +110,29 @@ def parse_scans_parallel(
         results = [_parse_scan_cached(path, root, cache_dir, refresh) for path in paths]
     else:
         work = [(str(path), str(root), str(cache_dir), refresh) for path in paths]
-        # executor.map preserves input ordering while each process owns its own PDFium state.
         with ProcessPoolExecutor(max_workers=workers) as executor:
             results = list(executor.map(_parse_scan_worker, work))
 
     receipts = [receipt for receipt, _ in results]
     cache_hits = sum(1 for _, hit in results if hit)
     return receipts, cache_hits
+
+
+def _receipt_to_dict(receipt: scan.ScannedReceipt) -> dict:
+    data = scan.receipt_to_dict(receipt)
+    data["transaction_datetime"] = getattr(receipt, "transaction_datetime", None)
+    return data
+
+
+def _persist_transaction_datetime(conn, receipt: scan.ScannedReceipt, schema: str) -> None:
+    value = getattr(receipt, "transaction_datetime", None)
+    if not value:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {schema}.expenses SET transaction_datetime = %s WHERE source = 'scanned' AND order_id = %s",
+            (value, receipt.canonical_order_id),
+        )
 
 
 def main() -> int:
@@ -127,6 +149,7 @@ def main() -> int:
         try:
             for receipt in receipts:
                 scan.upsert_receipt(conn, receipt, args.db_schema)
+                _persist_transaction_datetime(conn, receipt, args.db_schema)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -148,7 +171,7 @@ def main() -> int:
         "ocr_cache_misses": len(paths) - cache_hits,
         "elapsed_seconds": elapsed_seconds,
         "receipts_per_second": receipts_per_second,
-        "receipts": [scan.receipt_to_dict(r) for r in receipts],
+        "receipts": [_receipt_to_dict(r) for r in receipts],
     }
     if args.json_path:
         Path(args.json_path).write_text(json.dumps(report, indent=2), encoding="utf-8")
