@@ -2,7 +2,7 @@
 """Extract payment provenance from receipt OCR.
 
 The OCR layer identifies payment method and card last-four only. Ownership/payer
-mapping belongs in configuration or canonical account data, not in OCR parsing.
+resolution belongs in the database-backed payment_card_lookup module.
 """
 
 from __future__ import annotations
@@ -26,25 +26,37 @@ CARD_METHOD_PATTERNS = (
     (re.compile(r"\bvisa\b", re.I), "Visa"),
     (re.compile(r"\bamex\b|american\s+express", re.I), "Amex"),
     (re.compile(r"\binterac\b|\bdebit\b", re.I), "Debit"),
-    (re.compile(r"\bcash\b", re.I), "Cash"),
 )
 
 # Strong masked-card forms seen on Canadian receipt/payment terminals:
 #   Visa *9809
-#   VISA ************956
-#   CARD NUMBER: ************0806
-#   MASTERCARD S1053S0   (not safe enough; intentionally ignored)
+#   CARD NUMBER: KKKKKKKKKKKK0806 P
+#   CARD NUMBER; xxxxxxxxxx** 3400
+# OCR that does not preserve four numeric trailing digits is intentionally ignored.
 MASKED_LAST4_PATTERNS = (
     re.compile(r"\b(?:visa|master\s*card|mastercard|amex)\s*[*xX#-]+\s*(\d{4})\b", re.I),
-    re.compile(r"\bcard\s+number\s*:\s*[*xXKk#-]+\s*(\d{4})\b", re.I),
-    re.compile(r"\b(?:account|acct)\s*(?:number|#)?\s*[:#-]?\s*[*xXKk#-]+\s*(\d{4})\b", re.I),
+    re.compile(r"\bcard\s+number\s*[:;]\s*[*xXKk#«»*\s-]+?(\d{4})\b", re.I),
+    re.compile(r"\b(?:account|acct)\s*(?:number|#)?\s*[:;#-]?\s*[*xXKk#«»*\s-]+?(\d{4})\b", re.I),
 )
+
+# Lines that strongly indicate the actual tender/payment instrument. Generic merchant
+# prose such as "CASH SALE" must not outrank explicit card tender evidence.
+PAYMENT_EVIDENCE_RE = re.compile(
+    r"(?:\bacct\s*:|\bcard\s+type\s*:|\bcard\s+number\s*[:;]|\btender\b|"
+    r"\btrans\s+type\s*:\s*purchase|\bvisa(?:\s+credit(?:\s+card)?)?\b|"
+    r"\bmaster\s*card\b|\bmastercard\b|\binterac\b|\bdebit\b|\bamex\b)",
+    re.I,
+)
+
+CASH_TENDER_RE = re.compile(r"^\s*(?:cash\s+(?:tender|payment)|tender\s+cash)\b", re.I)
 
 
 def normalize_payment_method(text: str) -> Optional[str]:
     for pattern, method in CARD_METHOD_PATTERNS:
         if pattern.search(text):
             return method
+    if CASH_TENDER_RE.search(text):
+        return "Cash"
     return None
 
 
@@ -58,19 +70,11 @@ def extract_card_last4(text: str) -> Optional[str]:
 
 
 def extract_payment_provenance(text: str) -> PaymentProvenance:
-    method: Optional[str] = None
-    last4: Optional[str] = None
+    # Prefer lines that describe an actual payment instrument. This prevents phrases
+    # like "CASH SALE" or product text containing "cash" from masking card evidence.
+    priority_lines = [line for line in text.splitlines() if PAYMENT_EVIDENCE_RE.search(line)]
 
-    # Prefer payment-terminal/tender lines rather than merchant prose mentioning a
-    # card brand. This also keeps Debit/Interac from being overwritten by Visa AID text.
-    priority_lines = [
-        line for line in text.splitlines()
-        if re.search(
-            r"\b(?:acct|card\s+type|card\s+number|tender|trans\s+type|visa|master\s*card|mastercard|interac|debit|amex|cash)\b",
-            line,
-            re.I,
-        )
-    ]
+    method: Optional[str] = None
     for line in priority_lines:
         candidate = normalize_payment_method(line)
         if candidate:
@@ -78,14 +82,13 @@ def extract_payment_provenance(text: str) -> PaymentProvenance:
             break
 
     last4 = extract_card_last4("\n".join(priority_lines)) or extract_card_last4(text)
+
+    # Cash is only accepted from an explicit cash tender/payment line and only when
+    # no stronger card/debit evidence was found.
+    if method is None:
+        for line in text.splitlines():
+            if CASH_TENDER_RE.search(line):
+                method = "Cash"
+                break
+
     return PaymentProvenance(payment_method=method, card_last4=last4)
-
-
-def resolve_payer(last4: Optional[str], card_owner_map: dict[str, str]) -> Optional[str]:
-    """Resolve payer from a caller-supplied last4 -> owner map.
-
-    No guess is made when the card digits are absent or unknown.
-    """
-    if not last4:
-        return None
-    return card_owner_map.get(last4)
