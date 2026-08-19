@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Parallel front-end for scanned_receipt_ingest.
+"""Parallel front-end for scanned_receipt_ingest with local OCR caching.
 
 Receipt parsing/OCR is parallelized across files using worker processes because
-PDFium/pypdfium2 is not thread-safe. Each receipt remains internally sequential
-so page ordering and overlap handling are unchanged. Database writes remain
-sequential on one connection for predictable transactions.
+PDFium/pypdfium2 is not thread-safe. Expensive page text extraction is cached by
+source SHA-256 so parser-only changes do not rerun PDFium/Tesseract. Database
+writes remain sequential on one connection for predictable transactions.
 """
 
 from __future__ import annotations
@@ -17,12 +17,15 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import scanned_receipt_ingest as scan
+from receipt_payment import extract_payment_provenance
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Parallel ingest of scanned paper receipts.")
     p.add_argument("input_path", help="Scan file or directory containing scanned receipts.")
-    p.add_argument("--workers", type=int, default=min(6, os.cpu_count() or 1), help="Concurrent receipt worker processes (default: min(6, CPU count)).")
+    p.add_argument("--workers", type=int, default=min(12, os.cpu_count() or 1), help="Concurrent receipt worker processes (default: min(12, CPU count)).")
+    p.add_argument("--ocr-cache", default=".ocr_cache", help="Local OCR page-text cache directory (default: .ocr_cache).")
+    p.add_argument("--refresh-ocr-cache", action="store_true", help="Ignore cached OCR and rebuild it from source scans.")
     p.add_argument("--write-db", action="store_true", help="Upsert budget.expenses and budget.expense_items after OCR completes.")
     p.add_argument("--db-dsn", default=os.getenv("HOME_BUDGET_PG_DSN", ""))
     p.add_argument("--db-schema", default="budget")
@@ -31,20 +34,83 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _parse_scan_worker(args: tuple[str, str]) -> scan.ScannedReceipt:
-    path_str, root_str = args
-    return scan.parse_scan(Path(path_str), Path(root_str))
+def _read_or_create_pages(path: Path, source_sha256: str, cache_dir: Path, refresh: bool) -> tuple[list[str], bool]:
+    cache_path = cache_dir / f"{source_sha256}.json"
+    if not refresh:
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            pages = data.get("page_text")
+            if data.get("source_sha256") == source_sha256 and isinstance(pages, list) and all(isinstance(p, str) for p in pages):
+                return pages, True
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
+
+    pages = scan.extract_page_text(path)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "cache_version": 1,
+        "source_sha256": source_sha256,
+        "page_text": list(pages),
+    }
+    tmp_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    tmp_path.replace(cache_path)
+    return list(pages), False
 
 
-def parse_scans_parallel(paths: list[Path], root: Path, workers: int) -> list[scan.ScannedReceipt]:
+def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -> tuple[scan.ScannedReceipt, bool]:
+    source_sha256 = scan.sha256_file(path)
+    pages, cache_hit = _read_or_create_pages(path, source_sha256, cache_dir, refresh)
+    text = scan.merge_page_text(pages)
+    subtotal, tax, total = scan.extract_totals(text)
+    payment = extract_payment_provenance(text)
+    try:
+        reference = str(path.relative_to(root)) if root.is_dir() else path.name
+    except ValueError:
+        reference = path.name
+
+    receipt = scan.ScannedReceipt(
+        path=str(path),
+        source_reference=reference,
+        source_sha256=source_sha256,
+        merchant=scan.extract_merchant(text),
+        transaction_date=scan.extract_date(text),
+        receipt_id=scan.extract_receipt_id(text),
+        subtotal=subtotal,
+        tax=tax,
+        total=total,
+        payment_method=payment.payment_method,
+        card_last4=payment.card_last4,
+        items=scan.extract_items(text),
+        page_text=list(pages),
+        text=text,
+    )
+    receipt.extraction_confidence = scan.confidence_for(receipt)
+    receipt.review_reasons = scan.review_reasons_for(receipt)
+    receipt.extraction_status = scan.status_for(receipt)
+    return receipt, cache_hit
+
+
+def _parse_scan_worker(args: tuple[str, str, str, bool]) -> tuple[scan.ScannedReceipt, bool]:
+    path_str, root_str, cache_dir_str, refresh = args
+    return _parse_scan_cached(Path(path_str), Path(root_str), Path(cache_dir_str), refresh)
+
+
+def parse_scans_parallel(
+    paths: list[Path], root: Path, workers: int, cache_dir: Path, refresh: bool = False
+) -> tuple[list[scan.ScannedReceipt], int]:
     workers = max(1, workers)
     if workers == 1:
-        return [scan.parse_scan(path, root) for path in paths]
+        results = [_parse_scan_cached(path, root, cache_dir, refresh) for path in paths]
+    else:
+        work = [(str(path), str(root), str(cache_dir), refresh) for path in paths]
+        # executor.map preserves input ordering while each process owns its own PDFium state.
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            results = list(executor.map(_parse_scan_worker, work))
 
-    work = [(str(path), str(root)) for path in paths]
-    # executor.map preserves input ordering while each process owns its own PDFium state.
-    with ProcessPoolExecutor(max_workers=workers) as executor:
-        return list(executor.map(_parse_scan_worker, work))
+    receipts = [receipt for receipt, _ in results]
+    cache_hits = sum(1 for _, hit in results if hit)
+    return receipts, cache_hits
 
 
 def main() -> int:
@@ -52,8 +118,9 @@ def main() -> int:
     started = time.perf_counter()
 
     root = Path(args.input_path).expanduser().resolve()
+    cache_dir = Path(args.ocr_cache).expanduser().resolve()
     paths = scan.discover_scans(root)
-    receipts = parse_scans_parallel(paths, root, args.workers)
+    receipts, cache_hits = parse_scans_parallel(paths, root, args.workers, cache_dir, args.refresh_ocr_cache)
 
     if args.write_db:
         conn = scan._db_connect(args.db_dsn)
@@ -77,6 +144,8 @@ def main() -> int:
         "unreadable": sum(r.extraction_status == "unreadable" for r in receipts),
         "workers": max(1, args.workers),
         "executor": "process",
+        "ocr_cache_hits": cache_hits,
+        "ocr_cache_misses": len(paths) - cache_hits,
         "elapsed_seconds": elapsed_seconds,
         "receipts_per_second": receipts_per_second,
         "receipts": [scan.receipt_to_dict(r) for r in receipts],
