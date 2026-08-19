@@ -44,10 +44,18 @@ TOTAL 11.48
         self.assertEqual(total, 11.48)
         self.assertEqual([(x.item_name, x.line_total) for x in scan.extract_items(text)], [("Milk", 5.94), ("Bread", 4.99)])
 
-    def test_total_extraction_accepts_amount_due_and_embedded_total(self):
+    def test_date_extraction_accepts_real_ocr_formats(self):
+        self.assertEqual(scan.extract_date("DATE/TIME: 26/04/26 19:01:05"), "2026-04-26")
+        self.assertEqual(scan.extract_date("13-May-2026 17:39:52"), "2026-05-13")
+        self.assertEqual(scan.extract_date("226001555720260707"), "2026-07-07")
+
+    def test_total_extraction_accepts_amount_due_and_tender_fallback(self):
         self.assertEqual(scan.extract_totals("PURCHASE TOTAL $42.17")[2], 42.17)
         self.assertEqual(scan.extract_totals("AMOUNT DUE 19.84")[2], 19.84)
         self.assertEqual(scan.extract_totals("BALANCE DUE $31.20")[2], 31.20)
+        self.assertEqual(scan.extract_totals("ACCT: VISA CAD$ 56.39")[2], 56.39)
+        self.assertEqual(scan.extract_totals("VISA 95.89")[2], 95.89)
+        self.assertEqual(scan.extract_totals("Mastercard $60.33\nCHANGE $0.06")[2], 60.33)
 
     def test_normalize_known_merchant_ocr_variants(self):
         self.assertEqual(scan.normalize_merchant("CANAD TAN TIRE #266"), "Canadian Tire")
