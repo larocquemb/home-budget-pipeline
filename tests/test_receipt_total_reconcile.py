@@ -12,6 +12,14 @@ VISA*TEND =F 136415
 """
         self.assertEqual(reconcile_total_from_text(text, None), 136.15)
 
+    def test_recovers_percentage_only_tax_ocr_line(self):
+        text = """SUBTOT $ 120.49
+13% oo $ 15.66
+TOT AE NOME 1396.15
+VISA*TEND =F 136415
+"""
+        self.assertEqual(reconcile_total_from_text(text, None), 136.15)
+
     def test_keeps_existing_total(self):
         self.assertEqual(reconcile_total_from_text("SUBTOTAL 10.00\nTAX 1.30\nTOTAL 11.30", 11.30), 11.30)
 
