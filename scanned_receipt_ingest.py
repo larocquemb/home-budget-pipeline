@@ -299,8 +299,8 @@ def extract_merchant(text: str) -> Optional[str]:
 
 def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     subtotal = tax = total = None
-    total_candidates: List[float] = []
-    tender_candidates: List[float] = []
+    total_candidates: List[Tuple[float, bool]] = []
+    tender_candidates: List[Tuple[float, bool]] = []
     for raw in text.splitlines():
         line = normalize_line(raw)
         total_like = bool(TOTAL_LIKE_RE.search(line))
@@ -308,8 +308,10 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
             r"\b(?:change|auth|reference|card\s+number)\b", line, re.I
         )
         amount = parse_money(line)
+        tolerant = False
         if amount is None and (total_like or tender_like):
             amount = parse_money_tolerant(line)
+            tolerant = amount is not None
         if amount is None:
             continue
         if re.search(r"\bsub\s*total\b", line, re.I):
@@ -320,14 +322,27 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
             continue
         if total_like:
             if not re.search(r"\b(?:tax|items?|savings?|discount|points?)\b", line, re.I):
-                total_candidates.append(amount)
+                total_candidates.append((amount, tolerant))
                 continue
         if tender_like:
-            tender_candidates.append(amount)
+            tender_candidates.append((amount, tolerant))
+
     if total_candidates:
-        total = total_candidates[-1]
+        total, total_tolerant = total_candidates[-1]
+        if tender_candidates:
+            tender, tender_tolerant = tender_candidates[-1]
+            # OCR can inject an extra leading digit into a damaged TOTAL line
+            # (e.g. "TOTAE P2229 .02") while the payment/tender line remains
+            # clean ("MasterCard TENDER $229 .02"). Prefer corroborating tender
+            # when the total came from tolerant parsing and is wildly larger.
+            if total_tolerant and tender != 0 and abs(total) > abs(tender) * 2:
+                total = tender
+            # Prefer an exact tender over a tolerant total when they agree to
+            # within ordinary OCR punctuation noise.
+            elif total_tolerant and not tender_tolerant and abs(abs(total) - abs(tender)) <= 1.0:
+                total = tender
     elif tender_candidates:
-        total = tender_candidates[-1]
+        total = tender_candidates[-1][0]
     return subtotal, tax, total
 
 
