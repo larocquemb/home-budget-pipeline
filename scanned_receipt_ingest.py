@@ -7,7 +7,7 @@ KAN-76 design goals:
 - remove repeated OCR lines at adjacent page boundaries
 - extract common receipt fields without assuming one merchant
 - write budget.expenses + budget.expense_items idempotently
-- assign extraction confidence/status and review reasons so weak scans can be reviewed
+- assign extraction confidence/status so weak scans can be reviewed
 
 OCR is deliberately local: Tesseract is invoked only when a PDF has no useful text layer.
 The raw OCR text and page text are retained in raw_payload for later reprocessing.
@@ -41,7 +41,7 @@ TOTAL_WORDS = re.compile(r"\b(total|subtotal|tax|gst|pst|hst|balance|tender|chan
 NON_ITEM_WORDS = re.compile(r"\b(thank|visa|mastercard|debit|credit|approved|cashier|store|points?)\b", re.I)
 
 MERCHANT_ALIASES = (
-    (re.compile(r"canad\w*\s+tire", re.I), "Canadian Tire"),
+    (re.compile(r"canad(?:ian|\s*tan|\w*)?\s+tire", re.I), "Canadian Tire"),
     (re.compile(r"(?:t|i|ti|im|tin|tim)\w*\s+hortons", re.I), "Tim Hortons"),
     (re.compile(r"wholesale", re.I), "Wholesale Club"),
     (re.compile(r"shoppers", re.I), "Shoppers Drug Mart"),
@@ -220,7 +220,6 @@ def normalize_merchant(raw: Optional[str]) -> Optional[str]:
         if pattern.search(line):
             if replacement is not None:
                 return replacement
-            # Preserve useful Sobeys location text while cleaning punctuation.
             return re.sub(r"^.*?sobeys", "Sobeys", line, flags=re.I)
     return line or None
 
@@ -253,8 +252,6 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
             if not re.search(r"\b(?:tax|items?|savings?|discount)\b", line, re.I):
                 total_candidates.append(amount)
     if total_candidates:
-        # Receipt bottoms can repeat totals on payment/tender lines. The last explicit
-        # total-like line is normally the final charged amount.
         total = total_candidates[-1]
     return subtotal, tax, total
 
@@ -290,21 +287,14 @@ def confidence_for(receipt: ScannedReceipt) -> float:
     return round(score, 4)
 
 
-def useful_ocr_chars(text: str) -> int:
-    return len(re.findall(r"[A-Za-z0-9]", text))
-
-
 def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
+    if not receipt.text.strip() or (not receipt.items and receipt.total is None and receipt.extraction_confidence <= 0.15):
+        return ["unreadable_ocr"]
     reasons: List[str] = []
-    if useful_ocr_chars(receipt.text) < 8:
-        reasons.append("unreadable_ocr")
-        return reasons
     if not receipt.merchant:
         reasons.append("missing_merchant")
     if not receipt.transaction_date:
         reasons.append("missing_date")
-    if not receipt.receipt_id:
-        reasons.append("missing_receipt_id")
     if receipt.total is None:
         reasons.append("missing_total")
     if not receipt.items:
@@ -315,9 +305,10 @@ def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
 
 
 def status_for(receipt: ScannedReceipt) -> str:
-    if useful_ocr_chars(receipt.text) < 8:
+    reasons = review_reasons_for(receipt)
+    if reasons == ["unreadable_ocr"]:
         return "unreadable"
-    if receipt.total is None or not receipt.items or receipt.extraction_confidence < 0.65:
+    if reasons:
         return "review"
     return "complete"
 
@@ -337,8 +328,8 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
         items=extract_items(text), page_text=list(pages), text=text,
     )
     receipt.extraction_confidence = confidence_for(receipt)
-    receipt.extraction_status = status_for(receipt)
     receipt.review_reasons = review_reasons_for(receipt)
+    receipt.extraction_status = status_for(receipt)
     return receipt
 
 
@@ -360,9 +351,9 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
         "source_reference": receipt.source_reference,
         "source_sha256": receipt.source_sha256,
         "receipt_id": receipt.receipt_id,
+        "review_reasons": receipt.review_reasons,
         "page_text": receipt.page_text,
         "ocr_text": receipt.text,
-        "review_reasons": receipt.review_reasons,
     }
     with conn.cursor() as cur:
         cur.execute(
@@ -422,7 +413,7 @@ def print_review(receipts: Sequence[ScannedReceipt]) -> None:
         merchant = r.merchant or "-"
         date = r.transaction_date or "-"
         total = f"{r.total:.2f}" if r.total is not None else "-"
-        reasons = ",".join(r.review_reasons) if r.review_reasons else "-"
+        reasons = ",".join(r.review_reasons) or "-"
         print(
             f"{r.source_reference}  status={r.extraction_status} "
             f"confidence={r.extraction_confidence:.2f} merchant={merchant!r} "
