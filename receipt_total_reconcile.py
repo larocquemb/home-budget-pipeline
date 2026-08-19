@@ -16,7 +16,7 @@ SUBTOTAL_RE = re.compile(r"\bsub\s*tot(?:al|ae|fl)?\b", re.I)
 TAX_RE = re.compile(r"\b(?:tax|gst|pst|hst)\b", re.I)
 PERCENT_TAX_RE = re.compile(r"\b(?:5|7|8|12|13|14|15)\s*%\b", re.I)
 TOTAL_CONTEXT_RE = re.compile(
-    r"\b(?:total|tot\s*al|totae|jtal|tender|visa|master\s*card|mastercard|debit|interac)\b",
+    r"\b(?:total|tot\s*al|tot\s*ae|totae|jtal|tender|visa|master\s*card|mastercard|debit|interac)\b",
     re.I,
 )
 
@@ -34,34 +34,44 @@ def _money(line: str) -> Optional[float]:
 def reconcile_total_from_text(text: str, parsed_total: Optional[float]) -> Optional[float]:
     """Return parsed_total or a safely derived subtotal+tax total.
 
-    A derived result requires exactly one readable subtotal line and exactly one
-    readable tax line. Percentage-only tax lines are accepted because OCR often
-    destroys the HST/GST/PST label while preserving the rate and amount. Receipts
-    with multiple independent subtotal/tax sections remain unresolved.
+    A derived result requires exactly one readable subtotal line. Its tax must
+    appear in the immediately following receipt block, which avoids unrelated
+    percentage/discount lines elsewhere in the receipt. Receipts with multiple
+    subtotal sections remain unresolved because those may be category subtotals.
     """
     if parsed_total is not None:
         return parsed_total
     if not TOTAL_CONTEXT_RE.search(text):
         return None
 
-    subtotals = []
-    taxes = []
-    for raw in text.splitlines():
-        line = re.sub(r"\s+", " ", raw).strip()
+    lines = [re.sub(r"\s+", " ", raw).strip() for raw in text.splitlines()]
+    subtotal_rows = []
+    for idx, line in enumerate(lines):
+        if not SUBTOTAL_RE.search(line):
+            continue
+        amount = _money(line)
+        if amount is not None:
+            subtotal_rows.append((idx, amount))
+
+    # Multiple subtotals may deliberately delineate categories at checkout.
+    if len(subtotal_rows) != 1:
+        return None
+
+    subtotal_idx, subtotal = subtotal_rows[0]
+    tax_candidates = []
+    # Tax normally follows subtotal immediately. Five lines accommodates noisy
+    # OCR while still keeping the inference local to the subtotal block.
+    for line in lines[subtotal_idx + 1 : subtotal_idx + 6]:
         amount = _money(line)
         if amount is None:
             continue
-        if SUBTOTAL_RE.search(line):
-            subtotals.append(amount)
-            continue
-        if (TAX_RE.search(line) or PERCENT_TAX_RE.search(line)) and not SUBTOTAL_RE.search(line):
-            taxes.append(amount)
+        if TAX_RE.search(line) or PERCENT_TAX_RE.search(line):
+            tax_candidates.append(amount)
 
-    if len(subtotals) != 1 or len(taxes) != 1:
+    if len(tax_candidates) != 1:
         return None
 
-    subtotal = subtotals[0]
-    tax = taxes[0]
+    tax = tax_candidates[0]
     if subtotal < 0 or tax < 0:
         return None
     return round(subtotal + tax, 2)
