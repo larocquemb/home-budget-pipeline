@@ -8,6 +8,7 @@ KAN-76 design goals:
 - extract common receipt fields without assuming one merchant
 - write budget.expenses + budget.expense_items idempotently
 - assign extraction confidence/status so weak scans can be reviewed
+- retain payment method/card provenance and resolve payer from time-bounded DB data
 
 OCR is deliberately local: Tesseract is invoked only when a PDF has no useful text layer.
 The raw OCR text and page text are retained in raw_payload for later reprocessing.
@@ -27,6 +28,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
+
+from payment_card_lookup import resolve_owner_from_db
+from receipt_payment import extract_payment_provenance
 
 SUPPORTED_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff"}
 MONEY_RE = re.compile(r"-?\$?\s*(\d{1,6}(?:,\d{3})*\.\d{2})-?")
@@ -83,6 +87,9 @@ class ScannedReceipt:
     subtotal: Optional[float]
     tax: Optional[float]
     total: Optional[float]
+    payment_method: Optional[str] = None
+    card_last4: Optional[str] = None
+    payer: Optional[str] = None
     items: List[ScannedItem] = field(default_factory=list)
     page_text: List[str] = field(default_factory=list)
     text: str = ""
@@ -366,6 +373,7 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
     pages = extract_page_text(path)
     text = merge_page_text(pages)
     subtotal, tax, total = extract_totals(text)
+    payment = extract_payment_provenance(text)
     try:
         reference = str(path.relative_to(source_root)) if source_root and source_root.is_dir() else path.name
     except ValueError:
@@ -374,6 +382,7 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
         path=str(path), source_reference=reference, source_sha256=sha256_file(path),
         merchant=extract_merchant(text), transaction_date=extract_date(text),
         receipt_id=extract_receipt_id(text), subtotal=subtotal, tax=tax, total=total,
+        payment_method=payment.payment_method, card_last4=payment.card_last4,
         items=extract_items(text), page_text=list(pages), text=text,
     )
     receipt.extraction_confidence = confidence_for(receipt)
@@ -396,10 +405,19 @@ def _db_connect(dsn: str):
 def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
         raise ValueError("invalid database schema")
+
+    payment = extract_payment_provenance(receipt.text)
+    receipt.payment_method = payment.payment_method
+    receipt.card_last4 = payment.card_last4
+    receipt.payer = resolve_owner_from_db(conn, payment, receipt.transaction_date, schema)
+
     payload = {
         "source_reference": receipt.source_reference,
         "source_sha256": receipt.source_sha256,
         "receipt_id": receipt.receipt_id,
+        "payment_method": receipt.payment_method,
+        "card_last4": receipt.card_last4,
+        "payer": receipt.payer,
         "page_text": receipt.page_text,
         "ocr_text": receipt.text,
         "review_reasons": receipt.review_reasons,
@@ -411,8 +429,8 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                 source, order_id, receipt_filename, source_reference, source_sha256,
                 order_date, store_name, receipt_item_subtotal, receipt_gst,
                 receipt_total_charged, expense_total, extraction_status,
-                extraction_confidence, raw_payload
-            ) VALUES ('scanned', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                extraction_confidence, payment_method, card_last4, payer, raw_payload
+            ) VALUES ('scanned', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source, order_id) DO UPDATE SET
                 receipt_filename = EXCLUDED.receipt_filename,
                 source_reference = EXCLUDED.source_reference,
@@ -425,13 +443,17 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                 expense_total = EXCLUDED.expense_total,
                 extraction_status = EXCLUDED.extraction_status,
                 extraction_confidence = EXCLUDED.extraction_confidence,
+                payment_method = EXCLUDED.payment_method,
+                card_last4 = EXCLUDED.card_last4,
+                payer = EXCLUDED.payer,
                 raw_payload = EXCLUDED.raw_payload
             RETURNING id
             """,
             (receipt.canonical_order_id, Path(receipt.path).name, receipt.source_reference,
              receipt.source_sha256, receipt.transaction_date, receipt.merchant, receipt.subtotal,
              receipt.tax or 0, receipt.total, receipt.total, receipt.extraction_status,
-             receipt.extraction_confidence, json.dumps(payload)),
+             receipt.extraction_confidence, receipt.payment_method, receipt.card_last4,
+             receipt.payer, json.dumps(payload)),
         )
         expense_pk = int(cur.fetchone()[0])
         cur.execute(f"DELETE FROM {schema}.expense_items WHERE expense_pk = %s", (expense_pk,))
@@ -463,10 +485,14 @@ def print_review(receipts: Sequence[ScannedReceipt]) -> None:
         date = r.transaction_date or "-"
         total = f"{r.total:.2f}" if r.total is not None else "-"
         reasons = ",".join(r.review_reasons) or "-"
+        payment = r.payment_method or "-"
+        card = r.card_last4 or "-"
+        payer = r.payer or "-"
         print(
             f"{r.source_reference}  status={r.extraction_status} "
             f"confidence={r.extraction_confidence:.2f} merchant={merchant!r} "
-            f"date={date} total={total} items={len(r.items)} reasons={reasons}"
+            f"date={date} total={total} items={len(r.items)} "
+            f"payment={payment} card={card} payer={payer} reasons={reasons}"
         )
 
 
