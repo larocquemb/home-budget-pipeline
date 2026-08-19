@@ -7,7 +7,7 @@ KAN-76 design goals:
 - remove repeated OCR lines at adjacent page boundaries
 - extract common receipt fields without assuming one merchant
 - write budget.expenses + budget.expense_items idempotently
-- assign extraction confidence/status so weak scans can be reviewed
+- assign extraction confidence/status and review reasons so weak scans can be reviewed
 
 OCR is deliberately local: Tesseract is invoked only when a PDF has no useful text layer.
 The raw OCR text and page text are retained in raw_payload for later reprocessing.
@@ -37,8 +37,18 @@ DATE_PATTERNS = (
 ID_PATTERNS = (
     re.compile(r"\b(?:receipt|transaction|trans|order|invoice)\s*(?:#|no\.?|number|id)?\s*[:#-]?\s*([A-Z0-9-]{4,})\b", re.I),
 )
-TOTAL_WORDS = re.compile(r"\b(total|subtotal|tax|gst|pst|hst|balance|tender|change)\b", re.I)
+TOTAL_WORDS = re.compile(r"\b(total|subtotal|tax|gst|pst|hst|balance|tender|change|amount\s+due)\b", re.I)
 NON_ITEM_WORDS = re.compile(r"\b(thank|visa|mastercard|debit|credit|approved|cashier|store|points?)\b", re.I)
+
+MERCHANT_ALIASES = (
+    (re.compile(r"canad\w*\s+tire", re.I), "Canadian Tire"),
+    (re.compile(r"(?:t|i|ti|im|tin|tim)\w*\s+hortons", re.I), "Tim Hortons"),
+    (re.compile(r"wholesale", re.I), "Wholesale Club"),
+    (re.compile(r"shoppers", re.I), "Shoppers Drug Mart"),
+    (re.compile(r"best\s+buy", re.I), "Best Buy"),
+    (re.compile(r"walmart", re.I), "Walmart"),
+    (re.compile(r"sobeys", re.I), None),
+)
 
 
 @dataclass
@@ -63,6 +73,7 @@ class ScannedReceipt:
     text: str = ""
     extraction_confidence: float = 0.0
     extraction_status: str = "review"
+    review_reasons: List[str] = field(default_factory=list)
 
     @property
     def canonical_order_id(self) -> str:
@@ -201,29 +212,50 @@ def extract_receipt_id(text: str) -> Optional[str]:
     return None
 
 
+def normalize_merchant(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    line = normalize_line(raw).strip("-_=|.,:; ")
+    for pattern, replacement in MERCHANT_ALIASES:
+        if pattern.search(line):
+            if replacement is not None:
+                return replacement
+            # Preserve useful Sobeys location text while cleaning punctuation.
+            return re.sub(r"^.*?sobeys", "Sobeys", line, flags=re.I)
+    return line or None
+
+
 def extract_merchant(text: str) -> Optional[str]:
     for raw in text.splitlines()[:12]:
         line = normalize_line(raw)
         if not line or MONEY_RE.search(line) or len(line) > 70:
             continue
-        if re.search(r"[A-Za-z]{3}", line) and not re.search(r"\b(receipt|invoice|date|tel|phone)\b", line, re.I):
-            return line
+        if re.search(r"[A-Za-z]{3}", line) and not re.search(r"\b(receipt|invoice|date|tel|phone|transaction\s+record)\b", line, re.I):
+            return normalize_merchant(line)
     return None
 
 
 def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     subtotal = tax = total = None
+    total_candidates: List[float] = []
     for raw in text.splitlines():
         line = normalize_line(raw)
         amount = parse_money(line)
         if amount is None:
             continue
-        if re.search(r"\bsubtotal\b", line, re.I):
+        if re.search(r"\bsub\s*total\b", line, re.I):
             subtotal = amount
-        elif re.search(r"\b(?:total\s+tax|tax|gst|pst|hst)\b", line, re.I):
+            continue
+        if re.search(r"\b(?:total\s+tax|tax|gst|pst|hst)\b", line, re.I):
             tax = (tax or 0.0) + amount
-        elif re.search(r"^\s*(?:grand\s+)?total\b", line, re.I):
-            total = amount
+            continue
+        if re.search(r"\b(?:grand\s+total|purchase\s+total|amount\s+due|balance\s+due|total\s+due|total)\b", line, re.I):
+            if not re.search(r"\b(?:tax|items?|savings?|discount)\b", line, re.I):
+                total_candidates.append(amount)
+    if total_candidates:
+        # Receipt bottoms can repeat totals on payment/tender lines. The last explicit
+        # total-like line is normally the final charged amount.
+        total = total_candidates[-1]
     return subtotal, tax, total
 
 
@@ -258,8 +290,32 @@ def confidence_for(receipt: ScannedReceipt) -> float:
     return round(score, 4)
 
 
+def useful_ocr_chars(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9]", text))
+
+
+def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
+    reasons: List[str] = []
+    if useful_ocr_chars(receipt.text) < 8:
+        reasons.append("unreadable_ocr")
+        return reasons
+    if not receipt.merchant:
+        reasons.append("missing_merchant")
+    if not receipt.transaction_date:
+        reasons.append("missing_date")
+    if not receipt.receipt_id:
+        reasons.append("missing_receipt_id")
+    if receipt.total is None:
+        reasons.append("missing_total")
+    if not receipt.items:
+        reasons.append("missing_items")
+    if receipt.extraction_confidence < 0.65:
+        reasons.append("low_confidence")
+    return reasons
+
+
 def status_for(receipt: ScannedReceipt) -> str:
-    if not receipt.text.strip():
+    if useful_ocr_chars(receipt.text) < 8:
         return "unreadable"
     if receipt.total is None or not receipt.items or receipt.extraction_confidence < 0.65:
         return "review"
@@ -282,6 +338,7 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
     )
     receipt.extraction_confidence = confidence_for(receipt)
     receipt.extraction_status = status_for(receipt)
+    receipt.review_reasons = review_reasons_for(receipt)
     return receipt
 
 
@@ -300,8 +357,12 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
         raise ValueError("invalid database schema")
     payload = {
-        "source_reference": receipt.source_reference, "source_sha256": receipt.source_sha256,
-        "receipt_id": receipt.receipt_id, "page_text": receipt.page_text, "ocr_text": receipt.text,
+        "source_reference": receipt.source_reference,
+        "source_sha256": receipt.source_sha256,
+        "receipt_id": receipt.receipt_id,
+        "page_text": receipt.page_text,
+        "ocr_text": receipt.text,
+        "review_reasons": receipt.review_reasons,
     }
     with conn.cursor() as cur:
         cur.execute(
@@ -361,10 +422,11 @@ def print_review(receipts: Sequence[ScannedReceipt]) -> None:
         merchant = r.merchant or "-"
         date = r.transaction_date or "-"
         total = f"{r.total:.2f}" if r.total is not None else "-"
+        reasons = ",".join(r.review_reasons) if r.review_reasons else "-"
         print(
             f"{r.source_reference}  status={r.extraction_status} "
             f"confidence={r.extraction_confidence:.2f} merchant={merchant!r} "
-            f"date={date} total={total} items={len(r.items)}"
+            f"date={date} total={total} items={len(r.items)} reasons={reasons}"
         )
 
 
