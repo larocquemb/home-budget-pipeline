@@ -57,7 +57,7 @@ TOTAL 11.48
         self.assertEqual(scan.normalize_merchant("SHOPPERS &"), "Shoppers Drug Mart")
         self.assertEqual(scan.normalize_merchant("Sobeys Sage Creek"), "Sobeys Sage Creek")
 
-    def test_review_reasons_identify_missing_fields(self):
+    def test_review_reasons_identify_missing_required_fields(self):
         receipt = scan.ScannedReceipt(
             path="receipt.pdf", source_reference="receipt.pdf", source_sha256="abc",
             merchant="Sobeys", transaction_date=None, receipt_id=None,
@@ -67,7 +67,7 @@ TOTAL 11.48
         reasons = scan.review_reasons_for(receipt)
         self.assertIn("missing_date", reasons)
         self.assertIn("missing_total", reasons)
-        self.assertIn("missing_receipt_id", reasons)
+        self.assertNotIn("missing_receipt_id", reasons)
 
     def test_effectively_empty_ocr_is_unreadable(self):
         receipt = scan.ScannedReceipt(
