@@ -21,6 +21,14 @@ PAYMENT_LINE_RE = re.compile(
     re.I,
 )
 
+DATE_LINE_RE = re.compile(
+    r"(?:\bdate\b|\btime\b|\b20\d{2}\b|\b\d{1,2}[/-]\d{1,2}[/-](?:\d{2}|20\d{2})\b|"
+    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|"
+    r"\b\d{1,2}\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{2,4}\b|"
+    r"\b20\d{6}\b)",
+    re.I,
+)
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Analyze a scanned receipt extraction report.")
@@ -37,6 +45,16 @@ def parse_args() -> argparse.Namespace:
         "--missing-card-last4",
         action="store_true",
         help="With --payment-lines, limit output to receipts where a payment method was detected but card_last4 was not.",
+    )
+    p.add_argument(
+        "--date-lines",
+        action="store_true",
+        help="Show OCR lines likely to contain receipt dates/times.",
+    )
+    p.add_argument(
+        "--missing-date",
+        action="store_true",
+        help="With --date-lines, limit output to receipts where transaction_date was not extracted.",
     )
     return p.parse_args()
 
@@ -118,6 +136,38 @@ def print_payment_lines(data: dict, limit: int, missing_card_last4: bool) -> Non
             print(line)
 
 
+def print_date_lines(data: dict, limit: int, missing_date: bool) -> None:
+    if limit <= 0:
+        return
+
+    matches = []
+    for receipt in data.get("receipts", []):
+        transaction_date = receipt.get("transaction_date")
+        if missing_date and transaction_date:
+            continue
+        lines = [
+            line.strip()
+            for line in str(receipt.get("text", "")).splitlines()
+            if DATE_LINE_RE.search(line)
+        ]
+        if lines:
+            matches.append((receipt, lines))
+
+    qualifier = " with missing transaction_date" if missing_date else ""
+    print(f"\nDate OCR samples{qualifier}: {len(matches)} matching receipts")
+    for receipt, lines in matches[:limit]:
+        print("\n" + "=" * 80)
+        print(receipt.get("source_reference", "<unknown>"))
+        print(
+            f"date={receipt.get('transaction_date') or '-'} "
+            f"merchant={receipt.get('merchant')!r} "
+            f"total={receipt.get('total') if receipt.get('total') is not None else '-'}"
+        )
+        print("-" * 80)
+        for line in lines:
+            print(line)
+
+
 def main() -> int:
     args = parse_args()
     path = Path(args.report)
@@ -126,6 +176,8 @@ def main() -> int:
     print_samples(data, args.reason, args.tail_lines, args.limit)
     if args.payment_lines:
         print_payment_lines(data, args.limit, args.missing_card_last4)
+    if args.date_lines:
+        print_date_lines(data, args.limit, args.missing_date)
     return 0
 
 
