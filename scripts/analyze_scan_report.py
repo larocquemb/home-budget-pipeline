@@ -29,6 +29,17 @@ DATE_LINE_RE = re.compile(
     re.I,
 )
 
+TOTAL_LINE_RE = re.compile(
+    r"(?:sub\s*tot|\btotal\b|tot\s*al|tot\s*ae|jtal|tax|gst|pst|hst|tender|amount|change)",
+    re.I,
+)
+
+ANNOTATION_LINE_RE = re.compile(
+    r"(?:owes|grocery|groceries|health|fitness|clothing|house|home|gift|birthday|"
+    r"category|subtotal|bottom\s+of\s+basket|pre[- ]?scan|\bCR\b|\bLF\b)",
+    re.I,
+)
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Analyze a scanned receipt extraction report.")
@@ -55,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         "--missing-date",
         action="store_true",
         help="With --date-lines, limit output to receipts where transaction_date was not extracted.",
+    )
+    p.add_argument(
+        "--remaining-evidence",
+        action="store_true",
+        help="Show compact date/payment/total/annotation evidence for all receipts still in review.",
     )
     return p.parse_args()
 
@@ -168,6 +184,44 @@ def print_date_lines(data: dict, limit: int, missing_date: bool) -> None:
             print(line)
 
 
+def print_remaining_evidence(data: dict, limit: int) -> None:
+    receipts = [
+        r for r in data.get("receipts", [])
+        if r.get("extraction_status") == "review"
+    ]
+    print(f"\nCompact evidence for remaining review receipts: {len(receipts)}")
+    for receipt in receipts[: max(0, limit)]:
+        print("\n" + "=" * 80)
+        print(receipt.get("source_reference", "<unknown>"))
+        print(
+            f"merchant={receipt.get('merchant')!r} "
+            f"datetime={receipt.get('transaction_datetime') or '-'} "
+            f"date={receipt.get('transaction_date') or '-'} "
+            f"total={receipt.get('total') if receipt.get('total') is not None else '-'} "
+            f"payment={receipt.get('payment_method') or '-'} "
+            f"card={receipt.get('card_last4') or '-'} "
+            f"reasons={','.join(receipt.get('review_reasons', []) or []) or '-'}"
+        )
+        print("-" * 80)
+        seen = set()
+        for raw in str(receipt.get("text", "")).splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if not (
+                DATE_LINE_RE.search(line)
+                or PAYMENT_LINE_RE.search(line)
+                or TOTAL_LINE_RE.search(line)
+                or ANNOTATION_LINE_RE.search(line)
+            ):
+                continue
+            key = re.sub(r"\s+", " ", line).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            print(line)
+
+
 def main() -> int:
     args = parse_args()
     path = Path(args.report)
@@ -178,6 +232,8 @@ def main() -> int:
         print_payment_lines(data, args.limit, args.missing_card_last4)
     if args.date_lines:
         print_date_lines(data, args.limit, args.missing_date)
+    if args.remaining_evidence:
+        print_remaining_evidence(data, args.limit)
     return 0
 
 
