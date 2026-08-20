@@ -29,8 +29,7 @@ db = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src"
-}
+package-dir = {"" = "src"}
 # Temporary import bridges for legacy callers. Remove once all internal imports
 # use the home_budget_pipeline package directly.
 py-modules = [
