@@ -8,6 +8,7 @@ resources:
   - ledger-web-service.yaml
   - oauth2-proxy.yaml
   - ledger-ingress.yaml
+  - receipt-processor-cronjob.yaml
 
 images:
   - name: ghcr.io/larocquemb/home-budget-pipeline

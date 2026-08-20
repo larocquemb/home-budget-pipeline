@@ -168,3 +168,13 @@ class LedgerQueryService:
              LIMIT %s OFFSET %s
         """
         return Page(self._fetch(sql, (limit, offset)), limit, offset)
+
+    def receipt_processing_status(self, *, limit: int = 100, offset: int = 0) -> Page:
+        sql = """
+            SELECT source_sha256, source_reference, status, attempts, last_error,
+                   first_attempted_at, last_attempted_at, completed_at, updated_at
+              FROM budget.receipt_processing_status
+             ORDER BY COALESCE(last_attempted_at, updated_at) DESC, source_reference
+             LIMIT %s OFFSET %s
+        """
+        return Page(self._fetch(sql, (limit, offset)), limit, offset)
