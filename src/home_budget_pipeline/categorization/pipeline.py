@@ -1,7 +1,7 @@
 """Canonical line-item category mapping pipeline.
 
 The pipeline deliberately separates category *decisions* from the legacy helpers that
-return a default category.  An item that cannot be categorized deterministically must
+return a default category. An item that cannot be categorized deterministically must
 remain unresolved so it can be sent to AI or human review instead of being silently
 classified as Groceries.
 """
@@ -21,6 +21,7 @@ from .logic import (
     try_exact_keyword_category,
     try_fuzzy_keyword_category,
 )
+from .store import CategoryMappingStore
 
 
 class CategoryProvenance(str, Enum):
@@ -67,10 +68,15 @@ class CategoryMappingPipeline:
         self,
         learned_mappings: Optional[Mapping[str, str]] = None,
         ai_fallback: Optional[AIFallback] = None,
+        mapping_store: Optional[CategoryMappingStore] = None,
     ) -> None:
+        self.mapping_store = mapping_store
+        combined = dict(learned_mappings or {})
+        if mapping_store is not None:
+            combined.update(mapping_store.load_approved_mappings())
         self.learned_mappings = {
             normalize_for_match(key): category
-            for key, raw_category in (learned_mappings or {}).items()
+            for key, raw_category in combined.items()
             if (category := canonicalize_category(raw_category)) in CATEGORY_ORDER
         }
         self.ai_fallback = ai_fallback
@@ -159,14 +165,31 @@ class CategoryMappingPipeline:
             requires_review=True,
         )
 
-    def approve_mapping(self, description: str, category: str) -> CategoryDecision:
-        """Apply a human correction and retain it for subsequent decisions in this run."""
+    def approve_mapping(
+        self,
+        description: str,
+        category: str,
+        *,
+        source: Optional[str] = None,
+        merchant: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> CategoryDecision:
+        """Apply a human correction and persist it for future pipeline runs."""
         normalized = normalize_for_match(description)
         canonical = canonicalize_category(category)
         if not normalized:
             raise ValueError("description must not normalize to an empty value")
         if canonical not in CATEGORY_ORDER:
             raise ValueError(f"invalid category: {category}")
+
+        if self.mapping_store is not None:
+            self.mapping_store.save_approved_mapping(
+                description,
+                canonical,
+                source=source,
+                merchant=merchant,
+                notes=notes,
+            )
         self.learned_mappings[normalized] = canonical
         return CategoryDecision(
             category=canonical,
