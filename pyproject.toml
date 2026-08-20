@@ -14,6 +14,9 @@ dependencies = [
     "Pillow>=10",
 ]
 
+[project.scripts]
+home-budget-scan = "home_budget_pipeline.receipts.parallel_ingest:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
@@ -24,6 +27,8 @@ db = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+# Temporary import bridges for legacy callers. Remove once all internal imports
+# use the home_budget_pipeline package directly.
 py-modules = [
     "scanned_receipt_ingest",
     "receipt_datetime",
@@ -31,6 +36,8 @@ py-modules = [
     "receipt_payment",
     "payment_card_lookup",
     "receipt_total_reconcile",
+    "budget_category_logic",
+    "budget_category_ai",
 ]
 
 [tool.setuptools.packages.find]
