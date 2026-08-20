@@ -51,10 +51,8 @@ spec:
             - --cookie-secure=true
             - --cookie-samesite=lax
             - --cookie-path=/ledger
+            - --session-cookie-minimal=true
             - --set-xauthrequest=true
-            - --pass-access-token=true
-            - --pass-authorization-header=true
-            - --set-authorization-header=true
           readinessProbe:
             httpGet:
               path: /ping
