@@ -8,3 +8,7 @@ resources:
   - ledger-web-service.yaml
   - oauth2-proxy.yaml
   - ledger-ingress.yaml
+
+images:
+  - name: ghcr.io/larocquemb/home-budget-pipeline
+    newTag: 818787947aab57ee3ef0df66f3756a20f305d6e3
