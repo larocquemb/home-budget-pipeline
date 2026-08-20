@@ -12,10 +12,17 @@ dependencies = [
     "pdfplumber>=0.11",
     "pypdfium2>=4.30",
     "Pillow>=10",
+    "fastapi>=0.116",
+    "uvicorn>=0.35",
+    "PyYAML>=6.0",
+    "openai>=1.68",
 ]
 
 [project.scripts]
 home-budget-scan = "home_budget_pipeline.receipts.parallel_ingest:main"
+home-budget-ledger = "home_budget_pipeline.web.app:main"
+home-budget-categorize = "home_budget_pipeline.categorization.command:main"
+home-budget-category-catalog = "home_budget_pipeline.categorization.catalog_config:main"
 
 [project.optional-dependencies]
 dev = [
@@ -27,8 +34,6 @@ db = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-# Temporary import bridges for legacy callers. Remove once all internal imports
-# use the home_budget_pipeline package directly.
 py-modules = [
     "scanned_receipt_ingest",
     "receipt_datetime",

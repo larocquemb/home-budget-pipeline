@@ -1,0 +1,169 @@
+version: 1
+
+groups:
+  - key: mandatory
+    name: Mandatory
+    description: Regular household expenses that generally must be paid.
+    sort_order: 10
+
+  - key: sinking
+    name: Sinking
+    description: Irregular or future expenses funded progressively.
+    sort_order: 20
+
+  - key: discretionary
+    name: Discretionary
+    description: Flexible spending that can be reduced or deferred.
+    sort_order: 30
+
+  - key: investments
+    name: Investments
+    description: Savings, investment, and balance-sheet transactions.
+    sort_order: 40
+
+categories:
+  - name: Car Payment
+    group: mandatory
+    description: Vehicle loan or lease payments.
+  - name: Accounting
+    group: mandatory
+    description: Accounting and tax-preparation services.
+  - name: Bank Fee
+    group: mandatory
+    description: Banking and credit-card fees.
+  - name: Car Repair
+    group: mandatory
+    description: Vehicle maintenance and repairs, including oil changes.
+  - name: Donations
+    group: mandatory
+    description: Charitable and community donations.
+  - name: Emp Reimburse
+    group: mandatory
+    description: Employment-related reimbursements.
+  - name: Fuel
+    group: mandatory
+    description: Vehicle fuel.
+  - name: Furniture / Appliances
+    group: mandatory
+    description: Furniture and household appliances.
+  - name: Groceries
+    group: mandatory
+    description: Food and household grocery purchases; excludes celebration-specific food.
+  - name: Kids Clothing
+    group: mandatory
+    description: Children's clothing and footwear.
+  - name: Kids Sports
+    group: mandatory
+    description: Children's sports and recreation expenses.
+  - name: Student Expense
+    group: mandatory
+    description: School supplies, field trips, school pictures, and student expenses.
+  - name: Home Mortgage
+    group: mandatory
+    description: Regular mortgage payments.
+  - name: Medical ProfSvcs
+    group: mandatory
+    description: Doctor, dentist, optometrist, physiotherapy, and other professional health services.
+  - name: Medical Products
+    group: mandatory
+    description: Prescription drugs, vision products, and over-the-counter medical products.
+  - name: Hydro
+    group: mandatory
+    description: Electric utility charges.
+  - name: Indoor Supplies
+    group: mandatory
+    description: Household cleaning, laundry, hygiene, and consumable indoor supplies.
+  - name: Outdoor Supplies
+    group: mandatory
+    description: Lawn, garden, outdoor maintenance, and seasonal supplies.
+  - name: Subscriptions
+    group: mandatory
+    description: Streaming and online subscription services.
+    aliases:
+      - Online Svcs
+      - Online Services
+  - name: Parking
+    group: mandatory
+    description: Parking fees.
+  - name: Principal Expense
+    group: mandatory
+    description: Work-related or business-principal discretionary expenses.
+  - name: TV
+    group: mandatory
+    description: Television and internet services.
+  - name: Water
+    group: mandatory
+    description: Municipal or utility water charges.
+  - name: Wireless
+    group: mandatory
+    description: Mobile phone service.
+
+  - name: Autopac
+    group: sinking
+    description: Vehicle and trailer insurance.
+  - name: Car Replacement Fund
+    group: sinking
+    description: Savings toward a future vehicle replacement.
+  - name: Home Improvement
+    group: sinking
+    description: Home renovations, improvements, and major repairs.
+  - name: Home Insurance
+    group: sinking
+    description: Home insurance premiums.
+  - name: Lake
+    group: sinking
+    description: null
+  - name: Real Estate Tax
+    group: sinking
+    description: Property taxes.
+  - name: Christmas
+    group: sinking
+    description: Christmas-related expenses.
+  - name: Vacation
+    group: sinking
+    description: Vacation and personal travel expenses.
+
+  - name: Gifts
+    group: discretionary
+    description: Gifts, celebrations, hosting, and special-occasion costs.
+    aliases:
+      - Birthday / Celebrations
+  - name: Clothing
+    group: discretionary
+    description: Adult clothing and footwear.
+  - name: Dining
+    group: discretionary
+    description: Restaurant, takeout, and dining expenses.
+  - name: Fun / Entertainment
+    group: discretionary
+    description: Entertainment, recreation, events, sports, and leisure activities.
+  - name: Misc Household
+    group: discretionary
+    description: General household discretionary expenses not assigned elsewhere.
+    aliases:
+      - Misc Paul & Rox
+  - name: Health & Fitness
+    group: discretionary
+    description: Fitness memberships, apps, equipment, protein products, vitamins, and wellness programs.
+  - name: MLCC
+    group: discretionary
+    description: Alcohol and liquor-store purchases.
+  - name: Cash/Unknown
+    group: discretionary
+    description: Cash withdrawals and transactions requiring classification.
+  - name: Hair/Salon/Body Care
+    group: discretionary
+    description: Hair, salon, spa, cosmetics, and personal-care services.
+
+  - name: Asset Purchase
+    group: investments
+    description: Purchases capitalized as assets.
+  - name: Mortgage PrePayment
+    group: investments
+    description: Additional mortgage principal payments.
+  - name: RRSP
+    group: investments
+    description: Registered retirement savings contributions.
+  - name: TFSA
+    group: investments
+    description: Tax-Free Savings Account contributions.

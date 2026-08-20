@@ -11,7 +11,7 @@ DEFAULT_CATEGORY = 'Groceries'
 CATEGORY_ORDER = [
     'Child Support', 'Autopac', 'Car Payment', 'Car Repair', 'Car Replacement Fund',
     'Real Estate Tax', 'Rental Expenses', 'Cleaning', 'Clothing', 'Debt', 'Dining',
-    'Misc Paul & Rox', 'Medical ProfSvcs', 'University / Books', 'Emergency Fund',
+    'Misc Household', 'Medical ProfSvcs', 'University / Books', 'Emergency Fund',
     'Fuel', 'Fun / Entertainment', 'Furniture / Appliances', 'Birthday / Celebrations',
     'Groceries', 'IncomeTax Due', 'Home Insurance', 'Mortgage PrePayment',
     'Interest Expense', 'Life Insurance', 'Medical Products', 'LTD Insurance',
@@ -84,6 +84,8 @@ CATEGORY_ALIASES = {
     'medical prof services': 'Medical ProfSvcs',
     'cash unknown': 'Cash/Unknown',
     'shareholder loan': 'Shareholder loan',
+    'misc paul rox': 'Misc Household',
+    'misc paul and rox': 'Misc Household',
 }
 
 VERIFIED_CATEGORY_OVERRIDES = {

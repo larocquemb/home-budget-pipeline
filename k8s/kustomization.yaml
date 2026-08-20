@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - storage-pv.yaml
+  - storage-pvc.yaml
+  - postgres.yaml
+  - ledger-web-service.yaml
+  - oauth2-proxy.yaml
+  - ledger-ingress.yaml
+
+images:
+  - name: ghcr.io/larocquemb/home-budget-pipeline
+    newTag: bc68cbf3eddeb7dcbece7d0111e56ae7ddb6266d
