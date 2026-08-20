@@ -138,9 +138,9 @@ instacart_orders_items.xlsx
 costco_receipt_items_categorized.xlsx
 costco_receipts_extracted_categorized/
 
-# Private receipt evidence and generated OCR reports.
-# Source financial documents and derived OCR stay local and are never committed.
-receipts/raw/
+# Runtime receipt evidence lives on external PVE-backed storage.
+# Sanitized test fixtures belong under tests/, not receipts/.
+receipts/
 .ocr_cache/
 scanned_receipts_report.json
 *_scanned_receipts_report.json
