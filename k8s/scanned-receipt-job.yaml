@@ -13,8 +13,8 @@ spec:
       restartPolicy: Never
       containers:
         - name: pipeline
-          image: home-budget-pipeline:kan-79
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/larocquemb/home-budget-pipeline:KAN-79
+          imagePullPolicy: Always
           args:
             - home_budget_pipeline.receipts.parallel_ingest
             - /data/receipts/raw/scanned/inbox
