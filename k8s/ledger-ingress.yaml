@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ledger
+  namespace: home-budget
+  annotations:
+    kubernetes.io/ingress.class: traefik
+spec:
+  rules:
+    - host: idc.brownrook.com
+      http:
+        paths:
+          - path: /ledger
+            pathType: Prefix
+            backend:
+              service:
+                name: ledger-oauth2-proxy
+                port:
+                  number: 4180
