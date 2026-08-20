@@ -44,7 +44,7 @@ spec:
               home-budget-category-catalog \
                 /opt/app-root/src/config/categories.yaml \
                 /schema/002-categories.sql
-              cp /opt/app-root/src/sql/migrations/kan_71_analytics_views.sql \
+              cp /opt/app-root/src/sql/analytics_views.sql \
                 /schema/003-analytics-views.sql
           volumeMounts:
             - name: postgres-init
