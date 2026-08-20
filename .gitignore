@@ -146,3 +146,7 @@ receipts/
 .ocr_cache/
 scanned_receipts_report.json
 *_scanned_receipts_report.json
+
+# Never commit live Kubernetes credentials. Keep only *.example.yaml templates.
+k8s/*-secret.yaml
+k8s/secret.yaml
