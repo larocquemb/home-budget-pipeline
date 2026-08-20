@@ -1,5 +1,10 @@
 from pathlib import Path
 
+from home_budget_pipeline.categorization.catalog import (
+    CATEGORY_ORDER,
+    VALID_CATEGORIES,
+    canonicalize_category,
+)
 from home_budget_pipeline.categorization.catalog_config import load_catalog, render_catalog_sql
 
 
@@ -20,6 +25,18 @@ def test_category_catalog_is_valid_and_grouped():
     assert "Birthday / Celebrations" in categories["Gifts"]["aliases"]
     assert categories["Misc Household"]["group"] == "discretionary"
     assert categories["Lake"]["description"] is None
+
+
+def test_runtime_catalog_is_authoritative_and_resolves_legacy_aliases():
+    assert "Subscriptions" in VALID_CATEGORIES
+    assert "Gifts" in VALID_CATEGORIES
+    assert "Online Svcs" not in VALID_CATEGORIES
+    assert "Birthday / Celebrations" not in VALID_CATEGORIES
+    assert "Rental Expenses" not in VALID_CATEGORIES
+    assert canonicalize_category("Online Svcs") == "Subscriptions"
+    assert canonicalize_category("Birthday / Celebrations") == "Gifts"
+    assert canonicalize_category("Misc Paul & Rox") == "Misc Household"
+    assert len(CATEGORY_ORDER) == len(VALID_CATEGORIES)
 
 
 def test_catalog_renders_bootstrap_upserts():
