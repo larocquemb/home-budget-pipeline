@@ -15,18 +15,19 @@ def _path_env(name: str, default: str) -> Path:
 class RuntimePaths:
     """Filesystem paths used by pipeline workloads.
 
-    Receipts are organized by evidence type rather than merchant. Defaults target
-    a container/Kubernetes mount at /data. Local development can point the same
-    variables at a mounted PVE SMB share without changing application code.
+    Receipt storage is organized by data lifecycle first (raw vs derived), then
+    by evidence type (scanned vs electronic). Defaults target a container or
+    Kubernetes mount at /data. Local development can point HOME_BUDGET_DATA_ROOT
+    at the same PVE SMB-backed storage without changing application code.
     """
 
     data_root: Path
     receipt_root: Path
+    raw_receipts: Path
+    scanned_receipts: Path
     scanned_inbox: Path
-    electronic_inbox: Path
-    scanned_archive: Path
-    electronic_archive: Path
-    output_dir: Path
+    electronic_receipts: Path
+    derived_receipts: Path
     ocr_cache: Path
 
     @classmethod
@@ -36,35 +37,43 @@ class RuntimePaths:
             "HOME_BUDGET_RECEIPT_ROOT",
             str(data_root / "receipts"),
         )
+        raw_receipts = _path_env(
+            "HOME_BUDGET_RAW_RECEIPTS",
+            str(receipt_root / "raw"),
+        )
+        scanned_receipts = _path_env(
+            "HOME_BUDGET_SCANNED_RECEIPTS",
+            str(raw_receipts / "scanned"),
+        )
         return cls(
             data_root=data_root,
             receipt_root=receipt_root,
+            raw_receipts=raw_receipts,
+            scanned_receipts=scanned_receipts,
             scanned_inbox=_path_env(
                 "HOME_BUDGET_SCANNED_INBOX",
-                str(receipt_root / "inbox" / "scanned"),
+                str(scanned_receipts / "inbox"),
             ),
-            electronic_inbox=_path_env(
-                "HOME_BUDGET_ELECTRONIC_INBOX",
-                str(receipt_root / "inbox" / "electronic"),
+            electronic_receipts=_path_env(
+                "HOME_BUDGET_ELECTRONIC_RECEIPTS",
+                str(raw_receipts / "electronic"),
             ),
-            scanned_archive=_path_env(
-                "HOME_BUDGET_SCANNED_ARCHIVE",
-                str(receipt_root / "archive" / "scanned"),
+            derived_receipts=_path_env(
+                "HOME_BUDGET_DERIVED_RECEIPTS",
+                str(receipt_root / "derived"),
             ),
-            electronic_archive=_path_env(
-                "HOME_BUDGET_ELECTRONIC_ARCHIVE",
-                str(receipt_root / "archive" / "electronic"),
+            ocr_cache=_path_env(
+                "HOME_BUDGET_OCR_CACHE",
+                str(data_root / "cache" / "ocr"),
             ),
-            output_dir=_path_env("HOME_BUDGET_OUTPUT_DIR", str(data_root / "output")),
-            ocr_cache=_path_env("HOME_BUDGET_OCR_CACHE", str(data_root / "cache" / "ocr")),
         )
 
-    def electronic_merchant_archive(self, merchant: str) -> Path:
-        """Return a merchant-specific directory beneath the generic electronic archive."""
+    def electronic_merchant_dir(self, merchant: str) -> Path:
+        """Return a merchant-specific directory under generic electronic evidence."""
         name = merchant.strip().replace("/", "_").replace("\\", "_")
         if not name or name in {".", ".."}:
             raise ValueError("merchant must be a non-empty safe directory name")
-        return self.electronic_archive / name
+        return self.electronic_receipts / name
 
 
 def runtime_paths() -> RuntimePaths:
