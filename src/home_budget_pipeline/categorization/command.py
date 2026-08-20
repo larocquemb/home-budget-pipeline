@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import argparse
 import os
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from .ai_fallback import OpenAICategoryFallback
 from .pipeline import CategoryMappingPipeline
 from .processing import CanonicalExpenseCategorizer, PostgresExpenseCategorizationStore
 from .store import PostgresCategoryMappingStore
+
+
+def resolve_database_dsn(env: Mapping[str, str] | None = None) -> str | None:
+    """Return the configured PostgreSQL DSN.
+
+    HOME_BUDGET_PG_DSN is the canonical application setting. DATABASE_URL is
+    accepted as a compatibility fallback for existing deployments and tooling.
+    """
+    values = os.environ if env is None else env
+    return values.get("HOME_BUDGET_PG_DSN") or values.get("DATABASE_URL")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,17 +30,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", help="receipt source, e.g. costco")
     parser.add_argument("--merchant", help="normalized merchant name")
     parser.add_argument(
+        "--pg-dsn",
         "--database-url",
-        default=os.getenv("DATABASE_URL"),
-        help="PostgreSQL DSN; defaults to DATABASE_URL",
+        dest="pg_dsn",
+        default=resolve_database_dsn(),
+        help=(
+            "PostgreSQL DSN; defaults to HOME_BUDGET_PG_DSN, then DATABASE_URL "
+            "for compatibility"
+        ),
     )
     return parser
 
 
 def run(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if not args.database_url:
-        raise SystemExit("DATABASE_URL or --database-url is required")
+    if not args.pg_dsn:
+        raise SystemExit(
+            "HOME_BUDGET_PG_DSN, DATABASE_URL, or --pg-dsn is required"
+        )
 
     try:
         import psycopg
@@ -39,7 +56,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             "psycopg is required; install the project with the db extra: pip install -e '.[db]'"
         ) from exc
 
-    with psycopg.connect(args.database_url) as connection:
+    with psycopg.connect(args.pg_dsn) as connection:
         mapping_store = PostgresCategoryMappingStore(connection)
         pipeline = CategoryMappingPipeline(
             mapping_store=mapping_store,
