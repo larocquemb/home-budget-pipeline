@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: home-budget-data
+  namespace: home-budget
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: home-budget-data
+  resources:
+    requests:
+      storage: 100Gi
