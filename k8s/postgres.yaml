@@ -48,6 +48,8 @@ spec:
                 /schema/003-analytics-views.sql
               cp /opt/app-root/src/sql/financial_transactions.sql \
                 /schema/004-financial-transactions.sql
+              cp /opt/app-root/src/sql/receipt_deduplication.sql \
+                /schema/005-receipt-deduplication.sql
           volumeMounts:
             - name: postgres-init
               mountPath: /schema
