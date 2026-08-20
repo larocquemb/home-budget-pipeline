@@ -40,6 +40,17 @@ spec:
               value: "8080"
             - name: LEDGER_BASE_PATH
               value: /ledger
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: DATABASE_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-secret
+                  key: api-key
+                  optional: true
           ports:
             - name: http
               containerPort: 8080
