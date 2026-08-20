@@ -1,6 +1,7 @@
-"""Financial transaction import, normalization, ownership, and reconciliation."""
+"""Financial transaction import, normalization, ownership, reconciliation, and integration."""
 
 from .csv_import import FinancialTransaction, TransactionCsvNormalizer, transaction_fingerprint
+from .integration import EnrichmentResult, PostgresTransactionReconciliationStore
 from .ownership import (
     AccountOwnership,
     OwnershipResolution,
@@ -21,6 +22,8 @@ __all__ = [
     "FinancialTransaction",
     "TransactionCsvNormalizer",
     "transaction_fingerprint",
+    "EnrichmentResult",
+    "PostgresTransactionReconciliationStore",
     "AccountOwnership",
     "PaymentCardOwnership",
     "OwnershipResolution",
