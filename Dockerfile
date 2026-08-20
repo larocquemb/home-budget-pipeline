@@ -13,6 +13,7 @@ WORKDIR /opt/app-root/src
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY sql ./sql
+COPY config ./config
 
 RUN python -m pip install --no-cache-dir . \
     && mkdir -p /data \
