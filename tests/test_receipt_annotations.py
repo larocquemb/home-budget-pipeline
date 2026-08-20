@@ -1,6 +1,6 @@
 import unittest
 
-from receipt_annotations import extract_receipt_annotations
+from home_budget_pipeline.receipts.annotations import extract_receipt_annotations
 
 
 class ReceiptAnnotationTests(unittest.TestCase):

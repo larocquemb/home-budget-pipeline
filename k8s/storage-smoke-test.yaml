@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: home-budget-storage-smoke-test
+  namespace: home-budget
+spec:
+  restartPolicy: Never
+  containers:
+    - name: shell
+      image: busybox:1.37
+      command:
+        - sh
+        - -c
+        - |
+          set -eu
+          echo "HOME_BUDGET_DATA_ROOT=$HOME_BUDGET_DATA_ROOT"
+          test -d "$HOME_BUDGET_DATA_ROOT/receipts/raw/scanned/inbox"
+          test -d "$HOME_BUDGET_DATA_ROOT/receipts/raw/electronic"
+          test -d "$HOME_BUDGET_DATA_ROOT/receipts/derived"
+          find "$HOME_BUDGET_DATA_ROOT/receipts" -maxdepth 3 -type d | sort
+      env:
+        - name: HOME_BUDGET_DATA_ROOT
+          value: /data
+      volumeMounts:
+        - name: budget-data
+          mountPath: /data
+  volumes:
+    - name: budget-data
+      persistentVolumeClaim:
+        claimName: home-budget-data

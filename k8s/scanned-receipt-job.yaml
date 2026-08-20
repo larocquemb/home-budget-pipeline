@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: home-budget-scanned-receipts
+  namespace: home-budget
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: home-budget-scanned-receipts
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: pipeline
+          image: ghcr.io/larocquemb/home-budget-pipeline:KAN-79
+          imagePullPolicy: Always
+          args:
+            - home_budget_pipeline.receipts.parallel_ingest
+            - /data/receipts/raw/scanned/inbox
+            - --workers
+            - "2"
+            - --ocr-cache
+            - /data/receipts/derived/ocr-cache
+            - --json
+            - /data/receipts/derived/k3s-scanned-receipts.json
+          env:
+            - name: HOME_BUDGET_DATA_ROOT
+              value: /data
+          volumeMounts:
+            - name: budget-data
+              mountPath: /data
+      volumes:
+        - name: budget-data
+          persistentVolumeClaim:
+            claimName: home-budget-data

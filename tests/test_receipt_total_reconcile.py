@@ -1,6 +1,6 @@
 import unittest
 
-from receipt_total_reconcile import reconcile_total_from_text
+from home_budget_pipeline.receipts.total_reconcile import reconcile_total_from_text
 
 
 class ReceiptTotalReconcileTests(unittest.TestCase):

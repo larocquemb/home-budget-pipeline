@@ -1,6 +1,6 @@
 import unittest
 
-from receipt_datetime import date_part, extract_transaction_datetime
+from home_budget_pipeline.receipts.datetime import date_part, extract_transaction_datetime
 
 
 class ReceiptDatetimeTests(unittest.TestCase):

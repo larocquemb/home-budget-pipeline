@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from receipt_evidence import candidate_score
+from home_budget_pipeline.receipts.evidence import candidate_score
 
 
 class ReceiptEvidenceTests(unittest.TestCase):
