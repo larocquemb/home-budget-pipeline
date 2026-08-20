@@ -31,14 +31,19 @@ spec:
       imagePullSecrets:
         - name: ghcr-secret
       initContainers:
-        - name: stage-db-schema
+        - name: stage-db-bootstrap
           image: ghcr.io/larocquemb/home-budget-pipeline:KAN-68
           imagePullPolicy: Always
           command:
             - /bin/sh
             - -c
           args:
-            - cp /opt/app-root/src/sql/schema_phase1.sql /schema/001-schema.sql
+            - |
+              set -eu
+              cp /opt/app-root/src/sql/schema_phase1.sql /schema/001-schema.sql
+              home-budget-category-catalog \
+                /opt/app-root/src/config/categories.yaml \
+                /schema/002-categories.sql
           volumeMounts:
             - name: postgres-init
               mountPath: /schema
