@@ -374,29 +374,11 @@ Credit cards, prepaid accounts, and bank accounts therefore remain payment sourc
 
 `sql/schema_phase1.sql` is the canonical bootstrap DDL for a fresh Ledger database.
 
-The `/sql` directory intentionally separates schema from reporting queries:
+The `/sql` directory intentionally separates schema from reporting queries.
 
-```text
-sql/
-├── schema_phase1.sql
-└── queries/
-    ├── instacart_items.sql
-    └── instacart_summary.sql
-```
+Household category configuration is **not** embedded in the SQL schema. On a fresh Kubernetes PostgreSQL volume, bootstrap stages the canonical schema, category catalogue, analytics views, financial transactions, and receipt-deduplication DDL.
 
-Household category configuration is **not** embedded in the SQL schema. On a fresh Kubernetes PostgreSQL volume, bootstrap runs in two stages:
-
-```text
-001-schema.sql
-    -> creates the database structure
-
-config/categories.yaml
-    -> category catalogue renderer
-    -> 002-categories.sql
-    -> loads groups, categories, and aliases
-```
-
-During the current pre-production phase, `schema_phase1.sql` represents the desired clean database rather than a long sequence of historical story-specific migrations.
+During the current pre-production phase, the bootstrap SQL represents the desired clean database rather than a long sequence of historical story-specific migrations.
 
 ---
 
@@ -417,22 +399,65 @@ export DATABASE_URL='postgresql://home_budget:...@localhost:5432/home_budget'
 home-budget-categorize 123 --source costco --merchant Costco
 ```
 
-The command prints the number of categorized items, whether review is required, and the resulting category splits.
-
 Avoid placing database passwords directly in shell history where possible.
-
-For standard PostgreSQL tooling, `~/.pgpass` is recommended:
-
-```bash
-cat > ~/.pgpass <<'EOF'
-localhost:5432:home_budget:home_budget:YOUR_PASSWORD
-EOF
-chmod 600 ~/.pgpass
-```
 
 ---
 
-## 11. Kubernetes and GitOps Deployment
+## 11. Ledger Web Application
+
+The read-only Ledger web UI exposes the KAN-71 analytics views and review data from receipt deduplication, transaction reconciliation, and data-quality checks.
+
+The main browser pages include:
+
+```text
+/ledger/expenses
+/ledger/category-spend
+/ledger/review
+/ledger/duplicates
+/ledger/transactions
+/ledger/expenses/<expense_pk>
+/ledger/evidence/<evidence_id>
+```
+
+Receipt evidence pages include a **View receipt** action. PDFs and image files are served inline only when requested. The application resolves `receipt_evidence.source_reference` beneath `RECEIPT_SOURCE_ROOT` and rejects paths that escape that configured root.
+
+### Run locally
+
+Install the database extra and set the PostgreSQL URL:
+
+```bash
+python -m pip install -e '.[db]'
+export DATABASE_URL='postgresql://home_budget:...@localhost:5432/home_budget'
+export LEDGER_BASE_PATH='/ledger'
+export RECEIPT_SOURCE_ROOT='/path/to/receipts/raw/scanned/inbox'
+home-budget-ledger
+```
+
+The browser application normally sits behind oauth2-proxy, which supplies authenticated identity headers. Health endpoints do not require those identity headers:
+
+```text
+/ledger/health   liveness
+/ledger/ready    database-backed readiness
+```
+
+All PostgreSQL sessions used by the query service execute `SET TRANSACTION READ ONLY` before application queries.
+
+### Kubernetes / K3s
+
+`k8s/ledger-web-service.yaml` deploys the web service as a ClusterIP application. It receives `DATABASE_URL` from `postgres-secret`, sets `RECEIPT_SOURCE_ROOT=/data/receipts/raw/scanned/inbox`, and mounts the existing `home-budget-data` PVC at `/data` **read-only**.
+
+The deployment probes are:
+
+```text
+liveness  -> /ledger/health
+readiness -> /ledger/ready
+```
+
+The existing ingress and oauth2-proxy resources continue to provide Microsoft Entra ID browser authentication before traffic reaches the Ledger service.
+
+---
+
+## 12. Kubernetes and GitOps Deployment
 
 Ledger is deployed to K3s using Argo CD.
 
@@ -450,6 +475,7 @@ K3s
     -> Ledger web
     -> oauth2-proxy
     -> PostgreSQL StatefulSet + persistent volume
+    -> receipt data PVC mounted read-only by Ledger web
 ```
 
 A fresh PostgreSQL persistent volume automatically receives the canonical schema and category catalogue during initialization.
@@ -464,7 +490,7 @@ updates the desired Kubernetes resources but does not by itself erase an existin
 
 ---
 
-## 12. Tests
+## 13. Tests
 
 Run the project tests with:
 
@@ -472,21 +498,11 @@ Run the project tests with:
 python -m pytest
 ```
 
-Focused categorization tests include:
-
-```text
-tests/test_category_catalog.py
-tests/test_category_mapping_pipeline.py
-tests/test_canonical_expense_categorization.py
-```
-
-These tests cover catalogue grouping and aliases, deterministic mappings, learned mappings, AI decision handling, unresolved review behaviour, persistence orchestration, and category split aggregation.
-
-Receipt-focused tests cover OCR-derived metadata, receipt evidence, scanned receipt ingestion, receipt annotation handling, payment extraction, date/time extraction, and reconciliation.
+The test suite covers receipt ingestion/OCR, canonical expense construction, categorization, SQL analytics contracts, transaction reconciliation, receipt deduplication, and the read-only web/query layer.
 
 ---
 
-## 13. Current Design Direction
+## 14. Current Design Direction
 
 The intended progression is:
 
@@ -501,4 +517,4 @@ receipt ingestion
     -> Ledger web UI
 ```
 
-The immediate goal of the categorization work is to ensure that one canonical purchase is categorized once at line-item level, with enough provenance and review information to trust the resulting budget splits.
+The immediate web goal is reliable read-only inspection of canonical expenses, evidence, analytics, and review queues before write-capable review workflows are introduced.
