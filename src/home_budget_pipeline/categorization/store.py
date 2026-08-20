@@ -5,12 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional, Protocol
 
-from .logic import CATEGORY_ORDER, canonicalize_category, normalize_for_match
+from .catalog import VALID_CATEGORIES, canonicalize_category
+from .logic import normalize_for_match
 
 
 class CategoryMappingStore(Protocol):
-    """Durable store for human-approved exact product mappings."""
-
     def load_approved_mappings(self) -> Dict[str, str]: ...
 
     def save_approved_mapping(
@@ -26,12 +25,7 @@ class CategoryMappingStore(Protocol):
 
 @dataclass
 class PostgresCategoryMappingStore:
-    """PostgreSQL-backed mapping store using budget.expense_category_mappings.
-
-    ``connection`` is any DB-API compatible psycopg connection.  psycopg is kept in
-    the optional ``db`` dependency so the categorization package remains usable in
-    tests and local tooling without PostgreSQL installed.
-    """
+    """PostgreSQL-backed store for approved exact product mappings."""
 
     connection: object
 
@@ -49,9 +43,9 @@ class PostgresCategoryMappingStore:
         with self.connection.cursor() as cur:
             cur.execute(sql)
             for match_text, raw_category in cur.fetchall():
-                normalized = normalize_for_match(str(match_text or ''))
-                category = canonicalize_category(str(raw_category or ''))
-                if normalized and category in CATEGORY_ORDER:
+                normalized = normalize_for_match(str(match_text or ""))
+                category = canonicalize_category(str(raw_category or ""))
+                if normalized and category in VALID_CATEGORIES:
                     mappings[normalized] = category
         return mappings
 
@@ -67,9 +61,9 @@ class PostgresCategoryMappingStore:
         normalized = normalize_for_match(description)
         canonical = canonicalize_category(category)
         if not normalized:
-            raise ValueError('description must not normalize to an empty value')
-        if canonical not in CATEGORY_ORDER:
-            raise ValueError(f'invalid category: {category}')
+            raise ValueError("description must not normalize to an empty value")
+        if canonical not in VALID_CATEGORIES:
+            raise ValueError(f"invalid category: {category}")
 
         sql = """
             INSERT INTO budget.expense_category_mappings (
