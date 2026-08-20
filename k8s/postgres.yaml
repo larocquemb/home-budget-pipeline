@@ -46,6 +46,8 @@ spec:
                 /schema/002-categories.sql
               cp /opt/app-root/src/sql/analytics_views.sql \
                 /schema/003-analytics-views.sql
+              cp /opt/app-root/src/sql/financial_transactions.sql \
+                /schema/004-financial-transactions.sql
           volumeMounts:
             - name: postgres-init
               mountPath: /schema
