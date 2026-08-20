@@ -1,4 +1,4 @@
-"""Financial transaction import, normalization, and ownership resolution."""
+"""Financial transaction import, normalization, ownership, and reconciliation."""
 
 from .csv_import import FinancialTransaction, TransactionCsvNormalizer, transaction_fingerprint
 from .ownership import (
@@ -6,6 +6,15 @@ from .ownership import (
     OwnershipResolution,
     OwnershipResolver,
     PaymentCardOwnership,
+)
+from .reconciliation import (
+    CandidateScore,
+    MatchCandidate,
+    MatchDecision,
+    MatchOutcome,
+    ReconciliationSummary,
+    TransactionForMatching,
+    TransactionReceiptMatcher,
 )
 
 __all__ = [
@@ -16,4 +25,11 @@ __all__ = [
     "PaymentCardOwnership",
     "OwnershipResolution",
     "OwnershipResolver",
+    "CandidateScore",
+    "MatchCandidate",
+    "MatchDecision",
+    "MatchOutcome",
+    "ReconciliationSummary",
+    "TransactionForMatching",
+    "TransactionReceiptMatcher",
 ]
