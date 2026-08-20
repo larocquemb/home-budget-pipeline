@@ -6,6 +6,7 @@ import argparse
 import os
 from typing import Sequence
 
+from .ai_fallback import OpenAICategoryFallback
 from .pipeline import CategoryMappingPipeline
 from .processing import CanonicalExpenseCategorizer, PostgresExpenseCategorizationStore
 from .store import PostgresCategoryMappingStore
@@ -40,7 +41,10 @@ def run(argv: Sequence[str] | None = None) -> int:
 
     with psycopg.connect(args.database_url) as connection:
         mapping_store = PostgresCategoryMappingStore(connection)
-        pipeline = CategoryMappingPipeline(mapping_store=mapping_store)
+        pipeline = CategoryMappingPipeline(
+            mapping_store=mapping_store,
+            ai_fallback=OpenAICategoryFallback(),
+        )
         item_store = PostgresExpenseCategorizationStore(connection)
         result = CanonicalExpenseCategorizer(pipeline, item_store).categorize_expense(
             args.expense_pk,
