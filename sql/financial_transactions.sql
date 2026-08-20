@@ -42,4 +42,29 @@ CREATE INDEX idx_financial_transactions_account_date
 CREATE INDEX idx_financial_transactions_match
     ON budget.financial_transactions (transaction_date, amount, lower(COALESCE(merchant_text, description)));
 
+CREATE TABLE budget.transaction_expense_reconciliation (
+    transaction_id BIGINT PRIMARY KEY REFERENCES budget.financial_transactions(id) ON DELETE CASCADE,
+    expense_pk BIGINT REFERENCES budget.expenses(id) ON DELETE SET NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('matched', 'ambiguous', 'unmatched')),
+    score INTEGER,
+    candidate_count INTEGER NOT NULL DEFAULT 0,
+    candidate_details JSONB NOT NULL DEFAULT '[]'::jsonb,
+    reconciled_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_transaction_expense_reconciliation_expense
+    ON budget.transaction_expense_reconciliation (expense_pk)
+    WHERE expense_pk IS NOT NULL;
+CREATE INDEX idx_transaction_expense_reconciliation_outcome
+    ON budget.transaction_expense_reconciliation (outcome);
+
+CREATE TABLE budget.expense_transaction_enrichment (
+    expense_pk BIGINT PRIMARY KEY REFERENCES budget.expenses(id) ON DELETE CASCADE,
+    transaction_id BIGINT NOT NULL REFERENCES budget.financial_transactions(id) ON DELETE CASCADE,
+    transaction_datetime_applied BOOLEAN NOT NULL DEFAULT FALSE,
+    payer_applied BOOLEAN NOT NULL DEFAULT FALSE,
+    source_type TEXT NOT NULL DEFAULT 'financial_transaction',
+    enriched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 COMMIT;
