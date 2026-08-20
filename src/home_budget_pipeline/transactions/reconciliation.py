@@ -65,6 +65,7 @@ class ReconciliationSummary:
     matched: int
     ambiguous: int
     unmatched: int
+    duplicate_imports: int = 0
 
 
 class TransactionReceiptMatcher:
@@ -166,7 +167,12 @@ class TransactionReceiptMatcher:
             scored,
         )
 
-    def summarize(self, decisions: Iterable[MatchDecision]) -> ReconciliationSummary:
+    def summarize(
+        self,
+        decisions: Iterable[MatchDecision],
+        *,
+        duplicate_imports: int = 0,
+    ) -> ReconciliationSummary:
         counts = {outcome: 0 for outcome in MatchOutcome}
         for decision in decisions:
             counts[decision.outcome] += 1
@@ -174,6 +180,7 @@ class TransactionReceiptMatcher:
             matched=counts[MatchOutcome.MATCHED],
             ambiguous=counts[MatchOutcome.AMBIGUOUS],
             unmatched=counts[MatchOutcome.UNMATCHED],
+            duplicate_imports=duplicate_imports,
         )
 
     @classmethod
