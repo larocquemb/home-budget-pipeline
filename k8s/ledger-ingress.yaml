@@ -4,8 +4,14 @@ metadata:
   name: ledger
   namespace: home-budget
   annotations:
-    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - idc.brownrook.com
+      secretName: idc-brownrook-com-tls
   rules:
     - host: idc.brownrook.com
       http:
