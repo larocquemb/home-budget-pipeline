@@ -27,6 +27,8 @@ spec:
       labels:
         app: ledger-web
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: ledger-web
           image: ghcr.io/larocquemb/home-budget-pipeline:KAN-68
