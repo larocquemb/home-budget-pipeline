@@ -1,10 +1,35 @@
--- Phase 1 canonical schema for budget ingestion (Costco, Instacart, Sobeys)
--- Apply:
---   psql -d postgres -f sql/schema_phase1.sql
+-- Canonical Phase 1 schema for the home budget pipeline.
+--
+-- This file is the bootstrap schema for a fresh database. While the project is
+-- still pre-production, keep the current canonical model here rather than
+-- accumulating story-specific migrations.
+--
+-- Apply to a fresh database with:
+--   psql -d home_budget -f sql/schema_phase1.sql
 
 BEGIN;
 
 CREATE SCHEMA IF NOT EXISTS budget;
+
+CREATE OR REPLACE FUNCTION budget.set_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$;
+
+-- Vertex budget categories are domain data, not payment accounts.
+CREATE TABLE IF NOT EXISTS budget.expense_categories (
+    id BIGSERIAL PRIMARY KEY,
+    category_name TEXT NOT NULL UNIQUE,
+    notes TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS budget.expenses (
     id BIGSERIAL PRIMARY KEY,
@@ -15,7 +40,7 @@ CREATE TABLE IF NOT EXISTS budget.expenses (
     store_name TEXT,
     order_url TEXT,
 
-    -- Receipt-level amounts
+    -- Receipt-level amounts.
     receipt_item_subtotal NUMERIC(12, 2),
     receipt_discount_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
     receipt_tip NUMERIC(12, 2),
@@ -45,56 +70,10 @@ CREATE TABLE IF NOT EXISTS budget.expenses (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    -- Natural key to support idempotent upsert by source + retailer expense id
+    -- Idempotent source-level ingestion. KAN-77 will link duplicate source
+    -- receipts to one canonical purchase rather than duplicating categorization.
     CONSTRAINT uq_expenses_source_order_id UNIQUE (source, order_id)
 );
-
-ALTER TABLE budget.expenses
-    ADD COLUMN IF NOT EXISTS receipt_filename TEXT;
-
-ALTER TABLE budget.expenses
-    DROP COLUMN IF EXISTS costco_order_id;
-
-ALTER TABLE budget.expenses
-    ADD COLUMN IF NOT EXISTS total_recon_diff NUMERIC(12, 2) GENERATED ALWAYS AS (
-        COALESCE(receipt_item_subtotal, 0)
-        + COALESCE(receipt_discount_total, 0)
-        + COALESCE(receipt_tip, 0)
-        + COALESCE(receipt_service_fee, 0)
-        + COALESCE(receipt_recycling_fee, 0)
-        + COALESCE(receipt_service_fee_tax, 0)
-        + COALESCE(receipt_gst, 0)
-        + COALESCE(receipt_pst, 0)
-        - COALESCE(expense_total, 0)
-    ) STORED;
-
-ALTER TABLE budget.expenses
-    ALTER COLUMN receipt_discount_total SET DEFAULT 0,
-    ALTER COLUMN receipt_recycling_fee SET DEFAULT 0,
-    ALTER COLUMN receipt_service_fee_tax SET DEFAULT 0,
-    ALTER COLUMN receipt_gst SET DEFAULT 0,
-    ALTER COLUMN receipt_pst SET DEFAULT 0;
-
-UPDATE budget.expenses
-SET
-    receipt_discount_total = COALESCE(receipt_discount_total, 0),
-    receipt_recycling_fee = COALESCE(receipt_recycling_fee, 0),
-    receipt_service_fee_tax = COALESCE(receipt_service_fee_tax, 0),
-    receipt_gst = COALESCE(receipt_gst, 0),
-    receipt_pst = COALESCE(receipt_pst, 0)
-WHERE
-    receipt_discount_total IS NULL
-    OR receipt_recycling_fee IS NULL
-    OR receipt_service_fee_tax IS NULL
-    OR receipt_gst IS NULL
-    OR receipt_pst IS NULL;
-
-ALTER TABLE budget.expenses
-    ALTER COLUMN receipt_discount_total SET NOT NULL,
-    ALTER COLUMN receipt_recycling_fee SET NOT NULL,
-    ALTER COLUMN receipt_service_fee_tax SET NOT NULL,
-    ALTER COLUMN receipt_gst SET NOT NULL,
-    ALTER COLUMN receipt_pst SET NOT NULL;
 
 CREATE TABLE IF NOT EXISTS budget.expense_items (
     id BIGSERIAL PRIMARY KEY,
@@ -104,14 +83,26 @@ CREATE TABLE IF NOT EXISTS budget.expense_items (
     item_name_norm TEXT GENERATED ALWAYS AS (lower(trim(item_name))) STORED,
     tax_code TEXT,
 
-    budget_category TEXT,
-    category_source TEXT,
+    -- KAN-68 category decision and audit trail.
+    budget_category TEXT REFERENCES budget.expense_categories(category_name),
+    category_source TEXT CHECK (
+        category_source IS NULL OR category_source IN (
+            'rule', 'learned_mapping', 'ai', 'manual', 'unresolved'
+        )
+    ),
+    category_confidence NUMERIC(5, 4) CHECK (
+        category_confidence IS NULL
+        OR (category_confidence >= 0 AND category_confidence <= 1)
+    ),
+    category_rationale TEXT,
+    category_requires_review BOOLEAN NOT NULL DEFAULT FALSE,
+    categorized_at TIMESTAMPTZ,
 
-    -- Count-based items
+    -- Count-based items.
     unit_qty NUMERIC(12, 3),
     unit_cost NUMERIC(12, 2),
 
-    -- Weighted items
+    -- Weighted items.
     weight_qty NUMERIC(12, 3),
     weight_unit TEXT,
 
@@ -122,8 +113,25 @@ CREATE TABLE IF NOT EXISTS budget.expense_items (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE budget.expense_items
-    ADD COLUMN IF NOT EXISTS tax_code TEXT;
+-- Reusable deterministic / learned mappings. AI decisions belong on individual
+-- expense_items; only approved corrections become reusable mappings.
+CREATE TABLE IF NOT EXISTS budget.expense_category_mappings (
+    id BIGSERIAL PRIMARY KEY,
+    source TEXT,
+    merchant TEXT,
+    match_type TEXT NOT NULL DEFAULT 'contains'
+        CHECK (match_type IN ('exact', 'contains')),
+    match_text TEXT NOT NULL,
+    category_name TEXT NOT NULL REFERENCES budget.expense_categories(category_name),
+    priority INTEGER NOT NULL DEFAULT 100,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    provenance TEXT NOT NULL DEFAULT 'rule'
+        CHECK (provenance IN ('rule', 'learned_mapping', 'manual')),
+    is_approved BOOLEAN NOT NULL DEFAULT FALSE,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE INDEX IF NOT EXISTS idx_expenses_source_date
     ON budget.expenses (source, order_date DESC);
@@ -137,11 +145,14 @@ CREATE INDEX IF NOT EXISTS idx_expense_items_expense_pk
 CREATE INDEX IF NOT EXISTS idx_expense_items_category
     ON budget.expense_items (budget_category);
 
+CREATE INDEX IF NOT EXISTS idx_expense_items_review
+    ON budget.expense_items (category_requires_review)
+    WHERE category_requires_review = TRUE;
+
 CREATE INDEX IF NOT EXISTS idx_expense_items_name_norm
     ON budget.expense_items (item_name_norm);
 
--- Natural key for idempotent upsert at item level.
--- Use a UNIQUE INDEX (not UNIQUE CONSTRAINT) because expression keys are needed.
+-- Natural key for idempotent line-item ingestion.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_items_natural
     ON budget.expense_items (
         expense_pk,
@@ -153,15 +164,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_items_natural
         COALESCE(line_total, -1)
     );
 
-CREATE OR REPLACE FUNCTION budget.set_updated_at()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_category_mappings_match
+    ON budget.expense_category_mappings (
+        COALESCE(lower(trim(source)), ''),
+        COALESCE(lower(trim(merchant)), ''),
+        match_type,
+        lower(trim(match_text))
+    );
+
+CREATE INDEX IF NOT EXISTS idx_expense_category_mappings_active_priority
+    ON budget.expense_category_mappings (is_active, priority, id);
 
 DROP TRIGGER IF EXISTS trg_expenses_set_updated_at ON budget.expenses;
 CREATE TRIGGER trg_expenses_set_updated_at
@@ -175,54 +187,31 @@ BEFORE UPDATE ON budget.expense_items
 FOR EACH ROW
 EXECUTE FUNCTION budget.set_updated_at();
 
--- Keep a single canonical model: expenses + expense_items.
-DROP TABLE IF EXISTS budget.receipts;
-
-CREATE TABLE IF NOT EXISTS budget.expense_categories (
-    id BIGSERIAL PRIMARY KEY,
-    category_name TEXT NOT NULL UNIQUE,
-    notes TEXT,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS budget.expense_category_mappings (
-    id BIGSERIAL PRIMARY KEY,
-    source TEXT,
-    merchant TEXT,
-    match_type TEXT NOT NULL DEFAULT 'contains' CHECK (match_type IN ('exact', 'contains')),
-    match_text TEXT NOT NULL,
-    category_name TEXT NOT NULL REFERENCES budget.expense_categories(category_name),
-    priority INTEGER NOT NULL DEFAULT 100,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    notes TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_expense_category_mappings_match
-    ON budget.expense_category_mappings (
-        COALESCE(lower(trim(source)), ''),
-        COALESCE(lower(trim(merchant)), ''),
-        match_type,
-        lower(trim(match_text))
-    );
-
-CREATE INDEX IF NOT EXISTS idx_expense_category_mappings_active_priority
-    ON budget.expense_category_mappings (is_active, priority, id);
-
 DROP TRIGGER IF EXISTS trg_expense_categories_set_updated_at ON budget.expense_categories;
 CREATE TRIGGER trg_expense_categories_set_updated_at
 BEFORE UPDATE ON budget.expense_categories
 FOR EACH ROW
 EXECUTE FUNCTION budget.set_updated_at();
 
-DROP TRIGGER IF EXISTS trg_expense_category_mappings_set_updated_at ON budget.expense_category_mappings;
+DROP TRIGGER IF EXISTS trg_expense_category_mappings_set_updated_at
+    ON budget.expense_category_mappings;
 CREATE TRIGGER trg_expense_category_mappings_set_updated_at
 BEFORE UPDATE ON budget.expense_category_mappings
 FOR EACH ROW
 EXECUTE FUNCTION budget.set_updated_at();
+
+-- Category splits for a canonical expense. A split remains marked for review if
+-- any contributing line item has not yet been approved/finalized.
+CREATE OR REPLACE VIEW budget.expense_category_splits AS
+SELECT
+    expense_pk,
+    budget_category AS category_name,
+    ROUND(SUM(COALESCE(line_total, 0)), 2) AS category_amount,
+    COUNT(*) AS item_count,
+    BOOL_OR(category_requires_review) AS requires_review
+FROM budget.expense_items
+WHERE budget_category IS NOT NULL
+GROUP BY expense_pk, budget_category;
 
 INSERT INTO budget.expense_categories (category_name, notes)
 VALUES
