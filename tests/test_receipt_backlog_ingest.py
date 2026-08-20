@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,8 +27,10 @@ class FakeCursor:
             self._mode = "lock"
         elif "pg_advisory_unlock" in sql:
             self._mode = "unlock"
-        elif "receipt_evidence" in sql:
+        elif "SELECT source_sha256" in sql and "receipt_evidence" in sql:
             self._mode = "existing"
+        else:
+            self._mode = "write"
 
     def fetchone(self):
         if self._mode == "lock":
@@ -56,6 +59,10 @@ class FakeConn:
 
     def rollback(self):
         self.rollbacks += 1
+
+
+def _candidate(name, sha):
+    return backlog_ingest.ReceiptCandidate(Path(name), sha)
 
 
 def test_plan_unprocessed_receipts_skips_existing_hashes():
@@ -103,9 +110,9 @@ def test_acquire_backlog_lock_reports_busy_processor():
 def test_process_backlog_returns_without_ocr_when_everything_is_skipped(monkeypatch):
     conn = FakeConn(lock=True)
     plan = backlog_ingest.DiscoveryPlan(
-        discovered=(backlog_ingest.ReceiptCandidate(Path("one.pdf"), "aaa"),),
+        discovered=(_candidate("one.pdf", "aaa"),),
         pending=(),
-        skipped=(backlog_ingest.ReceiptCandidate(Path("one.pdf"), "aaa"),),
+        skipped=(_candidate("one.pdf", "aaa"),),
     )
     monkeypatch.setattr(backlog_ingest, "plan_unprocessed_receipts", lambda *args, **kwargs: plan)
     monkeypatch.setattr(
@@ -116,7 +123,13 @@ def test_process_backlog_returns_without_ocr_when_everything_is_skipped(monkeypa
 
     summary = backlog_ingest.process_backlog(conn, Path("/receipts"), Path("/cache"))
 
-    assert summary == {"discovered": 1, "skipped": 1, "processed": 0, "review_required": 0}
+    assert summary == {
+        "discovered": 1,
+        "skipped": 1,
+        "succeeded": 0,
+        "failed": 0,
+        "review_required": 0,
+    }
 
 
 def test_process_backlog_rejects_concurrent_run(monkeypatch):
@@ -129,3 +142,72 @@ def test_process_backlog_rejects_concurrent_run(monkeypatch):
 
     with pytest.raises(RuntimeError, match="already running"):
         backlog_ingest.process_backlog(conn, Path("/receipts"), Path("/cache"))
+
+
+def test_process_backlog_isolates_failed_receipt_and_continues(monkeypatch):
+    conn = FakeConn(lock=True)
+    first = _candidate("bad.pdf", "aaa")
+    second = _candidate("good.pdf", "bbb")
+    plan = backlog_ingest.DiscoveryPlan((first, second), (first, second), ())
+    monkeypatch.setattr(backlog_ingest, "plan_unprocessed_receipts", lambda *args, **kwargs: plan)
+
+    def fake_parse(paths, *args, **kwargs):
+        if paths == [first.path]:
+            raise ValueError("broken OCR")
+        return [SimpleNamespace(extraction_status="complete")]
+
+    persisted = []
+    monkeypatch.setattr(backlog_ingest, "parse_scans_parallel", fake_parse)
+    monkeypatch.setattr(backlog_ingest, "persist_evidence_first", lambda conn, receipts, schema: persisted.extend(receipts))
+
+    summary = backlog_ingest.process_backlog(conn, Path("/receipts"), Path("/cache"))
+
+    assert summary["failed"] == 1
+    assert summary["succeeded"] == 1
+    assert len(persisted) == 1
+    assert conn.rollbacks == 1
+    assert conn.commits >= 3
+
+
+def test_process_backlog_records_review_required_separately(monkeypatch):
+    conn = FakeConn(lock=True)
+    candidate = _candidate("review.pdf", "aaa")
+    plan = backlog_ingest.DiscoveryPlan((candidate,), (candidate,), ())
+    monkeypatch.setattr(backlog_ingest, "plan_unprocessed_receipts", lambda *args, **kwargs: plan)
+    monkeypatch.setattr(
+        backlog_ingest,
+        "parse_scans_parallel",
+        lambda *args, **kwargs: [SimpleNamespace(extraction_status="review")],
+    )
+    monkeypatch.setattr(backlog_ingest, "persist_evidence_first", lambda *args, **kwargs: None)
+
+    summary = backlog_ingest.process_backlog(conn, Path("/receipts"), Path("/cache"))
+
+    assert summary["review_required"] == 1
+    assert summary["succeeded"] == 0
+    assert summary["failed"] == 0
+
+
+def test_failed_status_preserves_retryable_hash_and_error():
+    conn = FakeConn()
+    candidate = _candidate("bad.pdf", "abc123")
+
+    backlog_ingest._mark_failed(conn, candidate, Path("."), "budget", ValueError("bad receipt"))
+
+    sql = conn.cursor_obj.sql[-1]
+    params = conn.cursor_obj.params[-1]
+    assert "receipt_processing_status" in sql
+    assert "status = 'failed'" in sql
+    assert params[0] == "abc123"
+    assert "ValueError: bad receipt" in params[2]
+
+
+def test_processing_status_increments_attempts_on_retry():
+    conn = FakeConn()
+    candidate = _candidate("retry.pdf", "abc123")
+
+    backlog_ingest._mark_processing(conn, candidate, Path("."), "budget")
+
+    sql = conn.cursor_obj.sql[-1]
+    assert "attempts = budget.receipt_processing_status.attempts + 1" in sql
+    assert "status = 'processing'" in sql
