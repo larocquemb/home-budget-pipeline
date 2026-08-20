@@ -1,0 +1,110 @@
+from home_budget_pipeline.web.queries import LedgerQueryService
+
+
+class FakeCursor:
+    def __init__(self, rows=(), columns=()):
+        self.rows = list(rows)
+        self.description = [(column,) for column in columns]
+        self.executed = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql, params=()):
+        self.executed.append((" ".join(sql.split()), params))
+
+    def fetchall(self):
+        return list(self.rows)
+
+
+class FakeConnection:
+    def __init__(self, cursor):
+        self.cursor_obj = cursor
+        self.closed = False
+
+    def cursor(self):
+        return self.cursor_obj
+
+    def close(self):
+        self.closed = True
+
+
+def service_with(rows=(), columns=()):
+    cursor = FakeCursor(rows, columns)
+    connection = FakeConnection(cursor)
+    service = LedgerQueryService(connect=lambda: connection)
+    return service, connection, cursor
+
+
+def test_query_service_sets_transaction_read_only_before_select():
+    service, connection, cursor = service_with(
+        rows=[(1, "costco")],
+        columns=("expense_pk", "source"),
+    )
+
+    page = service.analytics_expenses(limit=10)
+
+    assert cursor.executed[0][0] == "SET TRANSACTION READ ONLY"
+    assert "FROM budget.analytics_expenses" in cursor.executed[1][0]
+    assert page.rows[0] == {"expense_pk": 1, "source": "costco"}
+    assert connection.closed is True
+
+
+def test_expense_filters_are_server_side_and_parameterized():
+    service, _, cursor = service_with()
+
+    service.analytics_expenses(
+        limit=25,
+        offset=50,
+        source="costco",
+        merchant="Regent",
+        requires_review=True,
+    )
+
+    sql, params = cursor.executed[1]
+    assert "source = %s" in sql
+    assert "store_name ILIKE %s" in sql
+    assert "requires_review = %s" in sql
+    assert params == ("costco", "%Regent%", True, 25, 50)
+
+
+def test_category_spend_reads_kan71_view_instead_of_recalculating():
+    service, _, cursor = service_with()
+
+    service.category_spend(limit=20, offset=0)
+
+    sql, _ = cursor.executed[1]
+    assert "FROM budget.analytics_category_spend" in sql
+    assert "SUM(" not in sql
+    assert "GROUP BY" not in sql
+
+
+def test_review_queue_reads_kan71_review_view():
+    service, _, cursor = service_with()
+
+    service.review_queue(limit=20)
+
+    assert "FROM budget.analytics_review_queue" in cursor.executed[1][0]
+
+
+def test_duplicate_queue_is_pending_only():
+    service, _, cursor = service_with()
+
+    service.pending_duplicates(limit=20)
+
+    sql, _ = cursor.executed[1]
+    assert "FROM budget.receipt_duplicate_links" in sql
+    assert "resolution_status = 'pending'" in sql
+
+
+def test_transactions_join_persisted_reconciliation_results():
+    service, _, cursor = service_with()
+
+    service.transaction_reconciliation(limit=20)
+
+    sql, _ = cursor.executed[1]
+    assert "FROM budget.financial_transactions" in sql
+    assert "budget.transaction_expense_reconciliation" in sql
