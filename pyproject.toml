@@ -11,6 +11,14 @@ requires-python = ">=3.11"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+py-modules = [
+    "scanned_receipt_ingest",
+    "receipt_datetime",
+    "receipt_evidence",
+    "receipt_payment",
+    "payment_card_lookup",
+    "receipt_total_reconcile",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
