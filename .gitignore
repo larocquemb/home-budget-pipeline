@@ -85,7 +85,7 @@ ipython_config.py
 .pdm-build/
 
 # pixi
-.pixi
+.pixi/
 
 # PEP 582
 __pypackages__/
@@ -137,6 +137,8 @@ instacart_orders_items.csv
 instacart_orders_items.xlsx
 costco_receipt_items_categorized.xlsx
 costco_receipts_extracted_categorized/
+sobeys_one.xlsx
+sobeys_receipt_items_categorized.xlsx
 
 # Runtime receipt evidence lives on external PVE-backed storage.
 # Sanitized test fixtures belong under tests/, not receipts/.
