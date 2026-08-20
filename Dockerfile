@@ -15,7 +15,7 @@ COPY src ./src
 COPY sql ./sql
 COPY config ./config
 
-RUN python -m pip install --no-cache-dir . \
+RUN python -m pip install --no-cache-dir '.[db]' \
     && mkdir -p /data \
     && chown -R 1001:0 /data /opt/app-root/src \
     && chmod -R g=u /data /opt/app-root/src
