@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import parallel_scanned_receipt_ingest as parallel
+from home_budget_pipeline.receipts import parallel_ingest as parallel
 
 
 class ParallelScannedReceiptIngestTests(unittest.TestCase):
