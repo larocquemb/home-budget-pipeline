@@ -17,7 +17,7 @@ from .render import esc, money, page, pager, table
 BASE_PATH = os.getenv("LEDGER_BASE_PATH", "/ledger").rstrip("/") or "/ledger"
 RECEIPT_SOURCE_ROOT = Path(os.getenv("RECEIPT_SOURCE_ROOT", "/data/receipts/raw/scanned/inbox")).resolve()
 
-app = FastAPI(title="BrownRook Ledger", version="0.3.0")
+app = FastAPI(title="BrownRook Ledger", version="0.4.0")
 
 
 def _header_text(value: object) -> Optional[str]:
@@ -102,6 +102,11 @@ def api_transactions(limit: int = Query(50, ge=1, le=200), offset: int = Query(0
     return service.transaction_reconciliation(limit=limit, offset=offset)
 
 
+@app.get(f"{BASE_PATH}/api/receipt-processing")
+def api_receipt_processing(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
+    return service.receipt_processing_status(limit=limit, offset=offset)
+
+
 @app.get(f"{BASE_PATH}/api/evidence/{{evidence_id}}")
 def api_evidence(evidence_id: int, service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
     result = service.receipt_evidence(evidence_id)
@@ -143,6 +148,7 @@ def ledger_home(identity: dict[str, str] = Depends(authenticated_identity)) -> s
 <div class="card"><h2><a href="{BASE_PATH}/review-queue">Review queue</a></h2><p>See canonical expenses requiring extraction, reconciliation, or quality review.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/duplicates">Duplicates</a></h2><p>Inspect unresolved KAN-77 receipt duplicate candidates.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/transactions">Transactions</a></h2><p>Inspect KAN-78 matched, ambiguous, and unmatched financial transactions.</p></div>
+<div class="card"><h2><a href="{BASE_PATH}/receipt-processing">Receipt processing</a></h2><p>See KAN-82 processing attempts, failures, and receipts requiring review.</p></div>
 </div>"""
     return page("Dashboard", body, base_path=BASE_PATH, identity=identity)
 
@@ -194,6 +200,14 @@ def transactions_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(
     body = table(result.rows, (("transaction_id", "Transaction"), ("transaction_date", "Date"), ("description", "Description"), ("amount", "Amount"), ("payer", "Payer"), ("outcome", "Outcome"), ("score", "Score"), ("expense_pk", "Expense")), links={"expense_pk": f"{BASE_PATH}/expenses/{{value}}"}, money_columns={"amount"})
     body += pager(f"{BASE_PATH}/transactions", limit=limit, offset=offset, row_count=len(result.rows))
     return page("Transaction reconciliation", body, base_path=BASE_PATH, identity=identity)
+
+
+@app.get(f"{BASE_PATH}/receipt-processing", response_class=HTMLResponse)
+def receipt_processing_page(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
+    result = service.receipt_processing_status(limit=limit, offset=offset)
+    body = table(result.rows, (("source_reference", "Receipt"), ("status", "Status"), ("attempts", "Attempts"), ("last_attempted_at", "Last attempt"), ("completed_at", "Completed"), ("last_error", "Last error")))
+    body += pager(f"{BASE_PATH}/receipt-processing", limit=limit, offset=offset, row_count=len(result.rows))
+    return page("Receipt processing", body, base_path=BASE_PATH, identity=identity)
 
 
 @app.get(f"{BASE_PATH}/expenses/{{expense_pk}}", response_class=HTMLResponse)
