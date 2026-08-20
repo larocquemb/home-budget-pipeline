@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import scanned_receipt_ingest as scan
+from home_budget_pipeline.receipts import ingest as scan
 
 
 class ScannedReceiptPaymentIntegrationTests(unittest.TestCase):
