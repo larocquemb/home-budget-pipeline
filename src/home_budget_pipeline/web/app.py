@@ -21,14 +21,27 @@ RECEIPT_SOURCE_ROOT = Path(
 app = FastAPI(title="BrownRook Ledger", version="0.2.0")
 
 
+def _header_text(value: object) -> Optional[str]:
+    """Normalize FastAPI Header defaults when helpers are called directly in tests."""
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return None
+
+
 def authenticated_identity(
     x_forwarded_user: Optional[str] = Header(default=None),
     x_forwarded_email: Optional[str] = Header(default=None),
     x_auth_request_user: Optional[str] = Header(default=None),
     x_auth_request_email: Optional[str] = Header(default=None),
 ) -> dict[str, str]:
-    user = x_auth_request_user or x_forwarded_user
-    email = x_auth_request_email or x_forwarded_email
+    forwarded_user = _header_text(x_forwarded_user)
+    forwarded_email = _header_text(x_forwarded_email)
+    auth_user = _header_text(x_auth_request_user)
+    auth_email = _header_text(x_auth_request_email)
+
+    user = auth_user or forwarded_user
+    email = auth_email or forwarded_email
     if not user and not email:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
