@@ -28,6 +28,20 @@ spec:
       labels:
         app: postgres
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      initContainers:
+        - name: stage-db-schema
+          image: ghcr.io/larocquemb/home-budget-pipeline:KAN-68
+          imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - cp /opt/app-root/src/sql/schema_phase1.sql /schema/001-schema.sql
+          volumeMounts:
+            - name: postgres-init
+              mountPath: /schema
       containers:
         - name: postgres
           image: postgres:17
@@ -71,6 +85,12 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+            - name: postgres-init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: postgres-init
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: postgres-data
