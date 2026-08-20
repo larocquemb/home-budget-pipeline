@@ -34,6 +34,7 @@ class CanonicalPurchaseAmounts:
     fees: Optional[Decimal] = None
     tip: Optional[Decimal] = None
     discounts: Optional[Decimal] = None
+    receipt_equation_complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -122,14 +123,13 @@ class CanonicalPurchaseReconciler:
         self,
         purchase: CanonicalPurchaseAmounts,
     ) -> ReconciliationCheck:
+        if not purchase.receipt_equation_complete:
+            return self._not_checkable("source does not provide a complete receipt equation")
         if purchase.subtotal is None:
             return self._not_checkable("receipt subtotal is missing")
         if purchase.total is None:
             return self._not_checkable("receipt total is missing")
 
-        # Optional components are treated as zero only when absent from the canonical
-        # purchase model. Sources that cannot determine whether a component exists
-        # should leave the complete equation uncheckable before constructing this model.
         expected_total = (
             purchase.subtotal
             + (purchase.taxes or ZERO)
