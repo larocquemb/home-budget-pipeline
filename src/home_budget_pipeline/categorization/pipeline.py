@@ -1,9 +1,8 @@
 """Canonical line-item category mapping pipeline.
 
-The pipeline deliberately separates category *decisions* from the legacy helpers that
-return a default category. An item that cannot be categorized deterministically must
-remain unresolved so it can be sent to AI or human review instead of being silently
-classified as Groceries.
+The pipeline separates auditable category decisions from legacy helpers that return a
+default category. Unknown items remain unresolved so they can be sent to AI or human
+review instead of being silently classified as Groceries.
 """
 
 from __future__ import annotations
@@ -12,10 +11,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Mapping, Optional
 
+from .catalog import CATEGORY_ORDER, VALID_CATEGORIES, canonicalize_category
 from .logic import (
-    CATEGORY_ORDER,
     VERIFIED_CATEGORY_OVERRIDES,
-    canonicalize_category,
     match_runtime_category_rule,
     normalize_for_match,
     try_exact_keyword_category,
@@ -25,8 +23,6 @@ from .store import CategoryMappingStore
 
 
 class CategoryProvenance(str, Enum):
-    """How a category assignment was produced."""
-
     RULE = "rule"
     LEARNED = "learned_mapping"
     AI = "ai"
@@ -36,8 +32,6 @@ class CategoryProvenance(str, Enum):
 
 @dataclass(frozen=True)
 class CategoryDecision:
-    """Auditable result of categorizing one canonical receipt line item."""
-
     category: Optional[str]
     provenance: CategoryProvenance
     confidence: Optional[float]
@@ -46,23 +40,14 @@ class CategoryDecision:
 
     @property
     def resolved(self) -> bool:
-        return self.category in CATEGORY_ORDER
+        return self.category in VALID_CATEGORIES
 
 
 AIFallback = Callable[[str, Optional[str], Optional[str]], CategoryDecision]
 
 
 class CategoryMappingPipeline:
-    """Deterministic-first category resolver for canonical receipt line items.
-
-    Processing order mirrors KAN-68:
-      1. normalize product description
-      2. explicit deterministic rules / verified overrides
-      3. previously approved (learned) mappings
-      4. keyword/fuzzy deterministic rules
-      5. optional AI fallback
-      6. human review when still unresolved or low confidence
-    """
+    """Deterministic-first category resolver for canonical receipt line items."""
 
     def __init__(
         self,
@@ -77,7 +62,7 @@ class CategoryMappingPipeline:
         self.learned_mappings = {
             normalize_for_match(key): category
             for key, raw_category in combined.items()
-            if (category := canonicalize_category(raw_category)) in CATEGORY_ORDER
+            if (category := canonicalize_category(raw_category)) in VALID_CATEGORIES
         }
         self.ai_fallback = ai_fallback
 
@@ -99,7 +84,7 @@ class CategoryMappingPipeline:
             )
 
         verified = canonicalize_category(VERIFIED_CATEGORY_OVERRIDES.get(normalized))
-        if verified in CATEGORY_ORDER:
+        if verified in VALID_CATEGORIES:
             return CategoryDecision(
                 category=verified,
                 provenance=CategoryProvenance.RULE,
@@ -110,7 +95,7 @@ class CategoryMappingPipeline:
         runtime = canonicalize_category(
             match_runtime_category_rule(description, source=source, merchant=merchant)
         )
-        if runtime in CATEGORY_ORDER:
+        if runtime in VALID_CATEGORIES:
             return CategoryDecision(
                 category=runtime,
                 provenance=CategoryProvenance.RULE,
@@ -119,7 +104,7 @@ class CategoryMappingPipeline:
             )
 
         learned = canonicalize_category(self.learned_mappings.get(normalized))
-        if learned in CATEGORY_ORDER:
+        if learned in VALID_CATEGORIES:
             return CategoryDecision(
                 category=learned,
                 provenance=CategoryProvenance.LEARNED,
@@ -128,7 +113,7 @@ class CategoryMappingPipeline:
             )
 
         exact = canonicalize_category(try_exact_keyword_category(description))
-        if exact in CATEGORY_ORDER:
+        if exact in VALID_CATEGORIES:
             return CategoryDecision(
                 category=exact,
                 provenance=CategoryProvenance.RULE,
@@ -137,7 +122,7 @@ class CategoryMappingPipeline:
             )
 
         fuzzy = canonicalize_category(try_fuzzy_keyword_category(description))
-        if fuzzy in CATEGORY_ORDER:
+        if fuzzy in VALID_CATEGORIES:
             return CategoryDecision(
                 category=fuzzy,
                 provenance=CategoryProvenance.RULE,
@@ -148,7 +133,7 @@ class CategoryMappingPipeline:
         if self.ai_fallback is not None:
             ai_decision = self.ai_fallback(description, source, merchant)
             ai_category = canonicalize_category(ai_decision.category)
-            if ai_category in CATEGORY_ORDER:
+            if ai_category in VALID_CATEGORIES:
                 return CategoryDecision(
                     category=ai_category,
                     provenance=CategoryProvenance.AI,
@@ -174,12 +159,11 @@ class CategoryMappingPipeline:
         merchant: Optional[str] = None,
         notes: Optional[str] = None,
     ) -> CategoryDecision:
-        """Apply a human correction and persist it for future pipeline runs."""
         normalized = normalize_for_match(description)
         canonical = canonicalize_category(category)
         if not normalized:
             raise ValueError("description must not normalize to an empty value")
-        if canonical not in CATEGORY_ORDER:
+        if canonical not in VALID_CATEGORIES:
             raise ValueError(f"invalid category: {category}")
 
         if self.mapping_store is not None:
