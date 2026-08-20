@@ -12,6 +12,7 @@ def test_receipt_duplicate_link_table_contract():
     assert "reasons JSONB NOT NULL" in text
     assert "resolution_status TEXT NOT NULL" in text
     assert "CONSTRAINT uq_receipt_duplicate_pair UNIQUE" in text
+    assert "CREATE TABLE budget.canonical_item_source_resolutions" in text
 
 
 def test_fresh_bootstrap_stages_receipt_deduplication_without_migration():
