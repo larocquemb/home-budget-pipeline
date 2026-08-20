@@ -1,15 +1,96 @@
-FROM registry.access.redhat.com/ubi10/python-312-minimal:10.2
+ARG UBI_PYTHON_IMAGE=registry.access.redhat.com/ubi10/python-312-minimal:10.2
+ARG LEPTONICA_VERSION=1.87.0
+ARG TESSERACT_VERSION=5.5.2
+
+FROM ${UBI_PYTHON_IMAGE} AS ocr-builder
+
+USER 0
+
+ARG LEPTONICA_VERSION
+ARG TESSERACT_VERSION
+
+RUN microdnf install -y \
+      autoconf \
+      automake \
+      curl \
+      gcc \
+      gcc-c++ \
+      gzip \
+      libjpeg-turbo-devel \
+      libpng-devel \
+      libtiff-devel \
+      libtool \
+      make \
+      pkgconf-pkg-config \
+      tar \
+      zlib-devel \
+    && microdnf clean all
+
+WORKDIR /tmp/build
+
+RUN curl -fsSL \
+      "https://github.com/DanBloomberg/leptonica/releases/download/${LEPTONICA_VERSION}/leptonica-${LEPTONICA_VERSION}.tar.gz" \
+      -o leptonica.tar.gz \
+    && tar -xzf leptonica.tar.gz \
+    && cd "leptonica-${LEPTONICA_VERSION}" \
+    && ./configure \
+         --prefix=/opt/tesseract \
+         --disable-shared \
+         --enable-static \
+         --without-giflib \
+         --without-libwebp \
+         --without-libopenjpeg \
+    && make -j"$(nproc)" \
+    && make install
+
+ENV PKG_CONFIG_PATH=/opt/tesseract/lib/pkgconfig \
+    LDFLAGS=-L/opt/tesseract/lib \
+    CPPFLAGS=-I/opt/tesseract/include
+
+RUN curl -fsSL \
+      "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/${TESSERACT_VERSION}.tar.gz" \
+      -o tesseract.tar.gz \
+    && tar -xzf tesseract.tar.gz \
+    && cd "tesseract-${TESSERACT_VERSION}" \
+    && ./autogen.sh \
+    && ./configure \
+         --prefix=/opt/tesseract \
+         --disable-shared \
+         --enable-static \
+         --disable-openmp \
+         --without-archive \
+         --without-curl \
+    && make -j"$(nproc)" \
+    && make install
+
+RUN mkdir -p /opt/tesseract/share/tessdata \
+    && curl -fsSL \
+      "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata" \
+      -o /opt/tesseract/share/tessdata/eng.traineddata
+
+
+FROM ${UBI_PYTHON_IMAGE}
 
 LABEL org.opencontainers.image.source="https://github.com/larocquemb/home-budget-pipeline"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    HOME_BUDGET_DATA_ROOT=/data
+    HOME_BUDGET_DATA_ROOT=/data \
+    PATH=/opt/tesseract/bin:$PATH \
+    TESSDATA_PREFIX=/opt/tesseract/share/tessdata \
+    LD_LIBRARY_PATH=/opt/tesseract/lib
 
 USER 0
 
-RUN microdnf install -y tesseract \
+RUN microdnf install -y \
+      libjpeg-turbo \
+      libpng \
+      libstdc++ \
+      libtiff \
+      zlib \
     && microdnf clean all
+
+COPY --from=ocr-builder /opt/tesseract /opt/tesseract
 
 WORKDIR /opt/app-root/src
 
@@ -18,10 +99,13 @@ COPY src ./src
 
 RUN python -m pip install --no-cache-dir . \
     && mkdir -p /data \
-    && chown -R 1001:0 /data \
-    && chmod -R g=u /data
+    && chown -R 1001:0 /data /opt/app-root/src \
+    && chmod -R g=u /data /opt/app-root/src
 
 USER 1001
+
+RUN tesseract --version \
+    && tesseract --list-langs | grep -qx eng
 
 ENTRYPOINT ["python", "-m"]
 CMD ["home_budget_pipeline.receipts.parallel_ingest", "/data/receipts/raw/scanned/inbox"]
