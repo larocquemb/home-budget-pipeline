@@ -15,6 +15,7 @@ dependencies = [
     "fastapi>=0.116",
     "uvicorn>=0.35",
     "PyYAML>=6.0",
+    "openai>=1.68",
 ]
 
 [project.scripts]
