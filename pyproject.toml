@@ -19,6 +19,7 @@ dependencies = [
 [project.scripts]
 home-budget-scan = "home_budget_pipeline.receipts.parallel_ingest:main"
 home-budget-ledger = "home_budget_pipeline.web.app:main"
+home-budget-categorize = "home_budget_pipeline.categorization.command:main"
 
 [project.optional-dependencies]
 dev = [
