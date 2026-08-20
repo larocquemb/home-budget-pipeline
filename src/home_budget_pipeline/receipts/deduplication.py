@@ -68,14 +68,19 @@ class ReceiptDuplicateScorer:
             score += 45
             reasons.append("identifier_match")
 
-        merchant_match = bool(self._norm_text(left.merchant) and self._norm_text(left.merchant) == self._norm_text(right.merchant))
+        merchant_match = bool(
+            self._norm_text(left.merchant)
+            and self._norm_text(left.merchant) == self._norm_text(right.merchant)
+        )
         if merchant_match:
             score += 15
             reasons.append("merchant_match")
 
+        close_time = False
         if left.transaction_datetime and right.transaction_datetime:
             seconds = abs((left.transaction_datetime - right.transaction_datetime).total_seconds())
             if seconds <= 300:
+                close_time = True
                 score += 15
                 reasons.append("time_within_5m")
             elif left.transaction_datetime.date() == right.transaction_datetime.date():
@@ -109,13 +114,19 @@ class ReceiptDuplicateScorer:
             score += 10
             reasons.append("items_partial_overlap")
 
-        # Cross-source exact-total mismatches (for example Instacart vs Costco)
-        # can still be strong duplicates when identifiers/items/date align.
+        # Total mismatches are expected for some representations of the same
+        # purchase (for example Costco vs Instacart). Merchant + close time +
+        # meaningful item overlap is therefore sufficient to require review,
+        # even when the generic weighted score is just below REVIEW_THRESHOLD.
+        correlated_item_match = merchant_match and close_time and item_similarity >= 0.50
+        if correlated_item_match:
+            reasons.append("merchant_time_item_correlation")
+
         if score >= self.EXACT_THRESHOLD:
             disposition = DuplicateDisposition.EXACT
         elif score >= self.PROBABLE_THRESHOLD:
             disposition = DuplicateDisposition.PROBABLE
-        elif score >= self.REVIEW_THRESHOLD:
+        elif score >= self.REVIEW_THRESHOLD or correlated_item_match:
             disposition = DuplicateDisposition.REVIEW
         else:
             disposition = DuplicateDisposition.DISTINCT
@@ -134,7 +145,11 @@ class ReceiptDuplicateScorer:
         target: ReceiptEvidenceFingerprint,
         candidates: Iterable[ReceiptEvidenceFingerprint],
     ) -> tuple[DuplicateScore, ...]:
-        scored = [self.score(target, candidate) for candidate in candidates if candidate.evidence_id != target.evidence_id]
+        scored = [
+            self.score(target, candidate)
+            for candidate in candidates
+            if candidate.evidence_id != target.evidence_id
+        ]
         return tuple(sorted(scored, key=lambda result: (-result.score, result.right_evidence_id)))
 
     @classmethod
