@@ -7,6 +7,10 @@ on:
       - main
       - KAN-79
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
