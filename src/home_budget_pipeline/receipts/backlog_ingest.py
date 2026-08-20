@@ -69,6 +69,77 @@ def release_backlog_lock(conn) -> None:
         cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (LOCK_NAME,))
 
 
+def _source_reference(candidate: ReceiptCandidate, root: Path) -> str:
+    try:
+        return str(candidate.path.relative_to(root)) if root.is_dir() else candidate.path.name
+    except ValueError:
+        return candidate.path.name
+
+
+def _mark_processing(conn, candidate: ReceiptCandidate, root: Path, schema: str) -> None:
+    reference = _source_reference(candidate, root)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.receipt_processing_status (
+                source_sha256, source_reference, status, attempts,
+                first_attempted_at, last_attempted_at, last_error, completed_at
+            )
+            VALUES (%s, %s, 'processing', 1, NOW(), NOW(), NULL, NULL)
+            ON CONFLICT (source_sha256) DO UPDATE SET
+                source_reference = EXCLUDED.source_reference,
+                status = 'processing',
+                attempts = {schema}.receipt_processing_status.attempts + 1,
+                last_attempted_at = NOW(),
+                last_error = NULL,
+                completed_at = NULL
+            """,
+            (candidate.source_sha256, reference),
+        )
+
+
+def _mark_completed(conn, candidate: ReceiptCandidate, root: Path, schema: str, status: str) -> None:
+    reference = _source_reference(candidate, root)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.receipt_processing_status (
+                source_sha256, source_reference, status, attempts,
+                first_attempted_at, last_attempted_at, completed_at, last_error
+            )
+            VALUES (%s, %s, %s, 1, NOW(), NOW(), NOW(), NULL)
+            ON CONFLICT (source_sha256) DO UPDATE SET
+                source_reference = EXCLUDED.source_reference,
+                status = EXCLUDED.status,
+                completed_at = NOW(),
+                last_error = NULL
+            """,
+            (candidate.source_sha256, reference, status),
+        )
+
+
+def _mark_failed(conn, candidate: ReceiptCandidate, root: Path, schema: str, exc: Exception) -> None:
+    reference = _source_reference(candidate, root)
+    message = f"{type(exc).__name__}: {exc}"[:4000]
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.receipt_processing_status (
+                source_sha256, source_reference, status, attempts,
+                first_attempted_at, last_attempted_at, last_error, completed_at
+            )
+            VALUES (%s, %s, 'failed', 1, NOW(), NOW(), %s, NULL)
+            ON CONFLICT (source_sha256) DO UPDATE SET
+                source_reference = EXCLUDED.source_reference,
+                status = 'failed',
+                last_attempted_at = NOW(),
+                last_error = EXCLUDED.last_error,
+                completed_at = NULL
+            """,
+            (candidate.source_sha256, reference, message),
+        )
+
+
 def process_backlog(
     conn,
     root: Path,
@@ -78,39 +149,55 @@ def process_backlog(
     schema: str = "budget",
     refresh_ocr_cache: bool = False,
 ) -> dict[str, int]:
-    """Process pending receipts through the existing parser/evidence persistence path."""
+    """Process pending receipts independently so one failure does not stop the backlog."""
     if not acquire_backlog_lock(conn):
         raise RuntimeError("another receipt backlog processor is already running")
 
+    summary = {
+        "discovered": 0,
+        "skipped": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "review_required": 0,
+    }
+
     try:
         plan = plan_unprocessed_receipts(conn, root, schema=schema)
-        pending_paths = [candidate.path for candidate in plan.pending]
-        if not pending_paths:
-            return {
-                "discovered": len(plan.discovered),
-                "skipped": len(plan.skipped),
-                "processed": 0,
-                "review_required": 0,
-            }
+        summary["discovered"] = len(plan.discovered)
+        summary["skipped"] = len(plan.skipped)
 
-        receipts = parse_scans_parallel(
-            pending_paths,
-            root,
-            workers,
-            cache_dir,
-            refresh_ocr_cache,
-        )
-        persist_evidence_first(conn, receipts, schema)
-        conn.commit()
-        return {
-            "discovered": len(plan.discovered),
-            "skipped": len(plan.skipped),
-            "processed": len(receipts),
-            "review_required": sum(r.extraction_status != "complete" for r in receipts),
-        }
-    except Exception:
-        conn.rollback()
-        raise
+        for candidate in plan.pending:
+            try:
+                _mark_processing(conn, candidate, root, schema)
+                conn.commit()
+
+                receipts = parse_scans_parallel(
+                    [candidate.path],
+                    root,
+                    max(1, workers),
+                    cache_dir,
+                    refresh_ocr_cache,
+                )
+                if len(receipts) != 1:
+                    raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
+
+                receipt = receipts[0]
+                persist_evidence_first(conn, [receipt], schema)
+                status = "review_required" if receipt.extraction_status != "complete" else "succeeded"
+                _mark_completed(conn, candidate, root, schema, status)
+                conn.commit()
+
+                if status == "review_required":
+                    summary["review_required"] += 1
+                else:
+                    summary["succeeded"] += 1
+            except Exception as exc:
+                conn.rollback()
+                _mark_failed(conn, candidate, root, schema, exc)
+                conn.commit()
+                summary["failed"] += 1
+
+        return summary
     finally:
         release_backlog_lock(conn)
 
@@ -150,7 +237,7 @@ def main() -> int:
     finally:
         conn.close()
     print(json.dumps(summary, indent=2))
-    return 0
+    return 1 if summary["failed"] else 0
 
 
 if __name__ == "__main__":
