@@ -1,5 +1,6 @@
 """Canonical data-quality validation."""
 
+from .persistence import PostgresDataQualityStore
 from .required_fields import (
     CanonicalExpense,
     CanonicalExpenseItem,
@@ -15,5 +16,6 @@ __all__ = [
     "DataQualityResult",
     "DataQualityStatus",
     "DataQualityViolation",
+    "PostgresDataQualityStore",
     "RequiredFieldValidator",
 ]
