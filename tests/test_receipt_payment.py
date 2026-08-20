@@ -1,6 +1,6 @@
 import unittest
 
-from receipt_payment import extract_payment_provenance
+from home_budget_pipeline.receipts.payment import extract_payment_provenance
 
 
 class ReceiptPaymentTests(unittest.TestCase):
