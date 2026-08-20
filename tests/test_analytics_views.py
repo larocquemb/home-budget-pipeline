@@ -1,11 +1,12 @@
 from pathlib import Path
 
 
-MIGRATION = Path("sql/migrations/kan_71_analytics_views.sql")
+ANALYTICS_DDL = Path("sql/analytics_views.sql")
+POSTGRES_MANIFEST = Path("k8s/postgres.yaml")
 
 
 def sql() -> str:
-    return MIGRATION.read_text()
+    return ANALYTICS_DDL.read_text()
 
 
 def test_defines_all_consumer_analytics_views():
@@ -63,3 +64,10 @@ def test_review_queue_filters_only_overall_review_rows():
     review_section = text.split("CREATE OR REPLACE VIEW budget.analytics_review_queue AS", 1)[1]
     assert "FROM budget.analytics_expenses ae" in review_section
     assert "WHERE ae.requires_review = TRUE" in review_section
+
+
+def test_fresh_postgres_bootstrap_stages_analytics_ddl_without_migrations():
+    manifest = POSTGRES_MANIFEST.read_text()
+    assert "/opt/app-root/src/sql/analytics_views.sql" in manifest
+    assert "/schema/003-analytics-views.sql" in manifest
+    assert "migrations/kan_71" not in manifest
