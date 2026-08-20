@@ -4,9 +4,59 @@ metadata:
   name: ledger-web
   namespace: home-budget
 spec:
+  type: ClusterIP
   selector:
     app: ledger-web
   ports:
     - name: http
       port: 8080
       targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-web
+  namespace: home-budget
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ledger-web
+  template:
+    metadata:
+      labels:
+        app: ledger-web
+    spec:
+      containers:
+        - name: ledger-web
+          image: ghcr.io/larocquemb/home-budget-pipeline:KAN-68
+          imagePullPolicy: Always
+          args:
+            - home_budget_pipeline.web.app
+          env:
+            - name: PORT
+              value: "8080"
+            - name: LEDGER_BASE_PATH
+              value: /ledger
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /ledger/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ledger/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
