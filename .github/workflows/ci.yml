@@ -41,12 +41,14 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
       - name: Check out code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -75,3 +77,38 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Point Kustomize at immutable image
+        env:
+          IMAGE_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          path = Path("k8s/kustomization.yaml")
+          text = path.read_text()
+          image_sha = os.environ["IMAGE_SHA"]
+          updated, count = re.subn(
+              r"(name:\s*ghcr\.io/larocquemb/home-budget-pipeline\s*\n\s*newTag:\s*)\S+",
+              rf"\g<1>{image_sha}",
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("Could not update home-budget-pipeline newTag in k8s/kustomization.yaml")
+          path.write_text(updated)
+          PY
+
+      - name: Commit deployment image pointer
+        run: |
+          if git diff --quiet -- k8s/kustomization.yaml; then
+            echo "Deployment already points at ${GITHUB_SHA}"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/kustomization.yaml
+          git commit -m "Deploy ${GITHUB_SHA} [skip ci]"
+          git push origin HEAD:${GITHUB_REF_NAME}
