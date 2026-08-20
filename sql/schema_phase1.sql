@@ -243,7 +243,7 @@ VALUES
     ('Medical Products', 'Prescriptions BlueCross net cost, contacts, prescription glasses, over counter drugs'),
     ('LTD Insurance', 'Disability insurance Paul'),
     ('Home Mortgage', NULL),
-    ('Lake', 'Plan to sell after Comcast'),
+    ('Lake', NULL),
     ('Sinking Fund', 'Caisse 3% Savings Plus account'),
     ('Donations', 'Paroisse'),
     ('Vacation', 'Rox Girls vacation, Ottawa'),
