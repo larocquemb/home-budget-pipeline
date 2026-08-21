@@ -78,7 +78,7 @@ def release_backlog_lock(conn) -> None:
 
 def _source_reference(candidate: ReceiptCandidate, root: Path) -> str:
     try:
-        return str(candidate.path.relative_to(root)) if root.is_dir() else candidate.path.name
+        return str(candidate.path.relative_to(root))
     except ValueError:
         return candidate.path.name
 

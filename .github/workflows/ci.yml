@@ -74,6 +74,12 @@ jobs:
           psql -h localhost -U test -d home_budget \
             -v ON_ERROR_STOP=1 \
             -f sql/schema_phase1.sql
+          psql -h localhost -U test -d home_budget \
+            -v ON_ERROR_STOP=1 \
+            -f sql/receipt_processing.sql
+          psql -h localhost -U test -d home_budget \
+            -v ON_ERROR_STOP=1 \
+            -f sql/schema_constraints.sql
 
       - name: Run PostgreSQL integration tests
         env:
