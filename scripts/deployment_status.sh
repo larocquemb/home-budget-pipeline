@@ -19,7 +19,7 @@ if ! command -v gh >/dev/null 2>&1; then
 else
     if ! gh run list --branch main --limit "$run_limit" \
         --json conclusion,status,displayTitle,headBranch,headSha,databaseId,createdAt \
-        --template '{{tablerow "STATUS" "TITLE" "BRANCH" "COMMIT" "RUN ID" "AGE"}}{{range .}}{{tablerow .conclusion .displayTitle .headBranch (printf "%.7s" .headSha) .databaseId (timeago .createdAt)}}{{end}}{{tablerender}}'; then
+        --template '{{tablerow "STATUS" "TITLE" "BRANCH" "COMMIT" "RUN ID" "AGE"}}{{range .}}{{if eq .conclusion ""}}{{tablerow .status .displayTitle .headBranch (printf "%.7s" .headSha) .databaseId (timeago .createdAt)}}{{else}}{{tablerow .conclusion .displayTitle .headBranch (printf "%.7s" .headSha) .databaseId (timeago .createdAt)}}{{end}}{{end}}{{tablerender}}'; then
         exit_status=1
     fi
 fi

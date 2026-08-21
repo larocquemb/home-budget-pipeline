@@ -10,6 +10,7 @@ def test_deployment_status_covers_ci_argocd_jobs_and_pods():
     assert 'gh run list --branch main --limit "$run_limit"' in text
     assert '"STATUS" "TITLE" "BRANCH" "COMMIT" "RUN ID" "AGE"' in text
     assert '(printf "%.7s" .headSha)' in text
+    assert '{{if eq .conclusion ""}}{{tablerow .status' in text
     assert 'argocd app get "$argo_app" --grpc-web -o json' in text
     assert "Revision:      \\(.status.sync.revision)" in text
     assert "Sync Status:   \\(.status.sync.status)" in text
