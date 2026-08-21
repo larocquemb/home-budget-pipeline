@@ -1,7 +1,7 @@
 TEST_DB ?= home_budget_test
 TEST_DATABASE_URL ?= postgresql://localhost/$(TEST_DB)
 RECEIPT_TEST_ROOT ?= .receipt-test
-RECEIPT_TEST_WORKERS ?= 2
+RECEIPT_TEST_WORKERS ?= 6
 RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 
 .PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts
@@ -16,6 +16,7 @@ test-db-setup:
 	@echo "Loading schema..."
 	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/schema_phase1.sql >/dev/null
 	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/receipt_processing.sql >/dev/null
+	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/migrations/kan_76_allow_duplicate_expense_items.sql >/dev/null
 
 test-db: test-db-setup
 	@echo "Running PostgreSQL integration tests..."
@@ -26,6 +27,7 @@ test-db-verbose:
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -c 'DROP SCHEMA IF EXISTS budget CASCADE;'
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/schema_phase1.sql
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/receipt_processing.sql
+	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/migrations/kan_76_allow_duplicate_expense_items.sql
 	TEST_DATABASE_URL=$(TEST_DATABASE_URL) pytest -q -m integration
 
 test-all: test
