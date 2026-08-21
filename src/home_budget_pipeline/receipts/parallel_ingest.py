@@ -16,7 +16,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import scanned_receipt_ingest as scan
+from . import ingest as scan
 from receipt_datetime import date_part, extract_transaction_datetime
 from receipt_evidence import attach_evidence, find_match, upsert_evidence
 from receipt_payment import extract_payment_provenance
