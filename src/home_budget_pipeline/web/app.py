@@ -17,6 +17,9 @@ from .render import esc, money, page, pager, table
 
 BASE_PATH = os.getenv("LEDGER_BASE_PATH", "/ledger").rstrip("/") or "/ledger"
 RECEIPT_SOURCE_ROOT = Path(os.getenv("RECEIPT_SOURCE_ROOT", "/data/receipts/raw/scanned/inbox")).resolve()
+ELECTRONIC_RECEIPT_SOURCE_ROOT = Path(
+    os.getenv("ELECTRONIC_RECEIPT_SOURCE_ROOT", "/data/receipts/raw/electronic")
+).resolve()
 
 app = FastAPI(title="BrownRook Ledger", version="0.4.0")
 
@@ -132,9 +135,10 @@ def api_evidence(evidence_id: int, service: LedgerQueryService = Depends(query_s
     return result
 
 
-def _receipt_document_path(source_reference: str) -> Path:
-    candidate = (RECEIPT_SOURCE_ROOT / source_reference).resolve()
-    if candidate != RECEIPT_SOURCE_ROOT and RECEIPT_SOURCE_ROOT not in candidate.parents:
+def _receipt_document_path(source_reference: str, evidence_type: object = "scanned") -> Path:
+    root = ELECTRONIC_RECEIPT_SOURCE_ROOT if evidence_type == "electronic" else RECEIPT_SOURCE_ROOT
+    candidate = (root / source_reference).resolve()
+    if candidate != root and root not in candidate.parents:
         raise HTTPException(status_code=404, detail="receipt document not found")
     if not candidate.is_file():
         raise HTTPException(status_code=404, detail="receipt document not found")
@@ -149,7 +153,7 @@ def receipt_document(evidence_id: int, service: LedgerQueryService = Depends(que
     source_reference = evidence.get("source_reference")
     if not source_reference:
         raise HTTPException(status_code=404, detail="receipt document not available")
-    path = _receipt_document_path(str(source_reference))
+    path = _receipt_document_path(str(source_reference), evidence.get("evidence_type"))
     media_type = evidence.get("mime_type") or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
 
@@ -229,7 +233,7 @@ def receipt_preview_image(evidence_id: int, page_number: int = Query(0, alias="p
     source_reference = evidence.get("source_reference")
     if not source_reference:
         raise HTTPException(status_code=404, detail="receipt document not available")
-    path = _receipt_document_path(str(source_reference))
+    path = _receipt_document_path(str(source_reference), evidence.get("evidence_type"))
     media_type = evidence.get("mime_type") or mimetypes.guess_type(path.name)[0] or ""
     if str(media_type).lower() != "application/pdf":
         raise HTTPException(status_code=415, detail="receipt preview requires a PDF")

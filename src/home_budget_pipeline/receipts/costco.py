@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -941,11 +942,12 @@ def write_costco_to_postgres(
     all_items: List[Dict],
     dsn: str,
     schema: str,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     schema = _require_valid_schema_name(schema)
     conn = _connect_postgres(dsn)
     written_expenses = 0
     written_items = 0
+    written_evidence = 0
 
     items_by_receipt: Dict[str, List[Dict]] = {}
     for item in all_items:
@@ -977,6 +979,33 @@ def write_costco_to_postgres(
             expense_pk, item_name, budget_category, category_source,
             unit_qty, unit_cost, line_total
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+    evidence_sql = f"""
+        INSERT INTO {schema}.receipt_evidence (
+            expense_pk, evidence_type, source_reference, source_sha256,
+            mime_type, transaction_datetime, merchant, receipt_id, total,
+            extraction_status, extraction_confidence, raw_text, raw_payload,
+            is_primary_source
+        ) VALUES (
+            %s, 'electronic', %s, %s, 'application/pdf', %s, 'Costco', %s, %s,
+            'complete', 1, %s, %s::jsonb, TRUE
+        )
+        ON CONFLICT (source_sha256) DO UPDATE SET
+            expense_pk = EXCLUDED.expense_pk,
+            evidence_type = EXCLUDED.evidence_type,
+            source_reference = EXCLUDED.source_reference,
+            mime_type = EXCLUDED.mime_type,
+            transaction_datetime = EXCLUDED.transaction_datetime,
+            merchant = EXCLUDED.merchant,
+            receipt_id = EXCLUDED.receipt_id,
+            total = EXCLUDED.total,
+            extraction_status = EXCLUDED.extraction_status,
+            extraction_confidence = EXCLUDED.extraction_confidence,
+            raw_text = EXCLUDED.raw_text,
+            raw_payload = EXCLUDED.raw_payload,
+            is_primary_source = TRUE,
+            updated_at = NOW()
+        RETURNING id
     """
 
     try:
@@ -1018,6 +1047,24 @@ def write_costco_to_postgres(
                     continue
                 expense_pk = int(row[0])
                 written_expenses += 1
+
+                source_path = Path(str(receipt['source_path']))
+                source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+                cur.execute(
+                    evidence_sql,
+                    (
+                        expense_pk,
+                        receipt['source_reference'],
+                        source_sha256,
+                        _receipt_date_from_id(receipt_id),
+                        order_id,
+                        total_dec,
+                        receipt.get('raw_text'),
+                        json.dumps(payload, ensure_ascii=True),
+                    ),
+                )
+                if cur.fetchone() is not None:
+                    written_evidence += 1
 
                 cur.execute(delete_items_sql, (expense_pk,))
                 # Collapse exact duplicate lines within one receipt into a single canonical row.
@@ -1072,7 +1119,7 @@ def write_costco_to_postgres(
         raise
     finally:
         conn.close()
-    return written_expenses, written_items
+    return written_expenses, written_items, written_evidence
 
 
 def main() -> None:
@@ -1155,6 +1202,9 @@ def main() -> None:
             'total_cad': total,
             'parsed_item_count': len(items),
             'parsed_item_sum_cad': item_sum,
+            'source_path': str(pdf),
+            'source_reference': f'Costco/{pdf.name}',
+            'raw_text': text,
         })
 
         compare_target = subtotal if subtotal is not None else total
@@ -1229,14 +1279,15 @@ def main() -> None:
     )
 
     if args.write_db:
-        written_expenses, written_items = write_costco_to_postgres(
+        written_expenses, written_items, written_evidence = write_costco_to_postgres(
             receipt_rows=receipt_rows,
             all_items=all_items,
             dsn=args.db_dsn,
             schema=args.db_schema,
         )
         print(
-            f'Wrote Postgres: schema={args.db_schema}, expenses={written_expenses}, expense_items={written_items}'
+            f'Wrote Postgres: schema={args.db_schema}, expenses={written_expenses}, '
+            f'expense_items={written_items}, receipt_evidence={written_evidence}'
         )
 
     print(f'Wrote workbook: {out_xlsx}')
