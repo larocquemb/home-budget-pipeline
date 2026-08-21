@@ -12,7 +12,7 @@ if not TEST_DATABASE_URL:
 TEMPLATE = Path("sql/receipt_processing_template.sql")
 
 
-def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypatch):
+def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypatch, tmp_path):
     import psycopg
     from home_budget_pipeline.receipts import schema_blue_green
 
@@ -44,8 +44,17 @@ def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypat
         assert conn.execute("SELECT to_regclass('ingest_v1.receipts')").fetchone()[0] is not None
         assert schema_blue_green.ensure_receipt_schema(conn, TEMPLATE) is False
 
+        changed_template = tmp_path / "receipt_processing_template.sql"
+        changed_template.write_text(
+            TEMPLATE.read_text(encoding="utf-8") + "\n-- intentional schema change\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(RuntimeError, match="SCHEMA_VERSION bump"):
+            schema_blue_green.ensure_receipt_schema(conn, changed_template)
+
+        # A schema change is allowed only after the version is explicitly bumped.
         monkeypatch.setattr(schema_blue_green, "SCHEMA_VERSION", 2)
-        assert schema_blue_green.ensure_receipt_schema(conn, TEMPLATE) is True
+        assert schema_blue_green.ensure_receipt_schema(conn, changed_template) is True
 
         state = conn.execute(
             """
