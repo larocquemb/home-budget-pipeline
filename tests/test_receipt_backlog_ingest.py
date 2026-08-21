@@ -165,7 +165,9 @@ def test_process_backlog_isolates_failed_receipt_and_continues(monkeypatch):
     assert summary["failed"] == 1
     assert summary["succeeded"] == 1
     assert len(persisted) == 1
-    assert conn.rollbacks == 1
+    # One rollback isolates the failed receipt; the second clears any transaction
+    # state before releasing the session-level PostgreSQL advisory lock.
+    assert conn.rollbacks == 2
     assert conn.commits >= 3
 
 
