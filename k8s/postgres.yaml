@@ -32,7 +32,9 @@ spec:
         - name: ghcr-secret
       initContainers:
         - name: stage-db-bootstrap
-          image: ghcr.io/larocquemb/home-budget-pipeline
+          # Keep bootstrap separate from the Kustomize-managed app image so
+          # app-only releases do not restart PostgreSQL.
+          image: ghcr.io/larocquemb/home-budget-schema-bootstrap:main
           imagePullPolicy: Always
           command:
             - /bin/sh

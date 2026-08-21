@@ -121,6 +121,7 @@ jobs:
           tags: |
             ghcr.io/larocquemb/home-budget-pipeline:${{ github.sha }}
             ghcr.io/larocquemb/home-budget-pipeline:main
+            ghcr.io/larocquemb/home-budget-schema-bootstrap:main
           labels: |
             org.opencontainers.image.source=https://github.com/larocquemb/home-budget-pipeline
             org.opencontainers.image.revision=${{ github.sha }}

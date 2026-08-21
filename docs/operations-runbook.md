@@ -70,7 +70,15 @@ gh run watch --exit-status
 If no run is in progress, `gh run watch` reports that directly; use
 `gh run list` to confirm the latest completed result. A successful main-branch
 workflow tests the project, builds the amd64 image, pushes commit and `main`
-tags to GHCR, and updates `k8s/kustomization.yaml` in a deployment commit.
+tags to GHCR, publishes the same image under the stable PostgreSQL bootstrap
+alias, and updates `k8s/kustomization.yaml` in a deployment commit.
+
+The PostgreSQL init container uses
+`ghcr.io/larocquemb/home-budget-schema-bootstrap:main`. This name is separate
+from the Kustomize-managed application image, so ordinary application releases
+do not change the StatefulSet pod template or restart PostgreSQL. A fresh
+PostgreSQL volume still receives the latest bootstrap files. The versioned
+PreSync migration image remains tied to the application deployment.
 
 ## Argo CD deployment
 
@@ -165,4 +173,3 @@ After rollout, use the dashboard in this order:
 6. Category spend and transactions
 
 The detailed workflow and status definitions are in [the user guide](user-guide.md).
-

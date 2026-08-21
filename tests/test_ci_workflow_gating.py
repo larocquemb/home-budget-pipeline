@@ -36,3 +36,7 @@ def test_deployment_image_targets_cluster_architecture_only():
     assert "platforms: linux/amd64" in text
     assert "linux/arm64" not in text
     assert "docker/setup-qemu-action" not in text
+
+
+def test_build_publishes_stable_postgres_bootstrap_alias():
+    assert "ghcr.io/larocquemb/home-budget-schema-bootstrap:main" in workflow_text()
