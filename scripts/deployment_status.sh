@@ -114,7 +114,9 @@ fi
 
 section "Kubernetes Pods (${kube_namespace})"
 if command -v kubectl >/dev/null 2>&1; then
-    kubectl -n "$kube_namespace" get pods --sort-by=.metadata.name || exit_status=1
+    kubectl -n "$kube_namespace" get pods -o json | jq -r \
+        '(["NAME", "READY", "STATUS", "RESTARTS", "AGE", "COMMIT"] | @tsv), (.items | sort_by(.metadata.name)[] | (now - (.metadata.creationTimestamp | fromdateiso8601) | floor) as $age | [.metadata.name, (([.status.containerStatuses[]? | select(.ready)] | length | tostring) + "/" + ([.status.containerStatuses[]?] | length | tostring)), (if .status.phase == "Succeeded" then "Completed" else .status.phase end), ([.status.containerStatuses[]?.restartCount] | add // 0), (if $age < 120 then "\($age)s" elif $age < 3600 then "\($age / 60 | floor)m" elif $age < 86400 then "\($age / 3600 | floor)h" else "\($age / 86400 | floor)d" end), ([.spec.containers[].image | select(startswith("ghcr.io/larocquemb/home-budget-pipeline:")) | split(":")[-1][0:7]][0] // "-")] | @tsv)' \
+        | column -t -s $'\t' || exit_status=1
 fi
 
 exit "$exit_status"
