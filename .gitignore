@@ -99,6 +99,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.dev
 .envrc
 .venv
 env/
@@ -144,6 +145,7 @@ sobeys_receipt_items_categorized.xlsx
 # Sanitized test fixtures belong under tests/, not receipts/.
 receipts/
 .receipt-test/
+.dev-certs/
 .ocr_cache/
 scanned_receipts_report.json
 *_scanned_receipts_report.json

@@ -525,3 +525,21 @@ receipt ingestion
 ```
 
 The immediate web goal is reliable read-only inspection of canonical expenses, evidence, analytics, and review queues before write-capable review workflows are introduced.
+
+---
+
+## 15. Local Entra-authenticated Ledger
+
+The development proxy runs Caddy and OAuth2 Proxy in Docker while Ledger runs
+directly from the working tree. This avoids the image build and K3S deployment
+loop for application changes.
+
+1. Copy `.env.dev.example` to `.env.dev` and fill in the Entra and database values.
+2. Add `127.0.0.1 ledger-dev.brownrook.net` to `/etc/hosts`.
+3. Add `https://ledger-dev.brownrook.net/ledger/oauth2/callback` as a redirect URI in Entra.
+4. Start PostgreSQL forwarding with `kubectl -n home-budget port-forward svc/postgres 5433:5432`.
+5. Run `make dev-up`, then `make dev-cert-install` once to trust Caddy's local CA.
+6. Run `make dev-web` and open `https://ledger-dev.brownrook.net/ledger`.
+
+Stop the proxy with `make dev-down`. The local Ledger process is intentionally
+outside Docker so source changes only require restarting that process.

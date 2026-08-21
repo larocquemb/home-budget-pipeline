@@ -1,0 +1,44 @@
+services:
+  caddy:
+    image: caddy:2.10.2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./dev/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ledger-caddy-data:/data
+      - ledger-caddy-config:/config
+    depends_on:
+      - oauth2-proxy
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_OIDC_ISSUER_URL: https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0
+      OAUTH2_PROXY_CLIENT_ID: ${ENTRA_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_COOKIE_SECRET}
+      OAUTH2_PROXY_REDIRECT_URL: https://ledger-dev.brownrook.net/ledger/oauth2/callback
+      OAUTH2_PROXY_PROXY_PREFIX: /ledger/oauth2
+      OAUTH2_PROXY_UPSTREAMS: http://host.docker.internal:8080
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_SCOPE: openid profile email
+      OAUTH2_PROXY_COOKIE_NAME: __Secure-ledger-dev
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_COOKIE_PATH: /ledger
+      OAUTH2_PROXY_SESSION_COOKIE_MINIMAL: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "true"
+
+volumes:
+  ledger-caddy-data:
+  ledger-caddy-config:
