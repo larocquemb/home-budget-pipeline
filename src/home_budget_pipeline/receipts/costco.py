@@ -417,29 +417,29 @@ def parse_receipt_amounts(text: str) -> Tuple[Optional[float], Optional[float], 
             or re.search(r'^\s*TOTAL\b(?!\s*(?:TAX|NUMBER)\b)', line, re.I)
         )
         if is_total_label:
-            m_total = re.search(r'(-?\d+\.\d{2})$', line)
+            m_total = re.search(r'(\$?-?\d+\.\d{2}-?)$', line)
             if m_total:
-                total = float(m_total.group(1))
+                total = parse_amount_token(m_total.group(1))
                 continue
 
-        m_sub = re.search(r'\bSUBTOTAL\b.*?(-?\d+\.\d{2})$', line, re.I)
+        m_sub = re.search(r'\bSUBTOTAL\b.*?(\$?-?\d+\.\d{2}-?)$', line, re.I)
         if m_sub:
-            subtotal = float(m_sub.group(1))
+            subtotal = parse_amount_token(m_sub.group(1))
             continue
 
-        m_total_tax = re.search(r'^\s*TOTAL\s+TAX\b.*?(-?\d+\.\d{2})$', line, re.I)
+        m_total_tax = re.search(r'^\s*TOTAL\s+TAX\b.*?(\$?-?\d+\.\d{2}-?)$', line, re.I)
         if m_total_tax:
-            tax_total_line = float(m_total_tax.group(1))
+            tax_total_line = parse_amount_token(m_total_tax.group(1))
             continue
 
-        m_tax = re.search(r'^\s*TAX\b.*?(-?\d+\.\d{2})$', line, re.I)
+        m_tax = re.search(r'^\s*TAX\b.*?(\$?-?\d+\.\d{2}-?)$', line, re.I)
         if m_tax:
-            tax_total_line = float(m_tax.group(1))
+            tax_total_line = parse_amount_token(m_tax.group(1))
             continue
 
-        m_tax_component = re.search(r'\b(?:GST|PST|HST)\b.*?(-?\d+\.\d{2})$', line, re.I)
+        m_tax_component = re.search(r'\b(?:GST|PST|HST)\b.*?(\$?-?\d+\.\d{2}-?)$', line, re.I)
         if m_tax_component:
-            tax_components += float(m_tax_component.group(1))
+            tax_components += parse_amount_token(m_tax_component.group(1))
             has_tax_components = True
 
     tax = tax_total_line if tax_total_line is not None else (round(tax_components, 2) if has_tax_components else None)

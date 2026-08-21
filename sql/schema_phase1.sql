@@ -189,6 +189,8 @@ CREATE TABLE budget.expense_items (
     id BIGSERIAL PRIMARY KEY,
     expense_pk BIGINT NOT NULL REFERENCES budget.expenses(id) ON DELETE CASCADE,
     item_name TEXT NOT NULL,
+    product_description TEXT,
+    product_url TEXT,
     item_name_norm TEXT GENERATED ALWAYS AS (lower(trim(item_name))) STORED,
     tax_code TEXT,
     budget_category TEXT REFERENCES budget.expense_categories(category_name),
@@ -207,6 +209,18 @@ CREATE TABLE budget.expense_items (
     original_line_total NUMERIC(12, 2),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE budget.expense_item_description_audit (
+    id BIGSERIAL PRIMARY KEY,
+    expense_item_id BIGINT REFERENCES budget.expense_items(id) ON DELETE SET NULL,
+    actor_user TEXT NOT NULL,
+    actor_email TEXT,
+    old_description TEXT,
+    new_description TEXT,
+    old_url TEXT,
+    new_url TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE budget.expense_reconciliation_results (
@@ -335,6 +349,8 @@ CREATE INDEX idx_expense_items_review
     ON budget.expense_items (category_requires_review)
     WHERE category_requires_review = TRUE;
 CREATE INDEX idx_expense_items_name_norm ON budget.expense_items (item_name_norm);
+CREATE INDEX idx_expense_item_description_audit_item
+    ON budget.expense_item_description_audit (expense_item_id, created_at DESC);
 CREATE UNIQUE INDEX uq_expense_items_natural
     ON budget.expense_items (
         expense_pk,

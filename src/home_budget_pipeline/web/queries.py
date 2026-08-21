@@ -147,12 +147,14 @@ class LedgerQueryService:
         expense = dict(rows[0])
         expense["items"] = self._fetch(
             """
-            SELECT expense_item_id, item_name, line_total, original_line_total,
-                   budget_category, category_group_name, category_source,
-                   category_confidence, category_requires_review
-              FROM budget.analytics_expense_items
-             WHERE expense_pk = %s
-             ORDER BY expense_item_id
+            SELECT a.expense_item_id, a.item_name, i.product_description, i.product_url,
+                   a.line_total, a.original_line_total, a.budget_category,
+                   a.category_group_name, a.category_source,
+                   a.category_confidence, a.category_requires_review
+              FROM budget.analytics_expense_items a
+              JOIN budget.expense_items i ON i.id = a.expense_item_id
+             WHERE a.expense_pk = %s
+             ORDER BY a.expense_item_id
             """,
             (expense_pk,),
         )
@@ -169,6 +171,37 @@ class LedgerQueryService:
             (expense_pk,),
         )
         return expense
+
+    def save_item_description(self, expense_item_id: int, description: Optional[str], product_url: Optional[str], *, actor_user: str, actor_email: Optional[str] = None) -> dict[str, Any]:
+        description = description.strip() if description and description.strip() else None
+        product_url = product_url.strip() if product_url and product_url.strip() else None
+        if product_url and not product_url.startswith(("https://", "http://")):
+            raise ValueError("product URL must start with http:// or https://")
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT product_description, product_url FROM budget.expense_items WHERE id = %s FOR UPDATE", (expense_item_id,))
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError("expense item not found")
+                old = row["product_description"] if isinstance(row, dict) else row[0]
+                old_url = row["product_url"] if isinstance(row, dict) else row[1]
+                cur.execute("UPDATE budget.expense_items SET product_description = %s, product_url = %s, updated_at = NOW() WHERE id = %s", (description, product_url, expense_item_id))
+                cur.execute(
+                    """INSERT INTO budget.expense_item_description_audit
+                       (expense_item_id, actor_user, actor_email, old_description, new_description, old_url, new_url)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (expense_item_id, actor_user, actor_email, old, description, old_url, product_url),
+                )
+                audit = cur.fetchone()
+                audit_id = audit["id"] if isinstance(audit, dict) else audit[0]
+            conn.commit()
+            return {"expense_item_id": expense_item_id, "product_description": description, "product_url": product_url, "audit_id": audit_id}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def active_categories(self) -> tuple[str, ...]:
         rows = self._fetch(
