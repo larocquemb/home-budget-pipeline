@@ -33,12 +33,14 @@ def _norm(value: Optional[str]) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
-def _dt(value: Optional[str]) -> Optional[datetime]:
-    if not value:
+def _dt(value: str | datetime | None) -> Optional[datetime]:
+    if value is None or value == "":
         return None
+    if isinstance(value, datetime):
+        return value
     try:
         return datetime.fromisoformat(value)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
