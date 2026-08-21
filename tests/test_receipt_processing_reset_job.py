@@ -1,12 +1,12 @@
 from pathlib import Path
 
 
-def test_argocd_presync_hook_runs_blue_green_receipt_schema_upgrade():
+def test_argocd_presync_hook_runs_complete_database_schema_upgrade():
     manifest = Path("k8s/receipt-processing-reset-job.yaml").read_text(encoding="utf-8")
 
     assert "argocd.argoproj.io/hook: PreSync" in manifest
     assert "BeforeHookCreation,HookSucceeded" in manifest
-    assert "home_budget_pipeline.receipts.schema_blue_green" in manifest
+    assert "home-budget-db-setup" in manifest
     assert "DATABASE_URL" in manifest
     assert "postgres-secret" in manifest
 

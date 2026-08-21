@@ -22,9 +22,7 @@ spec:
           image: ghcr.io/larocquemb/home-budget-pipeline
           imagePullPolicy: IfNotPresent
           command:
-            - python
-            - -m
-            - home_budget_pipeline.receipts.schema_blue_green
+            - home-budget-db-setup
           env:
             - name: DATABASE_URL
               valueFrom:
