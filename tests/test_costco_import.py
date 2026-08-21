@@ -25,3 +25,18 @@ def test_costco_category_sources_use_canonical_vocabulary():
     assert costco.canonical_category_source("override") == "rule"
     assert costco.canonical_category_source("exact") == "rule"
     assert costco.canonical_category_source("fuzzy") == "rule"
+
+
+def test_costco_general_towels_are_indoor_supplies_without_overriding_beach_towels():
+    assert costco.classify_category_with_source("TOWEL", allow_ai=False) == (
+        "Indoor Supplies",
+        "verified_cache",
+    )
+    assert costco.classify_category_with_source("BATH TOWEL", allow_ai=False) == (
+        "Indoor Supplies",
+        "verified_cache",
+    )
+    assert costco.classify_category_with_source("BEACH TOWEL", allow_ai=False) != (
+        "Indoor Supplies",
+        "verified_cache",
+    )
