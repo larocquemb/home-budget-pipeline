@@ -25,7 +25,9 @@ def test_deployment_status_covers_ci_argocd_jobs_and_pods():
     assert "Pod digest:         %.7s" in text
     assert "Match:              %s" in text
     assert 'get jobs --sort-by=.metadata.creationTimestamp' in text
-    assert 'get pods --sort-by=.metadata.name' in text
+    assert 'get pods -o json' in text
+    assert '["NAME", "READY", "STATUS", "RESTARTS", "AGE", "COMMIT"]' in text
+    assert 'home-budget-pipeline:' in text
 
 
 def test_deployment_status_has_safe_configurable_defaults():
