@@ -44,6 +44,16 @@ TOTAL 11.48
         self.assertEqual(total, 11.48)
         self.assertEqual([(x.item_name, x.line_total) for x in scan.extract_items(text)], [("Milk", 5.94), ("Bread", 4.99)])
 
+    def test_item_amount_wrapped_to_next_ocr_line_is_preserved(self):
+        text = """079594233699 5PK YARD BAG <A>
+203. 44 6.88
+SUBTOTAL 6.88
+"""
+        self.assertEqual(
+            [(x.item_name, x.line_total) for x in scan.extract_items(text)],
+            [("079594233699 5PK YARD BAG <A>", 6.88)],
+        )
+
     def test_date_extraction_accepts_real_ocr_formats(self):
         self.assertEqual(scan.extract_date("DATE/TIME: 26/04/26 19:01:05"), "2026-04-26")
         self.assertEqual(scan.extract_date("13-May-2026 17:39:52"), "2026-05-13")

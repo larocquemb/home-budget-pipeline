@@ -223,6 +223,18 @@ CREATE TABLE budget.expense_item_description_audit (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE budget.product_enrichment_results (
+    id BIGSERIAL PRIMARY KEY,
+    expense_item_id BIGINT NOT NULL UNIQUE REFERENCES budget.expense_items(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    search_query TEXT NOT NULL,
+    candidate_title TEXT,
+    candidate_url TEXT,
+    confidence NUMERIC(5,4) NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('accepted', 'review', 'rejected', 'error')),
+    searched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE budget.expense_reconciliation_results (
     expense_pk BIGINT PRIMARY KEY REFERENCES budget.expenses(id) ON DELETE CASCADE,
     item_subtotal_status TEXT NOT NULL

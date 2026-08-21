@@ -342,12 +342,23 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
 
 def extract_items(text: str) -> List[ScannedItem]:
     items: List[ScannedItem] = []
-    for raw in text.splitlines():
+    raw_lines = text.splitlines()
+    for index, raw in enumerate(raw_lines):
         line = normalize_line(raw)
         if not line or TOTAL_WORDS.search(line) or NON_ITEM_WORDS.search(line):
             continue
         matches = list(MONEY_RE.finditer(line))
         if not matches:
+            # Some OCR splits a barcode/item line from its amount column.
+            # Only join strong product rows so arbitrary receipt prose is not
+            # turned into a line item.
+            if re.match(r"^\d{8,14}\s+.*[A-Za-z]", line) and index + 1 < len(raw_lines):
+                next_line = normalize_line(raw_lines[index + 1])
+                next_matches = list(MONEY_RE.finditer(next_line))
+                if next_matches and not TOTAL_WORDS.search(next_line):
+                    amount = parse_money(next_line)
+                    if amount is not None:
+                        items.append(ScannedItem(line, amount))
             continue
         last = matches[-1]
         name = normalize_line(line[: last.start()].strip(" :-"))
