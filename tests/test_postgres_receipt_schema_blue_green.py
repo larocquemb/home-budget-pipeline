@@ -1,10 +1,14 @@
 from pathlib import Path
+import os
 
 import pytest
 
 pytestmark = pytest.mark.integration
 
-TEST_DATABASE_URL = "postgresql://test:test@localhost:5432/home_budget"
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+if not TEST_DATABASE_URL:
+    pytest.skip("TEST_DATABASE_URL is not set", allow_module_level=True)
+
 TEMPLATE = Path("sql/receipt_processing_template.sql")
 
 
@@ -22,7 +26,7 @@ def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypat
              WHERE component = 'receipt_ingest'
             """
         ).fetchone()
-        assert state == (1, "ingest_v1", None, False)
+        assert state == (1, "ingest_v1", "ingest_v0", False)
 
         kinds = dict(
             conn.execute(
@@ -36,6 +40,7 @@ def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypat
             ).fetchall()
         )
         assert kinds == {"receipts": "v", "receipt_processing_status": "v"}
+        assert conn.execute("SELECT to_regclass('ingest_v0.receipts')").fetchone()[0] is not None
         assert conn.execute("SELECT to_regclass('ingest_v1.receipts')").fetchone()[0] is not None
         assert schema_blue_green.ensure_receipt_schema(conn, TEMPLATE) is False
 
