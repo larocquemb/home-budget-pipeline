@@ -8,7 +8,8 @@ def test_deployment_status_covers_ci_argocd_jobs_and_pods():
     text = SCRIPT.read_text(encoding="utf-8")
 
     assert 'gh run list --limit "$run_limit"' in text
-    assert "'TITLE' 'STATUS' 'COMPLETED' 'RUN ID'" in text
+    assert "'TITLE' 'BRANCH' 'COMMIT' 'STATUS' 'COMPLETED' 'RUN ID'" in text
+    assert ".headSha[0:7]" in text
     assert '.updatedAt[5:7] + .updatedAt[8:10]' in text
     assert 'argocd app get "$argo_app" --grpc-web' in text
     assert "Target:|Sync Status:|Health Status:" in text
