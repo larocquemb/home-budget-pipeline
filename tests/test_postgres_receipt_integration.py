@@ -7,6 +7,8 @@ import pytest
 from home_budget_pipeline.receipts import ingest
 
 
+pytestmark = pytest.mark.integration
+
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 if not TEST_DATABASE_URL:
     pytest.skip("TEST_DATABASE_URL is not set", allow_module_level=True)
