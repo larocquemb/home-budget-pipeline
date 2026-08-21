@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 
 from home_budget_pipeline.receipts.evidence import candidate_score
@@ -25,6 +26,18 @@ class ReceiptEvidenceTests(unittest.TestCase):
             "merchant": "Sobeys Sage Creek",
             "card_last4": "3400",
             "transaction_datetime": "2026-05-05T18:51:10",
+            "order_date": "2026-05-05",
+        }
+        self.assertEqual(candidate_score(self.receipt(), candidate), 1.0)
+
+    def test_psycopg_datetime_candidate_scores_without_type_error(self):
+        candidate = {
+            "order_id": "ABC123",
+            "receipt_id": None,
+            "total": 42.17,
+            "merchant": "Sobeys Sage Creek",
+            "card_last4": "3400",
+            "transaction_datetime": datetime(2026, 5, 5, 18, 51, 10),
             "order_date": "2026-05-05",
         }
         self.assertEqual(candidate_score(self.receipt(), candidate), 1.0)
