@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from home_budget_pipeline.web.app import authenticated_identity, health
+from home_budget_pipeline.web.app import _optional_bool_query, authenticated_identity, health
 
 
 def test_health_is_public_for_kubernetes_probes():
@@ -29,3 +29,9 @@ def test_authenticated_identity_rejects_missing_identity():
         )
 
     assert exc.value.status_code == 401
+
+
+def test_empty_optional_boolean_query_means_no_filter():
+    assert _optional_bool_query("") is None
+    assert _optional_bool_query("true") is True
+    assert _optional_bool_query("false") is False

@@ -48,6 +48,17 @@ def query_service() -> LedgerQueryService:
     return LedgerQueryService()
 
 
+def _optional_bool_query(value: Optional[str]) -> Optional[bool]:
+    if value is None or value.strip() == "":
+        return None
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise HTTPException(status_code=422, detail="requires_review must be true or false")
+
+
 @app.get(f"{BASE_PATH}/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "ledger"}
@@ -70,8 +81,8 @@ def me(
 
 
 @app.get(f"{BASE_PATH}/api/analytics/expenses")
-def api_analytics_expenses(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), source: Optional[str] = None, merchant: Optional[str] = None, requires_review: Optional[bool] = None, service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
-    return service.analytics_expenses(limit=limit, offset=offset, source=source, merchant=merchant, requires_review=requires_review)
+def api_analytics_expenses(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), source: Optional[str] = None, merchant: Optional[str] = None, requires_review: Optional[str] = None, service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
+    return service.analytics_expenses(limit=limit, offset=offset, source=source, merchant=merchant, requires_review=_optional_bool_query(requires_review))
 
 
 @app.get(f"{BASE_PATH}/api/analytics/category-spend")
@@ -154,9 +165,10 @@ def ledger_home(identity: dict[str, str] = Depends(authenticated_identity)) -> s
 
 
 @app.get(f"{BASE_PATH}/expenses", response_class=HTMLResponse)
-def expenses_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), source: Optional[str] = None, merchant: Optional[str] = None, requires_review: Optional[bool] = None, service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
-    result = service.analytics_expenses(limit=limit, offset=offset, source=source, merchant=merchant, requires_review=requires_review)
-    review_value = "" if requires_review is None else str(requires_review).lower()
+def expenses_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), source: Optional[str] = None, merchant: Optional[str] = None, requires_review: Optional[str] = None, service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
+    review_filter = _optional_bool_query(requires_review)
+    result = service.analytics_expenses(limit=limit, offset=offset, source=source, merchant=merchant, requires_review=review_filter)
+    review_value = "" if review_filter is None else str(review_filter).lower()
     body = f"""
 <form class="toolbar" method="get">
 <label>Source<input name="source" value="{esc(source)}"></label>
