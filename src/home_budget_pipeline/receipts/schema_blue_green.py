@@ -75,6 +75,31 @@ def _build_schema(conn, target_schema: str, template: str) -> None:
     conn.commit()
 
 
+def _drop_budget_status_relation(conn) -> None:
+    conn.execute(
+        """
+        DO $$
+        DECLARE
+            relation_kind "char";
+        BEGIN
+            SELECT c.relkind
+              INTO relation_kind
+              FROM pg_class c
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'budget'
+               AND c.relname = 'receipt_processing_status';
+
+            IF relation_kind = 'v' THEN
+                EXECUTE 'DROP VIEW budget.receipt_processing_status CASCADE';
+            ELSIF relation_kind IS NOT NULL THEN
+                EXECUTE 'DROP TABLE budget.receipt_processing_status CASCADE';
+            END IF;
+        END;
+        $$;
+        """
+    )
+
+
 def _cut_over(
     conn,
     target_schema: str,
@@ -84,7 +109,7 @@ def _cut_over(
     with conn.transaction():
         # Stable compatibility schemas/views are switched atomically only after
         # the new physical schema has been built and validated.
-        conn.execute("DROP VIEW IF EXISTS budget.receipt_processing_status CASCADE")
+        _drop_budget_status_relation(conn)
         conn.execute("DROP SCHEMA IF EXISTS ingest CASCADE")
         conn.execute("CREATE SCHEMA ingest")
         conn.execute(
