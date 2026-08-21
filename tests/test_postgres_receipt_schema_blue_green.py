@@ -52,7 +52,6 @@ def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypat
         with pytest.raises(RuntimeError, match="SCHEMA_VERSION bump"):
             schema_blue_green.ensure_receipt_schema(conn, changed_template)
 
-        # A schema change is allowed only after the version is explicitly bumped.
         monkeypatch.setattr(schema_blue_green, "SCHEMA_VERSION", 2)
         assert schema_blue_green.ensure_receipt_schema(conn, changed_template) is True
 
@@ -65,7 +64,8 @@ def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypat
         ).fetchone()
         assert state == (2, "ingest_v2", "ingest_v1", False)
 
-        # Previous physical schema remains available for immediate rollback.
+        # Keep exactly current + previous; older versions are retired.
+        assert conn.execute("SELECT to_regclass('ingest_v0.receipts')").fetchone()[0] is None
         assert conn.execute("SELECT to_regclass('ingest_v1.receipts')").fetchone()[0] is not None
         assert conn.execute("SELECT to_regclass('ingest_v2.receipts')").fetchone()[0] is not None
 
