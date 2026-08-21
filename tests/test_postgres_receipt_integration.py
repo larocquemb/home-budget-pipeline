@@ -205,3 +205,53 @@ def test_web_category_override_creates_rule_and_updates_scoped_exact_matches():
                 ('Indoor Supplies', 'rule', False),
                 ('Groceries', 'unresolved', False),
             ]
+
+
+def test_web_rule_manager_creates_applies_disables_and_audits_rule():
+    import psycopg
+    from psycopg.rows import dict_row
+
+    with psycopg.connect(TEST_DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO budget.category_groups (group_key, group_name) VALUES ('managed', 'Managed') RETURNING id"
+            )
+            group_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO budget.expense_categories (category_name, group_id) VALUES ('Managed Category', %s)",
+                (group_id,),
+            )
+            cur.execute(
+                "INSERT INTO budget.expenses (source, order_id, store_name) VALUES ('costco', 'managed-rule-1', 'Costco') RETURNING id"
+            )
+            expense_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO budget.expense_items (expense_pk, item_name, line_total) VALUES (%s, 'BLUE MANAGED WIDGET', 9.99)",
+                (expense_id,),
+            )
+        conn.commit()
+
+    service = LedgerQueryService(connect=lambda: psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row))
+    created = service.save_category_rule(
+        rule_id=None, source='costco', merchant='Costco', match_type='contains',
+        match_text='managed widget', category='Managed Category', priority=20,
+        is_active=True, actor_user='Paul', actor_email='paul@example.com',
+    )
+    assert created['affected_items'] == 1
+
+    disabled = service.save_category_rule(
+        rule_id=created['mapping_id'], source='costco', merchant='Costco',
+        match_type='contains', match_text='managed widget', category='Managed Category',
+        priority=20, is_active=False, actor_user='Paul', actor_email='paul@example.com',
+    )
+    assert disabled['affected_items'] == 0
+
+    with psycopg.connect(TEST_DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT is_active FROM budget.expense_category_mappings WHERE id = %s", (created['mapping_id'],))
+            assert cur.fetchone() == (False,)
+            cur.execute(
+                "SELECT action FROM budget.expense_category_mapping_audit WHERE mapping_id = %s ORDER BY id",
+                (created['mapping_id'],),
+            )
+            assert cur.fetchall() == [('created',), ('disabled',)]

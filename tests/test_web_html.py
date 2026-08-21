@@ -9,6 +9,12 @@ class FakeService:
     def active_categories(self):
         return ("Groceries", "Indoor Supplies", "Outdoor Supplies")
 
+    def category_rules(self, **kwargs):
+        return ({"id": 8, "source": "costco", "merchant": "Costco", "match_type": "exact", "match_text": "towel", "category_name": "Indoor Supplies", "priority": 10, "is_active": True},)
+
+    def category_rule_audit(self, **kwargs):
+        return ({"created_at": "2026-08-21", "actor_email": "paul@example.com", "action": "created", "match_text": "towel", "old_category": "Groceries", "new_category": "Indoor Supplies", "affected_item_count": 1},)
+
     def analytics_expenses(self, **kwargs):
         return Page(({
             "expense_pk": 42,
@@ -158,6 +164,36 @@ def test_category_override_endpoint_saves_approved_rule():
     )
 
     assert result == {"mapping_id": 8, "affected_items": 2}
+
+
+def test_category_rules_page_manages_rules_and_shows_history():
+    text = web_app.category_rules_page(service=FakeService(), identity=IDENTITY, q=None)
+
+    assert "Create rule" in text
+    assert 'data-rule-id="8"' in text
+    assert '<option value="Indoor Supplies" selected>Indoor Supplies</option>' in text
+    assert "Recent changes" in text
+    assert "paul@example.com" in text
+    assert f"{web_app.BASE_PATH}/api/category-rules" in text
+
+
+def test_category_rule_endpoint_records_signed_in_actor():
+    class RuleService:
+        def save_category_rule(self, **kwargs):
+            assert kwargs["match_text"] == "TOWEL"
+            assert kwargs["actor_user"] == "Paul"
+            assert kwargs["actor_email"] == "paul@example.com"
+            return {"mapping_id": 9, "audit_id": 10, "affected_items": 1}
+
+    result = web_app.api_category_rule(
+        web_app.CategoryRuleRequest(
+            match_type="exact", match_text="TOWEL", category="Indoor Supplies"
+        ),
+        x_ledger_action="category-rule",
+        service=RuleService(),
+        identity=IDENTITY,
+    )
+    assert result["audit_id"] == 10
 
 
 def test_extraction_audit_links_expense_and_evidence():

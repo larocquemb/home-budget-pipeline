@@ -30,6 +30,17 @@ class CategoryOverrideRequest(BaseModel):
     category: str = Field(min_length=1, max_length=200)
 
 
+class CategoryRuleRequest(BaseModel):
+    rule_id: Optional[int] = Field(default=None, gt=0)
+    source: Optional[str] = Field(default=None, max_length=100)
+    merchant: Optional[str] = Field(default=None, max_length=300)
+    match_type: str = Field(pattern="^(exact|contains)$")
+    match_text: str = Field(min_length=1, max_length=500)
+    category: str = Field(min_length=1, max_length=200)
+    priority: int = Field(default=100, ge=0, le=100000)
+    is_active: bool = True
+
+
 def _header_text(value: object) -> Optional[str]:
     if isinstance(value, str):
         value = value.strip()
@@ -131,6 +142,34 @@ def api_category_override(
         return service.save_category_override(
             request.expense_item_id,
             request.category,
+            actor_user=identity["user"],
+            actor_email=identity.get("email") or None,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(f"{BASE_PATH}/api/category-rules")
+def api_category_rule(
+    request: CategoryRuleRequest,
+    x_ledger_action: Optional[str] = Header(default=None),
+    service: LedgerQueryService = Depends(query_service),
+    identity: dict[str, str] = Depends(authenticated_identity),
+):
+    if x_ledger_action != "category-rule":
+        raise HTTPException(status_code=403, detail="category rule action header missing")
+    try:
+        return service.save_category_rule(
+            rule_id=request.rule_id,
+            source=request.source,
+            merchant=request.merchant,
+            match_type=request.match_type,
+            match_text=request.match_text,
+            category=request.category,
+            priority=request.priority,
+            is_active=request.is_active,
             actor_user=identity["user"],
             actor_email=identity.get("email") or None,
         )
@@ -336,6 +375,75 @@ def category_spend_page(limit: int = Query(100, ge=1, le=500), offset: int = Que
     body = table(result.rows, (("expense_date", "Date"), ("category_group_name", "Group"), ("budget_category", "Category"), ("category_amount", "Amount"), ("item_count", "Items"), ("expense_count", "Expenses")), money_columns={"category_amount"})
     body += pager(f"{BASE_PATH}/category-spend", limit=limit, offset=offset, row_count=len(result.rows))
     return page("Category spend", body, base_path=BASE_PATH, identity=identity)
+
+
+@app.get(f"{BASE_PATH}/category-rules", response_class=HTMLResponse)
+def category_rules_page(
+    q: Optional[str] = None,
+    service: LedgerQueryService = Depends(query_service),
+    identity: dict[str, str] = Depends(authenticated_identity),
+) -> str:
+    categories = service.active_categories()
+    rules = service.category_rules(search=q)
+    audits = service.category_rule_audit(limit=100)
+
+    def options(selected: Optional[str]) -> str:
+        return "".join(
+            f'<option value="{esc(category)}"{" selected" if category == selected else ""}>{esc(category)}</option>'
+            for category in categories
+        )
+
+    def rule_form(rule: dict) -> str:
+        rule_id = rule.get("id")
+        exact = " selected" if rule.get("match_type") == "exact" else ""
+        contains = " selected" if rule.get("match_type") == "contains" else ""
+        active = " checked" if rule.get("is_active", True) else ""
+        return f"""<form class="category-rule-form" data-rule-id="{esc(rule_id)}">
+<input name="source" value="{esc(rule.get('source'))}" placeholder="Any source">
+<input name="merchant" value="{esc(rule.get('merchant'))}" placeholder="Any merchant">
+<select name="match_type"><option value="exact"{exact}>Exact</option><option value="contains"{contains}>Contains</option></select>
+<input name="match_text" required value="{esc(rule.get('match_text'))}" placeholder="Item text">
+<select name="category">{options(rule.get('category_name'))}</select>
+<input name="priority" type="number" min="0" value="{esc(rule.get('priority', 100))}" aria-label="Priority">
+<label><input name="is_active" type="checkbox"{active}> Active</label>
+<button type="submit">{"Save" if rule_id else "Create rule"}</button>
+<small class="category-save-status muted"></small></form>"""
+
+    search = f"""<form class="toolbar" method="get"><label>Search
+<input name="q" value="{esc(q)}" placeholder="Item, merchant, category"></label><button>Search</button></form>"""
+    body = search + '<section class="card"><h2>Create rule</h2>' + rule_form({"match_type": "exact", "priority": 100, "is_active": True}) + "</section>"
+    body += "<h2>Rules</h2>" + "".join(f'<section class="card"><strong>Rule {esc(rule.get("id"))}</strong>{rule_form(rule)}</section>' for rule in rules)
+    body += "<h2>Recent changes</h2>" + table(
+        audits,
+        (("created_at", "When"), ("actor_email", "User"), ("action", "Action"),
+         ("match_text", "Match"), ("old_category", "Old category"),
+         ("new_category", "New category"), ("affected_item_count", "Affected")),
+    )
+    body += """<script>
+for (const form of document.querySelectorAll('.category-rule-form')) {
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const status = form.querySelector('.category-save-status');
+    const payload = {
+      rule_id: form.dataset.ruleId ? Number(form.dataset.ruleId) : null,
+      source: form.source.value || null, merchant: form.merchant.value || null,
+      match_type: form.match_type.value, match_text: form.match_text.value,
+      category: form.category.value, priority: Number(form.priority.value),
+      is_active: form.is_active.checked
+    };
+    status.textContent = ' Saving…';
+    const response = await fetch('""" + f"{BASE_PATH}/api/category-rules" + """', {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-Ledger-Action': 'category-rule'},
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (!response.ok) { status.textContent = ` ${result.detail || 'Unable to save rule'}`; return; }
+    status.textContent = ` Saved; updated ${result.affected_items} item(s)`;
+    setTimeout(() => window.location.reload(), 700);
+  });
+}
+</script>"""
+    return page("Category rules", body, base_path=BASE_PATH, identity=identity)
 
 
 @app.get(f"{BASE_PATH}/review-queue", response_class=HTMLResponse)

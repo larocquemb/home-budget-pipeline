@@ -46,6 +46,16 @@ def test_active_categories_are_loaded_in_display_order():
     assert "WHERE is_active = TRUE" in cursor.executed[1][0]
 
 
+def test_category_rules_search_is_parameterized():
+    service, _, cursor = service_with()
+
+    service.category_rules(search="towel")
+
+    sql, params = cursor.executed[1]
+    assert "match_text ILIKE %s" in sql
+    assert params == ("%towel%",) * 4
+
+
 def service_with(rows=(), columns=(), responses=()):
     cursor = FakeCursor(rows, columns, responses)
     connection = FakeConnection(cursor)
