@@ -4,10 +4,30 @@ RECEIPT_TEST_ROOT ?= .receipt-test
 RECEIPT_TEST_WORKERS ?= 6
 RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 
-.PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts status
+.PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install
 
 status:
 	@./scripts/deployment_status.sh
+
+dev-up:
+	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
+	docker-compose --env-file .env.dev -f compose.dev.yaml up -d
+
+dev-down:
+	docker-compose --env-file .env.dev -f compose.dev.yaml down
+
+dev-web:
+	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
+	@set -a; . ./.env.dev; set +a; \
+		LEDGER_BASE_PATH=/ledger HOST=0.0.0.0 PORT=8080 \
+		.venv/bin/python -m home_budget_pipeline.web.app
+
+dev-cert-install:
+	@mkdir -p .dev-certs
+	docker-compose --env-file .env.dev -f compose.dev.yaml cp \
+		caddy:/data/caddy/pki/authorities/local/root.crt .dev-certs/caddy-root.crt
+	sudo security add-trusted-cert -d -r trustRoot \
+		-k /Library/Keychains/System.keychain .dev-certs/caddy-root.crt
 
 test:
 	pytest -q -m "not integration"
