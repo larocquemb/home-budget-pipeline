@@ -12,7 +12,7 @@ if not TEST_DATABASE_URL:
 TEMPLATE = Path("sql/receipt_processing_template.sql")
 
 
-def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypatch, tmp_path):
+def test_blue_green_receipt_schema_cutover_tracks_version_and_color(monkeypatch, tmp_path):
     import psycopg
     from home_budget_pipeline.receipts import schema_blue_green
 
@@ -21,12 +21,12 @@ def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypat
 
         state = conn.execute(
             """
-            SELECT version, current_schema, previous_schema, is_dirty
+            SELECT version, active_color, previous_version, is_dirty
               FROM ops.schema_state
              WHERE component = 'receipt_ingest'
             """
         ).fetchone()
-        assert state == (1, "ingest_v1", "ingest_v0", False)
+        assert state == (1, "green", 0, False)
 
         kinds = dict(
             conn.execute(
@@ -40,8 +40,8 @@ def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypat
             ).fetchall()
         )
         assert kinds == {"receipts": "v", "receipt_processing_status": "v"}
-        assert conn.execute("SELECT to_regclass('ingest_v0.receipts')").fetchone()[0] is not None
-        assert conn.execute("SELECT to_regclass('ingest_v1.receipts')").fetchone()[0] is not None
+        assert conn.execute("SELECT to_regclass('ingest_blue.receipts')").fetchone()[0] is not None
+        assert conn.execute("SELECT to_regclass('ingest_green.receipts')").fetchone()[0] is not None
         assert schema_blue_green.ensure_receipt_schema(conn, TEMPLATE) is False
 
         changed_template = tmp_path / "receipt_processing_template.sql"
@@ -57,20 +57,19 @@ def test_blue_green_receipt_schema_cutover_is_versioned_and_idempotent(monkeypat
 
         state = conn.execute(
             """
-            SELECT version, current_schema, previous_schema, is_dirty
+            SELECT version, active_color, previous_version, is_dirty
               FROM ops.schema_state
              WHERE component = 'receipt_ingest'
             """
         ).fetchone()
-        assert state == (2, "ingest_v2", "ingest_v1", False)
+        assert state == (2, "blue", 1, False)
 
-        # Keep exactly current + previous; older versions are retired.
-        assert conn.execute("SELECT to_regclass('ingest_v0.receipts')").fetchone()[0] is None
-        assert conn.execute("SELECT to_regclass('ingest_v1.receipts')").fetchone()[0] is not None
-        assert conn.execute("SELECT to_regclass('ingest_v2.receipts')").fetchone()[0] is not None
+        # Green remains the rollback copy while blue is active.
+        assert conn.execute("SELECT to_regclass('ingest_blue.receipts')").fetchone()[0] is not None
+        assert conn.execute("SELECT to_regclass('ingest_green.receipts')").fetchone()[0] is not None
 
 
-def test_blue_green_template_uses_versioned_schema_placeholder():
+def test_blue_green_template_uses_schema_placeholder():
     sql = TEMPLATE.read_text(encoding="utf-8")
     assert "__INGEST_SCHEMA__" in sql
     assert 'CREATE TABLE "__INGEST_SCHEMA__".receipts' in sql
