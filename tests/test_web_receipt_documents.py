@@ -90,11 +90,13 @@ def test_receipt_preview_embeds_image():
     assert "Open original receipt" in preview
 
 
-def test_receipt_crop_removes_white_margins():
+def test_receipt_crop_detects_dense_edges_and_ignores_sparse_scanner_noise():
     image = Image.new("RGB", (200, 300), "white")
     for x in range(70, 130):
         for y in range(40, 260):
             image.putpixel((x, y), (180, 180, 180))
+    image.putpixel((1, 1), (0, 0, 0))
+    image.putpixel((198, 298), (0, 0, 0))
 
     cropped = web_app._crop_receipt_image(image, threshold=245, padding=5)
 

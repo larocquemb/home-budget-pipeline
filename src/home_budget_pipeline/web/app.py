@@ -154,16 +154,40 @@ def receipt_document(evidence_id: int, service: LedgerQueryService = Depends(que
     return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
 
 
+def _dense_axis_bounds(grayscale, *, vertical: bool, threshold: int) -> tuple[int, int] | None:
+    pixels = grayscale.load()
+    axis_length = grayscale.width if vertical else grayscale.height
+    cross_length = grayscale.height if vertical else grayscale.width
+    minimum_foreground = max(2, round(cross_length * 0.015))
+    active: list[int] = []
+    for position in range(axis_length):
+        foreground_count = sum(
+            (pixels[position, cross] if vertical else pixels[cross, position]) < threshold
+            for cross in range(cross_length)
+        )
+        if foreground_count >= minimum_foreground:
+            active.append(position)
+    if not active:
+        return None
+    return active[0], active[-1] + 1
+
+
 def _crop_receipt_image(image, *, threshold: int = 245, padding: int = 24):
     from PIL import ImageOps
 
     rgb = image.convert("RGB")
     grayscale = ImageOps.grayscale(rgb)
-    foreground = grayscale.point(lambda value: 255 if value < threshold else 0)
-    bounds = foreground.getbbox()
-    if bounds is None:
-        return rgb
-    left, top, right, bottom = bounds
+    horizontal = _dense_axis_bounds(grayscale, vertical=True, threshold=threshold)
+    vertical = _dense_axis_bounds(grayscale, vertical=False, threshold=threshold)
+    if horizontal is not None and vertical is not None:
+        left, right = horizontal
+        top, bottom = vertical
+    else:
+        foreground = grayscale.point(lambda value: 255 if value < threshold else 0)
+        bounds = foreground.getbbox()
+        if bounds is None:
+            return rgb
+        left, top, right, bottom = bounds
     return rgb.crop((
         max(0, left - padding),
         max(0, top - padding),
