@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: receipt-processing-reset
+  namespace: home-budget
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: receipt-processing-reset
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: reset-receipt-state
+          image: ghcr.io/larocquemb/home-budget-pipeline
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -c
+          args:
+            - |
+              import os
+              from pathlib import Path
+              import psycopg
+
+              sql = Path('/opt/app-root/src/sql/receipt_processing.sql').read_text(encoding='utf-8')
+              with psycopg.connect(os.environ['DATABASE_URL']) as conn:
+                  conn.execute(sql)
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
