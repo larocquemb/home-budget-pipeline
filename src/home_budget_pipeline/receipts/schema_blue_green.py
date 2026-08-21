@@ -129,8 +129,6 @@ def _cut_over(
     previous_schema: str | None,
 ) -> None:
     with conn.transaction():
-        # Stable compatibility schemas/views are switched atomically only after
-        # the new physical schema has been built and validated.
         _drop_budget_status_relation(conn)
         previous_schema = _preserve_legacy_ingest(conn, previous_schema)
         conn.execute("CREATE SCHEMA ingest")
@@ -177,12 +175,7 @@ def _cut_over(
 
 
 def ensure_receipt_schema(conn, template_path: Path = TEMPLATE_PATH) -> bool:
-    """Build/cut over only when version/hash/dirty state requires it.
-
-    The previous physical schema is deliberately retained after cutover so a
-    rollback can repoint the stable views without rebuilding data.
-    Returns True when a blue/green rebuild was performed, False for a no-op.
-    """
+    """Build/cut over only when an intentional schema version requires it."""
     template = template_path.read_text(encoding="utf-8")
     desired_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
     target_schema = f"ingest_v{SCHEMA_VERSION}"
@@ -191,8 +184,13 @@ def ensure_receipt_schema(conn, template_path: Path = TEMPLATE_PATH) -> bool:
     conn.execute("SELECT pg_advisory_lock(hashtext(%s))", (LOCK_NAME,))
     try:
         state = _state(conn)
-        if state and state[0] == SCHEMA_VERSION and state[3] == desired_hash and not state[4]:
-            return False
+        if state and state[0] == SCHEMA_VERSION:
+            if state[3] == desired_hash and not state[4]:
+                return False
+            if state[3] != desired_hash:
+                raise RuntimeError(
+                    "receipt schema template changed without a SCHEMA_VERSION bump"
+                )
 
         previous_schema = state[1] if state else None
         _mark_dirty(conn, desired_hash)
