@@ -20,7 +20,8 @@ if ! command -v gh >/dev/null 2>&1; then
 else
     if ! gh run list --branch main --limit "$run_limit" \
         --json conclusion,status,displayTitle,headBranch,headSha,databaseId,createdAt \
-        --template '{{tablerow "STATUS" "TITLE" "BRANCH" "COMMIT" "RUN ID" "AGE"}}{{range .}}{{if eq .conclusion ""}}{{tablerow .status .displayTitle .headBranch (printf "%.7s" .headSha) .databaseId (timeago .createdAt)}}{{else}}{{tablerow .conclusion .displayTitle .headBranch (printf "%.7s" .headSha) .databaseId (timeago .createdAt)}}{{end}}{{end}}{{tablerender}}'; then
+        --jq '(["STATUS", "TITLE", "BRANCH", "COMMIT", "RUN ID", "AGE"] | @tsv), (.[] | (now - (.createdAt | fromdateiso8601) | floor) as $age | [(if .conclusion == "" then .status else .conclusion end), .displayTitle, .headBranch, .headSha[0:7], .databaseId, (if $age < 3600 then "\($age / 60 | floor)m\($age % 60)s" elif $age < 86400 then "\($age / 3600 | floor)h\(($age % 3600) / 60 | floor)m" else "\($age / 86400 | floor)d\(($age % 86400) / 3600 | floor)h" end)] | @tsv)' \
+        | column -t -s $'\t'; then
         exit_status=1
     fi
 fi

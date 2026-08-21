@@ -8,9 +8,11 @@ def test_deployment_status_covers_ci_argocd_jobs_and_pods():
     text = SCRIPT.read_text(encoding="utf-8")
 
     assert 'gh run list --branch main --limit "$run_limit"' in text
-    assert '"STATUS" "TITLE" "BRANCH" "COMMIT" "RUN ID" "AGE"' in text
-    assert '(printf "%.7s" .headSha)' in text
-    assert '{{if eq .conclusion ""}}{{tablerow .status' in text
+    assert '["STATUS", "TITLE", "BRANCH", "COMMIT", "RUN ID", "AGE"]' in text
+    assert '.headSha[0:7]' in text
+    assert '"\\($age / 60 | floor)m\\($age % 60)s"' in text
+    assert '"\\($age / 3600 | floor)h' in text
+    assert '"\\($age / 86400 | floor)d' in text
     assert 'argocd app get "$argo_app" --grpc-web -o json' in text
     assert ".status.sync.revision[0:7]" in text
     assert "Revision:      %s -> Application: %.7s" in text
