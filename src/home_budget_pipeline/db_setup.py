@@ -24,12 +24,16 @@ def _execute_sql_file(conn, path: Path) -> None:
 
 
 def ensure_database_schema(conn) -> dict[str, bool]:
-    """Ensure the base budget schema and blue/green receipt ingest schema exist."""
+    """Ensure base schema, current constraint policy, and receipt ingest schema."""
     base_created = False
     if not _relation_exists(conn, "budget.expenses"):
         _execute_sql_file(conn, BASE_SCHEMA)
-        _execute_sql_file(conn, CONSTRAINTS_SCHEMA)
         base_created = True
+
+    # Constraint policy is migration-like and must be applied to existing
+    # databases too. In particular, identical receipt lines are valid, so the
+    # obsolete content-based unique index must be removed wherever it exists.
+    _execute_sql_file(conn, CONSTRAINTS_SCHEMA)
 
     receipt_changed = ensure_receipt_schema(conn, RECEIPT_TEMPLATE)
     return {
