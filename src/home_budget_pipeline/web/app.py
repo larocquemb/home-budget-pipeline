@@ -280,17 +280,19 @@ def expenses_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, g
     review_filter = _optional_bool_query(requires_review)
     result = service.analytics_expenses(limit=limit, offset=offset, source=source, merchant=merchant, requires_review=review_filter)
     review_value = "" if review_filter is None else str(review_filter).lower()
+    if result.total_count is None:
+        total_summary = ""
+    else:
+        noun = "expense" if result.total_count == 1 else "expenses"
+        total_summary = f'<span><strong>{result.total_count:,}</strong> {noun}</span>'
     body = f"""
 <form class="toolbar" method="get">
 <label>Source<input name="source" value="{esc(source)}"></label>
 <label>Merchant<input name="merchant" value="{esc(merchant)}"></label>
 <label>Review<select name="requires_review"><option value="">All</option><option value="true"{' selected' if review_value == 'true' else ''}>Needs review</option><option value="false"{' selected' if review_value == 'false' else ''}>No review</option></select></label>
 <label>Rows<input name="limit" type="number" min="1" max="200" value="{limit}"></label>
-<button type="submit">Filter</button>
+<button type="submit">Filter</button>{total_summary}
 </form>"""
-    if result.total_count is not None:
-        noun = "expense" if result.total_count == 1 else "expenses"
-        body += f'<p><strong>{result.total_count:,}</strong> {noun}</p>'
     body += table(result.rows, (("expense_pk", "Expense"), ("source", "Source"), ("order_date", "Date"), ("store_name", "Merchant"), ("account_name", "Account"), ("expense_total", "Total"), ("extraction_status", "Extraction"), ("requires_review", "Review")), links={"expense_pk": f"{BASE_PATH}/expenses/{{value}}"}, money_columns={"expense_total"})
     body += pager(f"{BASE_PATH}/expenses", limit=limit, offset=offset, row_count=len(result.rows), total_count=result.total_count, query={"source": source, "merchant": merchant, "requires_review": review_value})
     return page("Expenses", body, base_path=BASE_PATH, identity=identity)

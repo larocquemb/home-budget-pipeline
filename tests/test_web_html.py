@@ -114,6 +114,7 @@ def test_expenses_page_has_filter_and_drilldown():
     assert f'{web_app.BASE_PATH}/expenses/42' in text
     assert "Filter" in text
     assert "<strong>101</strong> expenses" in text
+    assert text.index("Filter</button>") < text.index("<strong>101</strong> expenses") < text.index("</form>")
     assert "Page 1 of 3" in text
     assert "Next →" in text
 
