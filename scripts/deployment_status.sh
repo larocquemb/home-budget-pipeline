@@ -76,12 +76,13 @@ else
             fi
         fi
 
-        printf 'Application commit:  %s\n' "$application_commit"
-        printf 'Kubernetes image:    %s\n' "$configured_image"
-        printf 'GHCR digest:         %s\n' "$ghcr_digest"
-        printf 'Pod:                 %s\n' "$pod_name"
-        printf 'Pod running digest:  %s\n' "$pod_digest"
-        printf 'Match:               %s\n' "$match"
+        application_commit="${application_commit:0:7}"
+        ghcr_digest_short="${ghcr_digest#sha256:}"
+        pod_digest_short="${pod_digest#sha256:}"
+        printf 'Application commit: %s\n' "$application_commit"
+        printf 'GHCR digest:        %.7s\n' "$ghcr_digest_short"
+        printf 'Pod digest:         %.7s\n' "$pod_digest_short"
+        printf 'Match:              %s\n' "$match"
     fi
 fi
 
