@@ -27,7 +27,7 @@ class FakeCursor:
             self._mode = "lock"
         elif "pg_advisory_unlock" in sql:
             self._mode = "unlock"
-        elif "SELECT source_sha256" in sql and "receipt_evidence" in sql:
+        elif "SELECT source_sha256" in sql and "receipt_processing_status" in sql:
             self._mode = "existing"
         else:
             self._mode = "write"
@@ -165,8 +165,6 @@ def test_process_backlog_isolates_failed_receipt_and_continues(monkeypatch):
     assert summary["failed"] == 1
     assert summary["succeeded"] == 1
     assert len(persisted) == 1
-    # One rollback isolates the failed receipt; the second clears any transaction
-    # state before releasing the session-level PostgreSQL advisory lock.
     assert conn.rollbacks == 2
     assert conn.commits >= 3
 
@@ -194,22 +192,37 @@ def test_failed_status_preserves_retryable_hash_and_error():
     conn = FakeConn()
     candidate = _candidate("bad.pdf", "abc123")
 
-    backlog_ingest._mark_failed(conn, candidate, Path("."), "budget", ValueError("bad receipt"))
+    backlog_ingest._mark_failed(conn, candidate, Path("."), "ingest", ValueError("bad receipt"))
 
-    sql = conn.cursor_obj.sql[-1]
-    params = conn.cursor_obj.params[-1]
-    assert "receipt_processing_status" in sql
-    assert "status = 'failed'" in sql
-    assert params[0] == "abc123"
-    assert "ValueError: bad receipt" in params[2]
+    identity_sql = conn.cursor_obj.sql[-2]
+    status_sql = conn.cursor_obj.sql[-1]
+    status_params = conn.cursor_obj.params[-1]
+    assert "INSERT INTO ingest.receipts" in identity_sql
+    assert "receipt_processing_status" in status_sql
+    assert "status = 'failed'" in status_sql
+    assert status_params[0] == "abc123"
+    assert "ValueError: bad receipt" in status_params[1]
 
 
 def test_processing_status_increments_attempts_on_retry():
     conn = FakeConn()
     candidate = _candidate("retry.pdf", "abc123")
 
-    backlog_ingest._mark_processing(conn, candidate, Path("."), "budget")
+    backlog_ingest._mark_processing(conn, candidate, Path("."), "ingest")
 
     sql = conn.cursor_obj.sql[-1]
-    assert "attempts = budget.receipt_processing_status.attempts + 1" in sql
+    assert "attempts = ingest.receipt_processing_status.attempts + 1" in sql
     assert "status = 'processing'" in sql
+
+
+def test_source_reference_is_stored_with_sha_identity():
+    conn = FakeConn()
+    root = Path("/receipts")
+    candidate = _candidate("/receipts/2026-08-14/receipt.pdf", "abc123")
+
+    backlog_ingest._mark_processing(conn, candidate, root, "ingest")
+
+    identity_sql = conn.cursor_obj.sql[-2]
+    identity_params = conn.cursor_obj.params[-2]
+    assert "INSERT INTO ingest.receipts" in identity_sql
+    assert identity_params == ("abc123", "2026-08-14/receipt.pdf")
