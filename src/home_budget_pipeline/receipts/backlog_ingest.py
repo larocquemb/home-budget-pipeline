@@ -64,8 +64,11 @@ def acquire_backlog_lock(conn) -> bool:
 
 
 def release_backlog_lock(conn) -> None:
+    """Release the session lock from a clean transaction state."""
+    conn.rollback()
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (LOCK_NAME,))
+    conn.commit()
 
 
 def _source_reference(candidate: ReceiptCandidate, root: Path) -> str:
