@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import psycopg
-
 from home_budget_pipeline.receipts.schema_blue_green import ensure_receipt_schema
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +39,8 @@ def ensure_database_schema(conn) -> dict[str, bool]:
 
 
 def main() -> int:
+    import psycopg
+
     dsn = os.environ.get("DATABASE_URL") or os.environ.get("HOME_BUDGET_PG_DSN")
     if not dsn:
         raise RuntimeError("DATABASE_URL or HOME_BUDGET_PG_DSN is required")
