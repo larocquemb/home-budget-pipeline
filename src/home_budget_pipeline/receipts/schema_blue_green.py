@@ -122,6 +122,15 @@ def _preserve_legacy_ingest(conn, previous_schema: str | None) -> str | None:
     return None
 
 
+def _prune_old_versions(conn, keep: set[str]) -> None:
+    schemas = conn.execute(
+        "SELECT nspname FROM pg_namespace WHERE nspname ~ '^ingest_v[0-9]+$'"
+    ).fetchall()
+    for (schema_name,) in schemas:
+        if schema_name not in keep:
+            conn.execute(f'DROP SCHEMA "{schema_name}" CASCADE')
+
+
 def _cut_over(
     conn,
     target_schema: str,
@@ -172,6 +181,10 @@ def _cut_over(
             """,
             (COMPONENT, SCHEMA_VERSION, target_schema, previous_schema, desired_hash),
         )
+        keep = {target_schema}
+        if previous_schema:
+            keep.add(previous_schema)
+        _prune_old_versions(conn, keep)
 
 
 def ensure_receipt_schema(conn, template_path: Path = TEMPLATE_PATH) -> bool:
