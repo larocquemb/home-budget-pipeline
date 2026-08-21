@@ -22,6 +22,7 @@ RETAILER_DOMAINS = {
     "old navy": "oldnavy.gapcanada.ca",
 }
 BARCODE_RE = re.compile(r"\b\d{8,14}\b")
+RECEIPT_SUFFIX_RE = re.compile(r"(?:\s+\d+[.,]\d{2})?\s+(?:GP|LP|FP|H|A|B|T)$", re.IGNORECASE)
 
 
 def retailer_domain(merchant: str) -> Optional[str]:
@@ -37,12 +38,17 @@ def product_query(item_name: str, merchant: str) -> Optional[str]:
     if not domain:
         return None
     barcode = BARCODE_RE.search(item_name or "")
-    terms = barcode.group(0) if barcode else re.sub(r"<[^>]+>|[^A-Za-z0-9 ]+", " ", item_name).strip()
-    return f'site:{domain} "{terms}"'
+    if barcode:
+        return f'site:{domain} "{barcode.group(0)}"'
+    terms = re.sub(r"<[^>]+>|[^A-Za-z0-9 .]+", " ", item_name).strip()
+    terms = RECEIPT_SUFFIX_RE.sub("", terms).strip()
+    terms = re.sub(r"\s+", " ", terms)
+    return f"site:{domain} {terms}" if terms else None
 
 
 def candidate_score(item_name: str, domain: str, title: str, url: str, snippet: str = "") -> float:
-    if urllib.parse.urlparse(url).hostname not in {domain, f"www.{domain}"}:
+    hostname = (urllib.parse.urlparse(url).hostname or "").lower()
+    if hostname != domain and not hostname.endswith(f".{domain}"):
         return 0.0
     source = f"{title} {url} {snippet}".lower()
     barcode = BARCODE_RE.search(item_name or "")
@@ -85,8 +91,13 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool)
             SELECT i.id, i.item_name, e.store_name
               FROM budget.expense_items i JOIN budget.expenses e ON e.id=i.expense_pk
              WHERE i.product_description IS NULL OR i.product_url IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM budget.product_enrichment_results r
+                    WHERE r.expense_item_id=i.id
+               )
+               AND (e.store_name ILIKE ANY(%s))
              ORDER BY i.id LIMIT %s
-        """, (limit,)).fetchall()
+        """, ([f"%{name}%" for name in RETAILER_DOMAINS], limit)).fetchall()
         cache: dict[str, Optional[SearchResult]] = {}
         for row in rows:
             stats["considered"] += 1
@@ -96,8 +107,21 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool)
                 stats["unsupported"] += 1
                 continue
             if query not in cache:
-                cache[query] = brave_search(api_key, query, row["item_name"], domain)
-                stats["searched"] += 1
+                previous = conn.execute("""
+                    SELECT candidate_title, candidate_url, confidence
+                      FROM budget.product_enrichment_results
+                     WHERE provider='brave' AND search_query=%s
+                       AND candidate_url IS NOT NULL
+                     ORDER BY searched_at DESC LIMIT 1
+                """, (query,)).fetchone()
+                if previous:
+                    cache[query] = SearchResult(
+                        previous["candidate_title"] or "",
+                        previous["candidate_url"], "", float(previous["confidence"]),
+                    )
+                else:
+                    cache[query] = brave_search(api_key, query, row["item_name"], domain)
+                    stats["searched"] += 1
             result = cache[query]
             status = "accepted" if result and result.score >= threshold else "review"
             stats[status] += 1
