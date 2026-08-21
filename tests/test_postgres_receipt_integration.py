@@ -155,7 +155,12 @@ def test_web_category_override_creates_rule_and_updates_scoped_exact_matches():
     service = LedgerQueryService(
         connect=lambda: psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row)
     )
-    result = service.save_category_override(selected_item_id, 'Indoor Supplies')
+    result = service.save_category_override(
+        selected_item_id,
+        'Indoor Supplies',
+        actor_user='Paul',
+        actor_email='paul@example.com',
+    )
 
     assert result['affected_items'] == 2
     with psycopg.connect(TEST_DATABASE_URL) as conn:
@@ -172,6 +177,21 @@ def test_web_category_override_creates_rule_and_updates_scoped_exact_matches():
             assert cur.fetchone() == (
                 'costco', 'Costco', 'exact', 'bath towel', 'Indoor Supplies',
                 'manual', True,
+            )
+            cur.execute(
+                """
+                SELECT mapping_id, expense_item_id, actor_user, actor_email, action,
+                       item_name, match_text, source, merchant, old_category,
+                       new_category, affected_item_count
+                  FROM budget.expense_category_mapping_audit
+                 WHERE id = %s
+                """,
+                (result['audit_id'],),
+            )
+            assert cur.fetchone() == (
+                result['mapping_id'], selected_item_id, 'Paul', 'paul@example.com',
+                'created', 'BATH-TOWEL', 'bath towel', 'costco', 'Costco',
+                'Groceries', 'Indoor Supplies', 2,
             )
             cur.execute(
                 """

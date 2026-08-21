@@ -143,16 +143,18 @@ def test_expense_detail_category_dropdown_creates_override_action():
 
 def test_category_override_endpoint_saves_approved_rule():
     class OverrideService:
-        def save_category_override(self, expense_item_id, category):
+        def save_category_override(self, expense_item_id, category, *, actor_user, actor_email):
             assert expense_item_id == 12
             assert category == "Indoor Supplies"
+            assert actor_user == "Paul"
+            assert actor_email == "paul@example.com"
             return {"mapping_id": 8, "affected_items": 2}
 
     result = web_app.api_category_override(
         web_app.CategoryOverrideRequest(expense_item_id=12, category="Indoor Supplies"),
         x_ledger_action="category-override",
         service=OverrideService(),
-        _=IDENTITY,
+        identity=IDENTITY,
     )
 
     assert result == {"mapping_id": 8, "affected_items": 2}
