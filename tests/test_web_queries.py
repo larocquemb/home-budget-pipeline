@@ -37,6 +37,15 @@ class FakeConnection:
         self.closed = True
 
 
+def test_active_categories_are_loaded_in_display_order():
+    service, _, cursor = service_with(
+        responses=(([('Groceries',), ('Indoor Supplies',)], ('category_name',)),)
+    )
+
+    assert service.active_categories() == ('Groceries', 'Indoor Supplies')
+    assert "WHERE is_active = TRUE" in cursor.executed[1][0]
+
+
 def service_with(rows=(), columns=(), responses=()):
     cursor = FakeCursor(rows, columns, responses)
     connection = FakeConnection(cursor)

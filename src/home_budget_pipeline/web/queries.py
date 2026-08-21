@@ -1,10 +1,12 @@
-"""Read-only PostgreSQL query service for the Ledger web UI."""
+"""PostgreSQL query and narrowly scoped mutation service for the Ledger UI."""
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
+
+from home_budget_pipeline.categorization.logic import normalize_for_match
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,115 @@ class LedgerQueryService:
             (expense_pk,),
         )
         return expense
+
+    def active_categories(self) -> tuple[str, ...]:
+        rows = self._fetch(
+            """
+            SELECT category_name
+              FROM budget.expense_categories
+             WHERE is_active = TRUE
+             ORDER BY sort_order, category_name
+            """
+        )
+        return tuple(str(row["category_name"]) for row in rows)
+
+    def save_category_override(self, expense_item_id: int, category: str) -> dict[str, Any]:
+        """Create an approved exact rule and apply it to matching imported items."""
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT i.item_name, i.item_name_norm, e.source, e.store_name
+                      FROM budget.expense_items i
+                      JOIN budget.expenses e ON e.id = i.expense_pk
+                     WHERE i.id = %s
+                    """,
+                    (expense_item_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise LookupError("expense item not found")
+                if isinstance(row, dict):
+                    item_name = row["item_name"]
+                    item_name_norm = normalize_for_match(str(item_name))
+                    source = row["source"]
+                    merchant = row["store_name"]
+                else:
+                    item_name, _, source, merchant = row
+                    item_name_norm = normalize_for_match(str(item_name))
+
+                cur.execute(
+                    """
+                    SELECT 1
+                      FROM budget.expense_categories
+                     WHERE category_name = %s AND is_active = TRUE
+                    """,
+                    (category,),
+                )
+                if cur.fetchone() is None:
+                    raise ValueError("category is not active")
+
+                cur.execute(
+                    """
+                    INSERT INTO budget.expense_category_mappings (
+                        source, merchant, match_type, match_text, category_name,
+                        priority, is_active, provenance, is_approved, notes
+                    )
+                    VALUES (%s, %s, 'exact', %s, %s, 10, TRUE, 'manual', TRUE,
+                            'Created from Ledger expense item category override')
+                    ON CONFLICT (
+                        (COALESCE(lower(trim(source)), '')),
+                        (COALESCE(lower(trim(merchant)), '')),
+                        match_type,
+                        (lower(trim(match_text)))
+                    )
+                    DO UPDATE SET
+                        category_name = EXCLUDED.category_name,
+                        priority = EXCLUDED.priority,
+                        is_active = TRUE,
+                        provenance = 'manual',
+                        is_approved = TRUE,
+                        notes = EXCLUDED.notes,
+                        updated_at = NOW()
+                    RETURNING id
+                    """,
+                    (source, merchant, item_name_norm, category),
+                )
+                mapping_row = cur.fetchone()
+                mapping_id = mapping_row["id"] if isinstance(mapping_row, dict) else mapping_row[0]
+
+                cur.execute(
+                    """
+                    UPDATE budget.expense_items i
+                       SET budget_category = %s,
+                           category_source = 'rule',
+                           category_confidence = 1,
+                           category_rationale = 'human-approved category override',
+                           category_requires_review = FALSE,
+                           categorized_at = NOW(),
+                           updated_at = NOW()
+                      FROM budget.expenses e
+                     WHERE e.id = i.expense_pk
+                       AND trim(lower(regexp_replace(i.item_name, '[^a-zA-Z0-9]+', ' ', 'g'))) = %s
+                       AND e.source IS NOT DISTINCT FROM %s
+                       AND lower(trim(e.store_name)) IS NOT DISTINCT FROM lower(trim(%s))
+                    """,
+                    (category, item_name_norm, source, merchant),
+                )
+                affected_items = cur.rowcount
+            conn.commit()
+            return {
+                "mapping_id": mapping_id,
+                "item_name": item_name,
+                "category": category,
+                "affected_items": affected_items,
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def receipt_evidence(self, evidence_id: int) -> dict[str, Any] | None:
         rows = self._fetch(

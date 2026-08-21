@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from .queries import LedgerQueryService
@@ -22,6 +23,11 @@ ELECTRONIC_RECEIPT_SOURCE_ROOT = Path(
 ).resolve()
 
 app = FastAPI(title="BrownRook Ledger", version="0.4.0")
+
+
+class CategoryOverrideRequest(BaseModel):
+    expense_item_id: int = Field(gt=0)
+    category: str = Field(min_length=1, max_length=200)
 
 
 def _header_text(value: object) -> Optional[str]:
@@ -110,6 +116,23 @@ def api_expense_detail(expense_pk: int, service: LedgerQueryService = Depends(qu
     if result is None:
         raise HTTPException(status_code=404, detail="expense not found")
     return result
+
+
+@app.post(f"{BASE_PATH}/api/category-overrides")
+def api_category_override(
+    request: CategoryOverrideRequest,
+    x_ledger_action: Optional[str] = Header(default=None),
+    service: LedgerQueryService = Depends(query_service),
+    _: dict[str, str] = Depends(authenticated_identity),
+):
+    if x_ledger_action != "category-override":
+        raise HTTPException(status_code=403, detail="category override action header missing")
+    try:
+        return service.save_category_override(request.expense_item_id, request.category)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get(f"{BASE_PATH}/api/duplicates")
@@ -371,7 +394,53 @@ def expense_page(expense_pk: int, service: LedgerQueryService = Depends(query_se
 <div><strong>Account</strong><br>{esc(expense.get('account_name'))}</div>
 <div><strong>Requires review</strong><br>{esc(expense.get('requires_review'))}</div>
 </div></div>"""
-    detail += "<h2>Line items</h2>" + table(expense.get("items", ()), (("item_name", "Item"), ("budget_category", "Category"), ("category_group_name", "Group"), ("line_total", "Amount"), ("category_source", "Category source"), ("category_confidence", "Confidence")), money_columns={"line_total"})
+    categories = service.active_categories()
+    item_rows = []
+    for item in expense.get("items", ()):
+        selected = item.get("budget_category")
+        options = "".join(
+            f'<option value="{esc(category)}"{" selected" if category == selected else ""}>{esc(category)}</option>'
+            for category in categories
+        )
+        item_rows.append(f"""<tr>
+<td>{esc(item.get('item_name'))}</td>
+<td><form class="category-override-form" data-item-id="{esc(item.get('expense_item_id'))}">
+<select name="category" aria-label="Category for {esc(item.get('item_name'))}">{options}</select>
+<button type="submit">Save override</button><small class="category-save-status muted"></small>
+</form></td>
+<td>{esc(item.get('category_group_name'))}</td>
+<td class="num">{money(item.get('line_total'))}</td>
+<td>{esc(item.get('category_source'))}</td>
+<td>{esc(item.get('category_confidence'))}</td>
+</tr>""")
+    detail += """<h2>Line items</h2><table><thead><tr>
+<th>Item</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th><th>Confidence</th>
+</tr></thead><tbody>""" + "".join(item_rows) + """</tbody></table>
+<script>
+for (const form of document.querySelectorAll('.category-override-form')) {
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = form.querySelector('button');
+    const status = form.querySelector('.category-save-status');
+    button.disabled = true;
+    status.textContent = ' Saving…';
+    try {
+      const response = await fetch('""" + f"{BASE_PATH}/api/category-overrides" + """', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-Ledger-Action': 'category-override'},
+        body: JSON.stringify({expense_item_id: Number(form.dataset.itemId), category: form.category.value})
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || 'Unable to save override');
+      status.textContent = ` Saved rule; updated ${result.affected_items} item(s)`;
+      setTimeout(() => window.location.reload(), 700);
+    } catch (error) {
+      status.textContent = ` ${error.message}`;
+      button.disabled = false;
+    }
+  });
+}
+</script>"""
     detail += "<h2>Receipt evidence</h2>" + table(expense.get("evidence", ()), (("id", "Evidence"), ("evidence_type", "Type"), ("source_reference", "Source file"), ("transaction_datetime", "Date/time"), ("total", "Total"), ("extraction_status", "Extraction")), links={"id": f"{BASE_PATH}/evidence/{{value}}"}, money_columns={"total"})
     return page(f"Expense {expense_pk}", detail, base_path=BASE_PATH, identity=identity)
 
