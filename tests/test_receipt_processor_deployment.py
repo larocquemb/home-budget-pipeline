@@ -14,6 +14,8 @@ def test_receipt_processor_cronjob_contract():
     assert "name: postgres-secret" in text
     assert 'cpu: "2"' in text
     assert "memory: 2Gi" in text
+    assert "fsGroup: 1000" in text
+    assert "fsGroupChangePolicy: OnRootMismatch" in text
 
 
 def test_kustomization_includes_receipt_processor():

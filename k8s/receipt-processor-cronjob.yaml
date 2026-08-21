@@ -17,6 +17,9 @@ spec:
             app: receipt-processor
         spec:
           restartPolicy: Never
+          securityContext:
+            fsGroup: 1000
+            fsGroupChangePolicy: OnRootMismatch
           imagePullSecrets:
             - name: ghcr-secret
           containers:
