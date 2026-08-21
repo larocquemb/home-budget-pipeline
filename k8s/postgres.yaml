@@ -50,8 +50,10 @@ spec:
                 /schema/004-financial-transactions.sql
               cp /opt/app-root/src/sql/receipt_deduplication.sql \
                 /schema/005-receipt-deduplication.sql
+              cp /opt/app-root/src/sql/schema_constraints.sql \
+                /schema/006-schema-constraints.sql
               cp /opt/app-root/src/sql/receipt_processing.sql \
-                /schema/006-receipt-processing.sql
+                /schema/007-receipt-processing.sql
           volumeMounts:
             - name: postgres-init
               mountPath: /schema
