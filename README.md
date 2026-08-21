@@ -11,6 +11,12 @@ PDF / scan / web      purchase + items       category/item       category splits
 
 A payment account answers **where the money came from**. A budget category answers **what the money was spent on**. Ledger deliberately keeps those concepts separate.
 
+Operational documentation:
+
+- [Ledger user guide](docs/user-guide.md)
+- [Build, deployment, and recovery runbook](docs/operations-runbook.md)
+- [Receipt backlog processing](docs/receipt-processing.md)
+
 ---
 
 ## 1. Pipeline Overview

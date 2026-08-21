@@ -153,6 +153,21 @@ def receipt_document(evidence_id: int, service: LedgerQueryService = Depends(que
     return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
 
 
+def _receipt_preview(evidence_id: int, evidence: dict[str, object]) -> str:
+    source_reference = evidence.get("source_reference")
+    if not source_reference:
+        return '<p class="muted">Receipt document not available.</p>'
+    document_url = f"{BASE_PATH}/evidence/{evidence_id}/document"
+    media_type = evidence.get("mime_type") or mimetypes.guess_type(str(source_reference))[0] or ""
+    if str(media_type).lower() == "application/pdf":
+        preview = f'<iframe class="receipt-preview receipt-preview-pdf" src="{document_url}" title="Receipt PDF" loading="lazy"></iframe>'
+    elif str(media_type).lower().startswith("image/"):
+        preview = f'<img class="receipt-preview receipt-preview-image" src="{document_url}" alt="Receipt image" loading="lazy">'
+    else:
+        preview = '<p class="muted">Preview is not available for this file type.</p>'
+    return preview + f'<p><a href="{document_url}" target="_blank" rel="noopener">Open original receipt</a></p>'
+
+
 @app.get(BASE_PATH, response_class=HTMLResponse)
 @app.get(f"{BASE_PATH}/", response_class=HTMLResponse)
 def ledger_home(identity: dict[str, str] = Depends(authenticated_identity)) -> str:
@@ -276,7 +291,8 @@ def evidence_page(evidence_id: int, service: LedgerQueryService = Depends(query_
 <div><strong>Extraction</strong><br>{esc(evidence.get('extraction_status'))} {esc(evidence.get('extraction_confidence'))}</div>
 <div><strong>Canonical expense</strong><br>{expense_link}</div>
 <div><strong>Source</strong><br>{esc(evidence.get('source_reference'))}</div>
-</div><p><a href="{BASE_PATH}/evidence/{evidence_id}/document" target="_blank" rel="noopener">View receipt</a></p></div>
+</div></div>
+<h2>Receipt</h2>{_receipt_preview(evidence_id, evidence)}
 <h2>Extracted text</h2><pre>{html.escape(str(evidence.get('raw_text') or ''))}</pre>"""
     return page(f"Receipt evidence {evidence_id}", body, base_path=BASE_PATH, identity=identity)
 
