@@ -382,8 +382,10 @@ def evidence_page(evidence_id: int, service: LedgerQueryService = Depends(query_
 <div><strong>Canonical expense</strong><br>{expense_link}</div>
 <div><strong>Source</strong><br>{esc(evidence.get('source_reference'))}</div>
 </div></div>
-<h2>Receipt</h2>{_receipt_preview_html(evidence_id, evidence)}
-<h2>Extracted text</h2><pre>{html.escape(str(evidence.get('raw_text') or ''))}</pre>"""
+<div class="receipt-review-grid">
+<section><h2>Receipt</h2>{_receipt_preview_html(evidence_id, evidence)}</section>
+<section><h2>Extracted text</h2><pre class="receipt-text">{html.escape(str(evidence.get('raw_text') or ''))}</pre></section>
+</div>"""
     return page(f"Receipt evidence {evidence_id}", body, base_path=BASE_PATH, identity=identity)
 
 

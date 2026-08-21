@@ -142,6 +142,8 @@ def test_evidence_page_embeds_cropped_pdf_preview_and_keeps_original_link():
     assert "--zoom-x" in text
     assert "requestAnimationFrame" in text
     assert "image.offsetLeft" in text
+    assert 'class="receipt-review-grid"' in text
+    assert 'class="receipt-text"' in text
     assert "Open original receipt" in text
     assert f'href="{document_url}"' in text
     assert "COSTCO RECEIPT" in text

@@ -55,12 +55,15 @@ th {{ position:sticky; top:0; background:Canvas; }}
 input, select, button {{ font:inherit; padding:.4rem .5rem; }}
 .card {{ border:1px solid #8885; border-radius:.5rem; padding:1rem; margin:1rem 0; }}
 .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:.75rem 1.5rem; }}
+.receipt-review-grid {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(22rem,.8fr); gap:1.5rem; align-items:start; }}
 .receipt-preview-viewport {{ position:relative; overflow:hidden; max-height:75vh; border-radius:.5rem; }}
 .receipt-preview {{ display:block; width:100%; border:1px solid #8885; border-radius:.5rem; background:#fff; }}
 .receipt-preview-image {{ width:auto; max-width:100%; max-height:75vh; margin:auto; object-fit:contain; transform-origin:var(--zoom-x,50%) var(--zoom-y,50%); transition:transform .2s ease-out; }}
 .receipt-preview-viewport:hover .receipt-preview-image {{ cursor:zoom-in; transform:scale(1.5); }}
+.receipt-text {{ box-sizing:border-box; max-height:75vh; margin:0; padding:1rem; overflow:auto; border:1px solid #8885; border-radius:.5rem; }}
 pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
 .pager {{ display:flex; gap:1rem; margin:1rem 0; }}
+@media (max-width: 60rem) {{ .receipt-review-grid {{ grid-template-columns:1fr; }} }}
 </style>
 </head>
 <body>

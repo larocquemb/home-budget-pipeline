@@ -18,7 +18,8 @@ For each row:
    text. PDF evidence is rendered as an image with receipt boundaries detected;
    sparse scanner noise and the surrounding page margins are excluded.
    Move the pointer over the image for a steady 1.5× magnification of the area
-   beneath it.
+   beneath it. On wider screens, extracted text appears beside the receipt so
+   both can be reviewed together; smaller screens stack them vertically.
    Use **Open original receipt** when the full PDF viewer is more convenient.
 2. Compare the scan with its extracted text.
 3. Open **Expense** and compare merchant, date, total, and line items.
