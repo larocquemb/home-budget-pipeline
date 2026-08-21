@@ -116,13 +116,18 @@ def table(rows: Iterable[Mapping[str, Any]], columns: tuple[tuple[str, str], ...
     return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(rendered)}</tbody></table>"
 
 
-def pager(path: str, *, limit: int, offset: int, row_count: int, query: Mapping[str, Any] | None = None) -> str:
+def pager(path: str, *, limit: int, offset: int, row_count: int, query: Mapping[str, Any] | None = None, total_count: int | None = None) -> str:
     query = {k: v for k, v in (query or {}).items() if v not in (None, "")}
     items = []
     if offset > 0:
         prev = dict(query, limit=limit, offset=max(0, offset - limit))
         items.append(f'<a href="{path}?{urlencode(prev)}">← Previous</a>')
-    if row_count == limit:
+    if (total_count is not None and offset + row_count < total_count) or (total_count is None and row_count == limit):
         nxt = dict(query, limit=limit, offset=offset + limit)
         items.append(f'<a href="{path}?{urlencode(nxt)}">Next →</a>')
+    if total_count is not None:
+        page_number = offset // limit + 1
+        page_count = max(1, (total_count + limit - 1) // limit)
+        summary = f'<span class="muted">Page {page_number} of {page_count}</span>'
+        items.insert(1 if offset > 0 else 0, summary)
     return '<div class="pager">' + "".join(items) + "</div>"

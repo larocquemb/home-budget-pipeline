@@ -2,9 +2,10 @@ from home_budget_pipeline.web.queries import LedgerQueryService
 
 
 class FakeCursor:
-    def __init__(self, rows=(), columns=()):
+    def __init__(self, rows=(), columns=(), responses=()):
         self.rows = list(rows)
         self.description = [(column,) for column in columns]
+        self.responses = list(responses)
         self.executed = []
 
     def __enter__(self):
@@ -15,6 +16,10 @@ class FakeCursor:
 
     def execute(self, sql, params=()):
         self.executed.append((" ".join(sql.split()), params))
+        if self.responses and not sql.lstrip().upper().startswith("SET "):
+            rows, columns = self.responses.pop(0)
+            self.rows = list(rows)
+            self.description = [(column,) for column in columns]
 
     def fetchall(self):
         return list(self.rows)
@@ -32,8 +37,8 @@ class FakeConnection:
         self.closed = True
 
 
-def service_with(rows=(), columns=()):
-    cursor = FakeCursor(rows, columns)
+def service_with(rows=(), columns=(), responses=()):
+    cursor = FakeCursor(rows, columns, responses)
     connection = FakeConnection(cursor)
     service = LedgerQueryService(connect=lambda: connection)
     return service, connection, cursor
@@ -41,20 +46,25 @@ def service_with(rows=(), columns=()):
 
 def test_query_service_sets_transaction_read_only_before_select():
     service, connection, cursor = service_with(
-        rows=[(1, "costco")],
-        columns=("expense_pk", "source"),
+        responses=(
+            ([(1,)], ("total_count",)),
+            ([(1, "costco")], ("expense_pk", "source")),
+        ),
     )
 
     page = service.analytics_expenses(limit=10)
 
     assert cursor.executed[0][0] == "SET TRANSACTION READ ONLY"
-    assert "FROM budget.analytics_expenses" in cursor.executed[1][0]
+    assert "COUNT(*) AS total_count" in cursor.executed[1][0]
+    assert "FROM budget.analytics_expenses" in cursor.executed[3][0]
     assert page.rows[0] == {"expense_pk": 1, "source": "costco"}
     assert connection.closed is True
 
 
 def test_expense_filters_are_server_side_and_parameterized():
-    service, _, cursor = service_with()
+    service, _, cursor = service_with(
+        responses=(([(0,)], ("total_count",)), ([], ()))
+    )
 
     service.analytics_expenses(
         limit=25,
@@ -64,11 +74,40 @@ def test_expense_filters_are_server_side_and_parameterized():
         requires_review=True,
     )
 
-    sql, params = cursor.executed[1]
+    count_sql, count_params = cursor.executed[1]
+    sql, params = cursor.executed[3]
+    assert "source = %s" in count_sql
+    assert count_params == ("costco", "%Regent%", True)
     assert "source = %s" in sql
     assert "store_name ILIKE %s" in sql
     assert "requires_review = %s" in sql
     assert params == ("costco", "%Regent%", True, 25, 50)
+
+
+def test_expenses_include_filtered_total_for_pagination():
+    service, _, cursor = service_with(
+        responses=(
+            ([(73,)], ("total_count",)),
+            ([(1, "costco")], ("expense_pk", "source")),
+        ),
+    )
+
+    page = service.analytics_expenses(limit=10)
+
+    assert "COUNT(*) AS total_count" in cursor.executed[1][0]
+    assert page.total_count == 73
+    assert page.rows == ({"expense_pk": 1, "source": "costco"},)
+
+
+def test_expenses_include_zero_total_when_page_is_empty():
+    service, _, _ = service_with(
+        responses=(([(0,)], ("total_count",)), ([], ()))
+    )
+
+    page = service.analytics_expenses(limit=10, merchant="missing")
+
+    assert page.total_count == 0
+    assert page.rows == ()
 
 
 def test_category_spend_reads_kan71_view_instead_of_recalculating():

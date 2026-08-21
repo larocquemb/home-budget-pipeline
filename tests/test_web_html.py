@@ -17,7 +17,7 @@ class FakeService:
             "expense_total": "295.47",
             "extraction_status": "complete",
             "requires_review": False,
-        },), kwargs.get("limit", 50), kwargs.get("offset", 0))
+        },), kwargs.get("limit", 50), kwargs.get("offset", 0), 101)
 
     def category_spend(self, **kwargs):
         return Page(({
@@ -113,6 +113,9 @@ def test_expenses_page_has_filter_and_drilldown():
     assert "Costco" in text
     assert f'{web_app.BASE_PATH}/expenses/42' in text
     assert "Filter" in text
+    assert "<strong>101</strong> expenses" in text
+    assert "Page 1 of 3" in text
+    assert "Next →" in text
 
 
 def test_expense_detail_shows_items_and_evidence():
