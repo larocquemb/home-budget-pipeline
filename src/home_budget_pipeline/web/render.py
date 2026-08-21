@@ -67,7 +67,7 @@ pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
 </style>
 </head>
 <body>
-<header><strong>BrownRook Ledger</strong><nav>{nav}</nav><small class="muted">Signed in as {who} · read-only</small></header>
+<header><strong>BrownRook Ledger</strong><nav>{nav}</nav><small class="muted">Signed in as {who}</small></header>
 <main><h1>{esc(title)}</h1>{body}</main>
 <script>
 for (const image of document.querySelectorAll('[data-hover-zoom]')) {{

@@ -6,6 +6,9 @@ IDENTITY = {"user": "Paul", "email": "paul@example.com"}
 
 
 class FakeService:
+    def active_categories(self):
+        return ("Groceries", "Indoor Supplies", "Outdoor Supplies")
+
     def analytics_expenses(self, **kwargs):
         return Page(({
             "expense_pk": 42,
@@ -79,7 +82,7 @@ class FakeService:
             "account_name": "Aventura",
             "expense_total": "295.47",
             "requires_review": False,
-            "items": ({"item_name": "Milk", "budget_category": "Groceries", "category_group_name": "Household", "line_total": "5.94", "category_source": "rule", "category_confidence": 1},),
+            "items": ({"expense_item_id": 12, "item_name": "Milk", "budget_category": "Groceries", "category_group_name": "Household", "line_total": "5.94", "category_source": "rule", "category_confidence": 1},),
             "evidence": ({"id": 7, "evidence_type": "scanned", "source_reference": "receipt.pdf", "transaction_datetime": "2026-08-20 10:00", "total": "295.47", "extraction_status": "complete"},),
         }
 
@@ -125,6 +128,34 @@ def test_expense_detail_shows_items_and_evidence():
     assert "Milk" in text
     assert "Receipt evidence" in text
     assert f'{web_app.BASE_PATH}/evidence/7' in text
+
+
+def test_expense_detail_category_dropdown_creates_override_action():
+    text = web_app.expense_page(42, service=FakeService(), identity=IDENTITY)
+
+    assert 'class="category-override-form" data-item-id="12"' in text
+    assert '<option value="Groceries" selected>Groceries</option>' in text
+    assert '<option value="Indoor Supplies">Indoor Supplies</option>' in text
+    assert "Save override" in text
+    assert f"{web_app.BASE_PATH}/api/category-overrides" in text
+    assert "X-Ledger-Action" in text
+
+
+def test_category_override_endpoint_saves_approved_rule():
+    class OverrideService:
+        def save_category_override(self, expense_item_id, category):
+            assert expense_item_id == 12
+            assert category == "Indoor Supplies"
+            return {"mapping_id": 8, "affected_items": 2}
+
+    result = web_app.api_category_override(
+        web_app.CategoryOverrideRequest(expense_item_id=12, category="Indoor Supplies"),
+        x_ledger_action="category-override",
+        service=OverrideService(),
+        _=IDENTITY,
+    )
+
+    assert result == {"mapping_id": 8, "affected_items": 2}
 
 
 def test_extraction_audit_links_expense_and_evidence():
