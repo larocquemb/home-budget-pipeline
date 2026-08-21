@@ -100,6 +100,28 @@ def _drop_budget_status_relation(conn) -> None:
     )
 
 
+def _preserve_legacy_ingest(conn, previous_schema: str | None) -> str | None:
+    if previous_schema:
+        conn.execute("DROP SCHEMA IF EXISTS ingest CASCADE")
+        return previous_schema
+
+    relation_kind = conn.execute(
+        """
+        SELECT c.relkind
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'ingest' AND c.relname = 'receipts'
+        """
+    ).fetchone()
+    if relation_kind and relation_kind[0] == "r":
+        conn.execute("DROP SCHEMA IF EXISTS ingest_v0 CASCADE")
+        conn.execute("ALTER SCHEMA ingest RENAME TO ingest_v0")
+        return "ingest_v0"
+
+    conn.execute("DROP SCHEMA IF EXISTS ingest CASCADE")
+    return None
+
+
 def _cut_over(
     conn,
     target_schema: str,
@@ -110,7 +132,7 @@ def _cut_over(
         # Stable compatibility schemas/views are switched atomically only after
         # the new physical schema has been built and validated.
         _drop_budget_status_relation(conn)
-        conn.execute("DROP SCHEMA IF EXISTS ingest CASCADE")
+        previous_schema = _preserve_legacy_ingest(conn, previous_schema)
         conn.execute("CREATE SCHEMA ingest")
         conn.execute(
             f"CREATE VIEW ingest.receipts AS SELECT * FROM {target_schema}.receipts"
