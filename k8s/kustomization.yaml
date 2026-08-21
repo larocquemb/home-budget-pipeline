@@ -5,6 +5,7 @@ resources:
   - storage-pv.yaml
   - storage-pvc.yaml
   - postgres.yaml
+  - receipt-processing-reset-job.yaml
   - ledger-web-service.yaml
   - oauth2-proxy.yaml
   - ledger-ingress.yaml
