@@ -55,10 +55,10 @@ th {{ position:sticky; top:0; background:Canvas; }}
 input, select, button {{ font:inherit; padding:.4rem .5rem; }}
 .card {{ border:1px solid #8885; border-radius:.5rem; padding:1rem; margin:1rem 0; }}
 .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:.75rem 1.5rem; }}
-.receipt-preview-viewport {{ overflow:hidden; max-height:75vh; border-radius:.5rem; }}
+.receipt-preview-viewport {{ position:relative; overflow:hidden; max-height:75vh; border-radius:.5rem; }}
 .receipt-preview {{ display:block; width:100%; border:1px solid #8885; border-radius:.5rem; background:#fff; }}
-.receipt-preview-image {{ width:auto; max-width:100%; max-height:75vh; margin:auto; object-fit:contain; transform-origin:var(--zoom-x,50%) var(--zoom-y,50%); transition:transform .12s ease-out; }}
-.receipt-preview-image:hover {{ cursor:zoom-in; transform:scale(2); }}
+.receipt-preview-image {{ width:auto; max-width:100%; max-height:75vh; margin:auto; object-fit:contain; transform-origin:var(--zoom-x,50%) var(--zoom-y,50%); transition:transform .2s ease-out; }}
+.receipt-preview-viewport:hover .receipt-preview-image {{ cursor:zoom-in; transform:scale(1.5); }}
 pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
 .pager {{ display:flex; gap:1rem; margin:1rem 0; }}
 </style>
@@ -68,10 +68,24 @@ pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
 <main><h1>{esc(title)}</h1>{body}</main>
 <script>
 for (const image of document.querySelectorAll('[data-hover-zoom]')) {{
-  image.addEventListener('pointermove', event => {{
-    const bounds = image.getBoundingClientRect();
-    image.style.setProperty('--zoom-x', `${{event.clientX - bounds.left}}px`);
-    image.style.setProperty('--zoom-y', `${{event.clientY - bounds.top}}px`);
+  const viewport = image.closest('.receipt-preview-viewport');
+  let animationFrame = null;
+  let pointerX = 0;
+  let pointerY = 0;
+  viewport.addEventListener('pointermove', event => {{
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+    if (animationFrame !== null) return;
+    animationFrame = requestAnimationFrame(() => {{
+      const viewportBounds = viewport.getBoundingClientRect();
+      const imageLeft = viewportBounds.left + image.offsetLeft;
+      const imageTop = viewportBounds.top + image.offsetTop;
+      const x = Math.max(0, Math.min(100, (pointerX - imageLeft) / image.offsetWidth * 100));
+      const y = Math.max(0, Math.min(100, (pointerY - imageTop) / image.offsetHeight * 100));
+      image.style.setProperty('--zoom-x', `${{x}}%`);
+      image.style.setProperty('--zoom-y', `${{y}}%`);
+      animationFrame = null;
+    }});
   }});
 }}
 </script>
