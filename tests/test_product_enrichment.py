@@ -14,3 +14,8 @@ def test_candidate_score_requires_retailer_and_rewards_matching_title():
     assert candidate_score("5PK YARD BAG", "homedepot.ca", "Kraft 5PK Yard Bag", "https://www.homedepot.ca/product/bags") > 0.85
     assert candidate_score("5PK YARD BAG", "homedepot.ca", "Kraft 5PK Yard Bag", "https://amp.homedepot.ca/product/bags") > 0.85
     assert candidate_score("5PK YARD BAG", "homedepot.ca", "Kraft Yard Bags", "https://example.com/bags") == 0
+
+
+def test_candidate_score_does_not_accept_category_or_promotion_pages():
+    assert candidate_score("OLAY BODY WASH 5.99 GP", "shoppersdrugmart.ca", "Buy Olay Body Wash", "https://www.shoppersdrugmart.ca/shop/olay/categories/body") == 0.8
+    assert candidate_score("Save up to", "shoppersdrugmart.ca", "Buy Online", "https://www.shoppersdrugmart.ca/page/OnlinePickUp") == 0
