@@ -16,7 +16,9 @@ def test_receipt_duplicate_link_table_contract():
 
 
 def test_fresh_bootstrap_stages_receipt_deduplication_without_migration():
-    text = Path("k8s/postgres.yaml").read_text()
-    assert "sql/receipt_deduplication.sql" in text
-    assert "/schema/005-receipt-deduplication.sql" in text
-    assert "migrations" not in text
+    manifest = Path("k8s/postgres.yaml").read_text()
+    bootstrap = Path("scripts/stage_db_bootstrap.sh").read_text()
+    assert "scripts/stage_db_bootstrap.sh /schema" in manifest
+    assert "sql/receipt_deduplication.sql" in bootstrap
+    assert "005-receipt-deduplication.sql" in bootstrap
+    assert "migrations" not in bootstrap

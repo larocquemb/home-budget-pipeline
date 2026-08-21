@@ -543,3 +543,7 @@ loop for application changes.
 
 Stop the proxy with `make dev-down`. The local Ledger process is intentionally
 outside Docker so source changes only require restarting that process.
+
+To discard and rebuild the local `home_budget` schemas with the exact SQL
+bootstrap sequence used by K3S, run `make dev-db-reset`. The command refuses
+to run unless PostgreSQL reports the local `home_budget` database.
