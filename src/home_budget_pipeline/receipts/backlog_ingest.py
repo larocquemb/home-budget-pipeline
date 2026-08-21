@@ -9,8 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
-import scanned_receipt_ingest as scan
-
+from . import ingest as scan
 from .parallel_ingest import parse_scans_parallel, persist_evidence_first
 
 LOCK_NAME = "home-budget-receipt-backlog"
