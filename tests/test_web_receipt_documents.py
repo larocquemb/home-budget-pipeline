@@ -46,6 +46,17 @@ def test_receipt_document_path_resolves_existing_scan(tmp_path, monkeypatch):
     assert web_app._receipt_document_path("receipt_0001.pdf") == scan.resolve()
 
 
+def test_receipt_document_path_resolves_electronic_receipt(tmp_path, monkeypatch):
+    root = tmp_path / "electronic"
+    costco = root / "Costco"
+    costco.mkdir(parents=True)
+    receipt = costco / "20260726.pdf"
+    receipt.write_bytes(b"%PDF-test")
+    monkeypatch.setattr(web_app, "ELECTRONIC_RECEIPT_SOURCE_ROOT", root.resolve())
+
+    assert web_app._receipt_document_path("Costco/20260726.pdf", "electronic") == receipt.resolve()
+
+
 def test_receipt_document_returns_inline_file_response(tmp_path, monkeypatch):
     root = tmp_path / "receipts"
     root.mkdir()
