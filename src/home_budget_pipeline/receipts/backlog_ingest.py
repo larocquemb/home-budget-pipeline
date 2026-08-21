@@ -222,23 +222,41 @@ def process_backlog(
         release_backlog_lock(conn)
 
 
-def parse_args() -> argparse.Namespace:
+def _default_path(relative_path: str, legacy_default: str, explicit_env: str) -> str:
+    explicit = os.getenv(explicit_env)
+    if explicit:
+        return explicit
+    data_root = os.getenv("HOME_BUDGET_DATA_ROOT")
+    if data_root:
+        return str(Path(data_root).expanduser() / relative_path)
+    return legacy_default
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Process unprocessed receipt files into BrownRook Ledger.")
     parser.add_argument(
         "receipt_root",
         nargs="?",
-        default=os.getenv("RECEIPT_SOURCE_ROOT", "/data/receipts/raw/scanned/inbox"),
+        default=_default_path(
+            "receipts/raw/scanned/inbox",
+            "/data/receipts/raw/scanned/inbox",
+            "RECEIPT_SOURCE_ROOT",
+        ),
     )
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument(
         "--ocr-cache",
-        default=os.getenv("HOME_BUDGET_OCR_CACHE", "/data/receipts/derived/ocr-cache"),
+        default=_default_path(
+            "receipts/derived/ocr-cache",
+            "/data/receipts/derived/ocr-cache",
+            "HOME_BUDGET_OCR_CACHE",
+        ),
     )
     parser.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))
     parser.add_argument("--ingest-schema", default="ingest")
     parser.add_argument("--budget-schema", default="budget")
     parser.add_argument("--refresh-ocr-cache", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
