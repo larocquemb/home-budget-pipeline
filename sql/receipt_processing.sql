@@ -14,7 +14,7 @@ BEGIN
 END;
 $$;
 
--- Stable source identity for rebuildable receipt data.  source_sha256 is the
+-- Stable source identity for rebuildable receipt data. source_sha256 is the
 -- cross-schema join key; source_reference is the human-readable relative path.
 CREATE TABLE ingest.receipts (
     source_sha256 TEXT PRIMARY KEY,
@@ -49,5 +49,22 @@ CREATE INDEX idx_receipt_processing_status_status
 CREATE TRIGGER trg_receipt_processing_status_set_updated_at
 BEFORE UPDATE ON ingest.receipt_processing_status
 FOR EACH ROW EXECUTE FUNCTION ingest.set_updated_at();
+
+-- Read-only compatibility surface for the existing Ledger UI. The underlying
+-- lifecycle state remains disposable in ingest; source_reference is joined by
+-- the stable SHA identity rather than duplicated in the status table.
+CREATE VIEW budget.receipt_processing_status AS
+SELECT
+    s.source_sha256,
+    r.source_reference,
+    s.status,
+    s.attempts,
+    s.last_error,
+    s.first_attempted_at,
+    s.last_attempted_at,
+    s.completed_at,
+    s.updated_at
+FROM ingest.receipt_processing_status s
+JOIN ingest.receipts r USING (source_sha256);
 
 COMMIT;
