@@ -12,7 +12,7 @@ def test_deployment_status_covers_ci_argocd_jobs_and_pods():
     assert '(printf "%.7s" .headSha)' in text
     assert '{{if eq .conclusion ""}}{{tablerow .status' in text
     assert 'argocd app get "$argo_app" --grpc-web -o json' in text
-    assert "Revision:      \\(.status.sync.revision)" in text
+    assert "Revision:      \\(.status.sync.revision[0:7])" in text
     assert "Sync Status:   \\(.status.sync.status)" in text
     assert "Health Status: \\(.status.health.status)" in text
     assert 'LEDGER_DEPLOYMENT:-ledger-web' in text
