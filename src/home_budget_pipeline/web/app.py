@@ -123,12 +123,17 @@ def api_category_override(
     request: CategoryOverrideRequest,
     x_ledger_action: Optional[str] = Header(default=None),
     service: LedgerQueryService = Depends(query_service),
-    _: dict[str, str] = Depends(authenticated_identity),
+    identity: dict[str, str] = Depends(authenticated_identity),
 ):
     if x_ledger_action != "category-override":
         raise HTTPException(status_code=403, detail="category override action header missing")
     try:
-        return service.save_category_override(request.expense_item_id, request.category)
+        return service.save_category_override(
+            request.expense_item_id,
+            request.category,
+            actor_user=identity["user"],
+            actor_email=identity.get("email") or None,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

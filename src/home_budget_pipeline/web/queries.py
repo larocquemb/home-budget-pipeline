@@ -181,14 +181,22 @@ class LedgerQueryService:
         )
         return tuple(str(row["category_name"]) for row in rows)
 
-    def save_category_override(self, expense_item_id: int, category: str) -> dict[str, Any]:
+    def save_category_override(
+        self,
+        expense_item_id: int,
+        category: str,
+        *,
+        actor_user: str,
+        actor_email: Optional[str] = None,
+    ) -> dict[str, Any]:
         """Create an approved exact rule and apply it to matching imported items."""
         conn = self._connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT i.item_name, i.item_name_norm, e.source, e.store_name
+                    SELECT i.item_name, i.item_name_norm, e.source, e.store_name,
+                           i.budget_category
                       FROM budget.expense_items i
                       JOIN budget.expenses e ON e.id = i.expense_pk
                      WHERE i.id = %s
@@ -203,8 +211,9 @@ class LedgerQueryService:
                     item_name_norm = normalize_for_match(str(item_name))
                     source = row["source"]
                     merchant = row["store_name"]
+                    old_category = row["budget_category"]
                 else:
-                    item_name, _, source, merchant = row
+                    item_name, _, source, merchant, old_category = row
                     item_name_norm = normalize_for_match(str(item_name))
 
                 cur.execute(
@@ -217,6 +226,23 @@ class LedgerQueryService:
                 )
                 if cur.fetchone() is None:
                     raise ValueError("category is not active")
+
+                cur.execute(
+                    """
+                    SELECT id, category_name
+                      FROM budget.expense_category_mappings
+                     WHERE COALESCE(lower(trim(source)), '') = COALESCE(lower(trim(%s)), '')
+                       AND COALESCE(lower(trim(merchant)), '') = COALESCE(lower(trim(%s)), '')
+                       AND match_type = 'exact'
+                       AND lower(trim(match_text)) = lower(trim(%s))
+                    """,
+                    (source, merchant, item_name_norm),
+                )
+                existing_mapping = cur.fetchone()
+                if existing_mapping is None:
+                    action = "created"
+                else:
+                    action = "changed"
 
                 cur.execute(
                     """
@@ -266,9 +292,32 @@ class LedgerQueryService:
                     (category, item_name_norm, source, merchant),
                 )
                 affected_items = cur.rowcount
+                cur.execute(
+                    """
+                    INSERT INTO budget.expense_category_mapping_audit (
+                        mapping_id, expense_item_id, actor_user, actor_email, action,
+                        item_name, match_text, source, merchant, old_category,
+                        new_category, affected_item_count
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, created_at
+                    """,
+                    (
+                        mapping_id, expense_item_id, actor_user, actor_email, action,
+                        item_name, item_name_norm, source, merchant,
+                        old_category, category, affected_items,
+                    ),
+                )
+                audit_row = cur.fetchone()
+                if isinstance(audit_row, dict):
+                    audit_id, audited_at = audit_row["id"], audit_row["created_at"]
+                else:
+                    audit_id, audited_at = audit_row
             conn.commit()
             return {
                 "mapping_id": mapping_id,
+                "audit_id": audit_id,
+                "audited_at": audited_at,
                 "item_name": item_name,
                 "category": category,
                 "affected_items": affected_items,
