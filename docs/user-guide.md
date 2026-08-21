@@ -16,6 +16,7 @@ For each row:
 
 1. Open **Evidence** and compare the cropped receipt image with the extracted
    text. PDF evidence is rendered as an image with near-white margins removed.
+   Move the pointer over the image to magnify the area beneath it.
    Use **Open original receipt** when the full PDF viewer is more convenient.
 2. Compare the scan with its extracted text.
 3. Open **Expense** and compare merchant, date, total, and line items.

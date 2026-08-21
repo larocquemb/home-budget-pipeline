@@ -138,6 +138,8 @@ def test_evidence_page_embeds_cropped_pdf_preview_and_keeps_original_link():
     document_url = f'{web_app.BASE_PATH}/evidence/7/document'
     preview_url = f'{web_app.BASE_PATH}/evidence/7/preview'
     assert f'<img class="receipt-preview receipt-preview-image" src="{preview_url}"' in text
+    assert "data-hover-zoom" in text
+    assert "--zoom-x" in text
     assert "Open original receipt" in text
     assert f'href="{document_url}"' in text
     assert "COSTCO RECEIPT" in text

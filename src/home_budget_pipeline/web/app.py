@@ -224,9 +224,11 @@ def _receipt_preview_html(evidence_id: int, evidence: dict[str, object]) -> str:
     media_type = evidence.get("mime_type") or mimetypes.guess_type(str(source_reference))[0] or ""
     if str(media_type).lower() == "application/pdf":
         preview_url = f"{BASE_PATH}/evidence/{evidence_id}/preview"
-        preview = f'<img class="receipt-preview receipt-preview-image" src="{preview_url}" alt="Receipt preview" loading="lazy">'
+        image = f'<img class="receipt-preview receipt-preview-image" src="{preview_url}" alt="Receipt preview" loading="lazy" data-hover-zoom>'
+        preview = f'<div class="receipt-preview-viewport">{image}</div>'
     elif str(media_type).lower().startswith("image/"):
-        preview = f'<img class="receipt-preview receipt-preview-image" src="{document_url}" alt="Receipt image" loading="lazy">'
+        image = f'<img class="receipt-preview receipt-preview-image" src="{document_url}" alt="Receipt image" loading="lazy" data-hover-zoom>'
+        preview = f'<div class="receipt-preview-viewport">{image}</div>'
     else:
         preview = '<p class="muted">Preview is not available for this file type.</p>'
     return preview + f'<p><a href="{document_url}" target="_blank" rel="noopener">Open original receipt</a></p>'

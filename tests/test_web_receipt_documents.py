@@ -85,6 +85,8 @@ def test_receipt_preview_embeds_image():
 
     assert '<img class="receipt-preview receipt-preview-image"' in preview
     assert f'src="{web_app.BASE_PATH}/evidence/9/document"' in preview
+    assert "receipt-preview-viewport" in preview
+    assert "data-hover-zoom" in preview
     assert "Open original receipt" in preview
 
 

@@ -55,8 +55,10 @@ th {{ position:sticky; top:0; background:Canvas; }}
 input, select, button {{ font:inherit; padding:.4rem .5rem; }}
 .card {{ border:1px solid #8885; border-radius:.5rem; padding:1rem; margin:1rem 0; }}
 .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:.75rem 1.5rem; }}
+.receipt-preview-viewport {{ overflow:hidden; max-height:75vh; border-radius:.5rem; }}
 .receipt-preview {{ display:block; width:100%; border:1px solid #8885; border-radius:.5rem; background:#fff; }}
-.receipt-preview-image {{ width:auto; max-width:100%; max-height:75vh; object-fit:contain; }}
+.receipt-preview-image {{ width:auto; max-width:100%; max-height:75vh; margin:auto; object-fit:contain; transform-origin:var(--zoom-x,50%) var(--zoom-y,50%); transition:transform .12s ease-out; }}
+.receipt-preview-image:hover {{ cursor:zoom-in; transform:scale(2); }}
 pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
 .pager {{ display:flex; gap:1rem; margin:1rem 0; }}
 </style>
@@ -64,6 +66,15 @@ pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
 <body>
 <header><strong>BrownRook Ledger</strong><nav>{nav}</nav><small class="muted">Signed in as {who} · read-only</small></header>
 <main><h1>{esc(title)}</h1>{body}</main>
+<script>
+for (const image of document.querySelectorAll('[data-hover-zoom]')) {{
+  image.addEventListener('pointermove', event => {{
+    const bounds = image.getBoundingClientRect();
+    image.style.setProperty('--zoom-x', `${{event.clientX - bounds.left}}px`);
+    image.style.setProperty('--zoom-y', `${{event.clientY - bounds.top}}px`);
+  }});
+}}
+</script>
 </body></html>"""
 
 
