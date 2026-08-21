@@ -16,35 +16,42 @@ if ! command -v gh >/dev/null 2>&1; then
     printf 'gh is not installed\n'
     exit_status=1
 else
-    run_ids=$(gh run list --limit "$run_limit" --json databaseId --jq '.[].databaseId')
+    run_rows=$(gh run list --limit "$run_limit" \
+        --json databaseId,displayTitle,headBranch,headSha,status,updatedAt \
+        --jq '.[] | (now - (.updatedAt | fromdateiso8601) | floor) as $age | [.databaseId, .displayTitle, .headBranch, .headSha, .headSha[0:7], .status, (if .status != "completed" then "-" elif $age < 3600 then "\($age / 60 | floor)m" elif $age < 86400 then "\($age / 3600 | floor)h" else "\($age / 86400 | floor)d" end)] | @tsv')
     list_status=$?
     if [ "$list_status" -ne 0 ]; then
         exit_status=1
-    elif [ -z "$run_ids" ]; then
+    elif [ -z "$run_rows" ]; then
         printf 'No workflow runs found\n'
     else
-        printf '%-44s  %-30s  %-7s  %-12s  %-11s  %s\n' \
-            'TITLE' 'BRANCH' 'COMMIT' 'STATUS' 'COMPLETED' 'RUN ID'
-        printf '%-44s  %-30s  %-7s  %-12s  %-11s  %s\n' \
-            '--------------------------------------------' \
+        printf '%-48s  %-30s  %-5s  %-7s  %-12s  %-9s  %s\n' \
+            'TITLE' 'BRANCH' 'PR' 'COMMIT' 'STATUS' 'COMPLETED' 'RUN ID'
+        printf '%-48s  %-30s  %-5s  %-7s  %-12s  %-9s  %s\n' \
+            '------------------------------------------------' \
             '------------------------------' \
+            '-----' \
             '-------' \
             '------------' \
-            '-----------' \
+            '---------' \
             '------'
-        while IFS= read -r run_id; do
-            details=$(gh run view "$run_id" \
-                --json displayTitle,headBranch,headSha,status,updatedAt \
-                --jq '[.displayTitle, .headBranch, .headSha[0:7], .status, (if .status == "completed" then (.updatedAt[5:7] + .updatedAt[8:10] + ":" + .updatedAt[11:13] + ":" + .updatedAt[14:16]) else "-" end)] | @tsv')
-            details_status=$?
-            if [ "$details_status" -ne 0 ]; then
+        while IFS=$'\t' read -r run_id title branch full_commit commit run_status completed; do
+            pr_number=$(gh api "repos/{owner}/{repo}/commits/$full_commit/pulls" --jq '.[0].number // empty')
+            pr_status=$?
+            if [ "$pr_status" -ne 0 ]; then
+                pr='#?'
                 exit_status=1
-                continue
+            elif [ -n "$pr_number" ]; then
+                pr="#$pr_number"
+            else
+                pr='-'
             fi
-            IFS=$'\t' read -r title branch commit run_status completed <<< "$details"
-            printf '%-44.44s  %-30.30s  %-7.7s  %-12.12s  %-11.11s  %s\n' \
-                "$title" "$branch" "$commit" "$run_status" "$completed" "$run_id"
-        done <<< "$run_ids"
+            if [[ "$title" =~ ^(.*)\ \(#[0-9]+\)$ ]]; then
+                title="${BASH_REMATCH[1]}"
+            fi
+            printf '%-48.48s  %-30.30s  %-5.5s  %-7.7s  %-12.12s  %-9.9s  %s\n' \
+                "$title" "$branch" "$pr" "$commit" "$run_status" "$completed" "$run_id"
+        done <<< "$run_rows"
     fi
 fi
 
