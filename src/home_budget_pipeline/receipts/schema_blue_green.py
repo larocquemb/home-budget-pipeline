@@ -22,11 +22,15 @@ def _ensure_state_table(conn) -> None:
             component TEXT PRIMARY KEY,
             version INTEGER NOT NULL DEFAULT 0,
             current_schema TEXT,
+            previous_schema TEXT,
             schema_hash TEXT NOT NULL DEFAULT '',
             is_dirty BOOLEAN NOT NULL DEFAULT FALSE,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """
+    )
+    conn.execute(
+        "ALTER TABLE ops.schema_state ADD COLUMN IF NOT EXISTS previous_schema TEXT"
     )
     conn.commit()
 
@@ -34,7 +38,7 @@ def _ensure_state_table(conn) -> None:
 def _state(conn):
     return conn.execute(
         """
-        SELECT version, current_schema, schema_hash, is_dirty
+        SELECT version, current_schema, previous_schema, schema_hash, is_dirty
           FROM ops.schema_state
          WHERE component = %s
         """,
@@ -45,8 +49,10 @@ def _state(conn):
 def _mark_dirty(conn, desired_hash: str) -> None:
     conn.execute(
         """
-        INSERT INTO ops.schema_state (component, version, current_schema, schema_hash, is_dirty)
-        VALUES (%s, 0, NULL, %s, TRUE)
+        INSERT INTO ops.schema_state (
+            component, version, current_schema, previous_schema, schema_hash, is_dirty
+        )
+        VALUES (%s, 0, NULL, NULL, %s, TRUE)
         ON CONFLICT (component) DO UPDATE SET
             schema_hash = EXCLUDED.schema_hash,
             is_dirty = TRUE,
@@ -61,16 +67,23 @@ def _build_schema(conn, target_schema: str, template: str) -> None:
     conn.execute(f'DROP SCHEMA IF EXISTS "{target_schema}" CASCADE')
     conn.execute(template.replace("__INGEST_SCHEMA__", target_schema))
     for relation in ("receipts", "receipt_processing_status"):
-        exists = conn.execute("SELECT to_regclass(%s)", (f"{target_schema}.{relation}",)).fetchone()[0]
+        exists = conn.execute(
+            "SELECT to_regclass(%s)", (f"{target_schema}.{relation}",)
+        ).fetchone()[0]
         if exists is None:
             raise RuntimeError(f"blue/green build missing {target_schema}.{relation}")
     conn.commit()
 
 
-def _cut_over(conn, target_schema: str, desired_hash: str, previous_schema: str | None) -> None:
+def _cut_over(
+    conn,
+    target_schema: str,
+    desired_hash: str,
+    previous_schema: str | None,
+) -> None:
     with conn.transaction():
-        # The first blue/green deployment replaces the legacy physical `ingest`
-        # schema. Future deployments only replace the stable compatibility views.
+        # Stable compatibility schemas/views are switched atomically only after
+        # the new physical schema has been built and validated.
         conn.execute("DROP VIEW IF EXISTS budget.receipt_processing_status CASCADE")
         conn.execute("DROP SCHEMA IF EXISTS ingest CASCADE")
         conn.execute("CREATE SCHEMA ingest")
@@ -78,7 +91,8 @@ def _cut_over(conn, target_schema: str, desired_hash: str, previous_schema: str 
             f"CREATE VIEW ingest.receipts AS SELECT * FROM {target_schema}.receipts"
         )
         conn.execute(
-            f"CREATE VIEW ingest.receipt_processing_status AS SELECT * FROM {target_schema}.receipt_processing_status"
+            f"CREATE VIEW ingest.receipt_processing_status AS "
+            f"SELECT * FROM {target_schema}.receipt_processing_status"
         )
         conn.execute(
             """
@@ -100,24 +114,26 @@ def _cut_over(conn, target_schema: str, desired_hash: str, previous_schema: str 
         conn.execute(
             """
             INSERT INTO ops.schema_state (
-                component, version, current_schema, schema_hash, is_dirty, updated_at
-            ) VALUES (%s, %s, %s, %s, FALSE, NOW())
+                component, version, current_schema, previous_schema,
+                schema_hash, is_dirty, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, FALSE, NOW())
             ON CONFLICT (component) DO UPDATE SET
                 version = EXCLUDED.version,
+                previous_schema = EXCLUDED.previous_schema,
                 current_schema = EXCLUDED.current_schema,
                 schema_hash = EXCLUDED.schema_hash,
                 is_dirty = FALSE,
                 updated_at = NOW()
             """,
-            (COMPONENT, SCHEMA_VERSION, target_schema, desired_hash),
+            (COMPONENT, SCHEMA_VERSION, target_schema, previous_schema, desired_hash),
         )
-        if previous_schema and previous_schema.startswith("ingest_v") and previous_schema != target_schema:
-            conn.execute(f'DROP SCHEMA IF EXISTS "{previous_schema}" CASCADE')
 
 
 def ensure_receipt_schema(conn, template_path: Path = TEMPLATE_PATH) -> bool:
     """Build/cut over only when version/hash/dirty state requires it.
 
+    The previous physical schema is deliberately retained after cutover so a
+    rollback can repoint the stable views without rebuilding data.
     Returns True when a blue/green rebuild was performed, False for a no-op.
     """
     template = template_path.read_text(encoding="utf-8")
@@ -128,7 +144,7 @@ def ensure_receipt_schema(conn, template_path: Path = TEMPLATE_PATH) -> bool:
     conn.execute("SELECT pg_advisory_lock(hashtext(%s))", (LOCK_NAME,))
     try:
         state = _state(conn)
-        if state and state[0] == SCHEMA_VERSION and state[2] == desired_hash and not state[3]:
+        if state and state[0] == SCHEMA_VERSION and state[3] == desired_hash and not state[4]:
             return False
 
         previous_schema = state[1] if state else None
