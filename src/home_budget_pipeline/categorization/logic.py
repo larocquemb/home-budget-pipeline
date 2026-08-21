@@ -129,6 +129,8 @@ VERIFIED_CATEGORY_OVERRIDES = {
     'stuff pepper': 'Groceries', 'sunions': 'Groceries', 'sweet fries': 'Groceries',
     'sweet pepper': 'Groceries', 'sweetkaleduo': 'Groceries', 'terra dates': 'Groceries',
     'tide high efficiency turbo powder laundry detergent with acti life': 'Indoor Supplies',
+    'towel': 'Indoor Supplies',
+    'bath towel': 'Indoor Supplies',
     'tonkotsu ram': 'Groceries', 'tropicana og': 'Groceries', 'twigz pickle': 'Groceries',
     'unsalted btr': 'Groceries', 'vaseline dry skin repair body lotion': 'Indoor Supplies',
     'vaseline dsr': 'Medical Products', 'vector jumbo': 'Groceries', 'hrvst crunch': 'Groceries',
