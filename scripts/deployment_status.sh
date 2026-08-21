@@ -23,28 +23,25 @@ else
     elif [ -z "$run_ids" ]; then
         printf 'No workflow runs found\n'
     else
+        printf '%-44s  %-12s  %-11s  %s\n' \
+            'TITLE' 'STATUS' 'COMPLETED' 'RUN ID'
+        printf '%-44s  %-12s  %-11s  %s\n' \
+            '--------------------------------------------' \
+            '------------' \
+            '-----------' \
+            '------'
         while IFS= read -r run_id; do
             details=$(gh run view "$run_id" \
-                --json displayTitle,status,conclusion,updatedAt,url \
-                --jq '"\(.displayTitle)\n  Status: \(.status) / \(.conclusion // "pending")\n  Completed: \(if .status == "completed" then .updatedAt else "not completed" end)\n  URL: \(.url)"')
+                --json displayTitle,status,updatedAt \
+                --jq '[.displayTitle, .status, (if .status == "completed" then (.updatedAt[5:7] + .updatedAt[8:10] + ":" + .updatedAt[11:13] + ":" + .updatedAt[14:16]) else "-" end)] | @tsv')
             details_status=$?
             if [ "$details_status" -ne 0 ]; then
                 exit_status=1
                 continue
             fi
-            printf '%s\n' "$details"
-
-            failed_steps=$(gh run view "$run_id" --json jobs --jq \
-                '[.jobs[] | .name as $job | .steps[] | select(.conclusion == "failure") | "\($job): \(.name)"] | join(", ")')
-            errors_status=$?
-            if [ "$errors_status" -ne 0 ]; then
-                printf '  Errors: unable to inspect run jobs\n'
-                exit_status=1
-            elif [ -n "$failed_steps" ]; then
-                printf '  Errors: %s\n' "$failed_steps"
-            else
-                printf '  Errors: none\n'
-            fi
+            IFS=$'\t' read -r title run_status completed <<< "$details"
+            printf '%-44.44s  %-12.12s  %-11.11s  %s\n' \
+                "$title" "$run_status" "$completed" "$run_id"
         done <<< "$run_ids"
     fi
 fi
