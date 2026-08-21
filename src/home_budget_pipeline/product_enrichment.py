@@ -23,6 +23,17 @@ RETAILER_DOMAINS = {
 }
 BARCODE_RE = re.compile(r"\b\d{8,14}\b")
 RECEIPT_SUFFIX_RE = re.compile(r"(?:\s+\d+[.,]\d{2})?\s+(?:GP|LP|FP|H|A|B|T)$", re.IGNORECASE)
+NOISE_TOKENS = {"acct", "cad", "each", "flash", "gp", "lp", "save", "upto"}
+PRODUCT_PATH_MARKERS = {
+    "costco.ca": (".product.", "/product/"),
+    "homedepot.ca": ("/product/",),
+    "walmart.ca": ("/ip/",),
+    "canadiantire.ca": ("/pdp/",),
+    "shoppersdrugmart.ca": ("/p/",),
+    "sobeys.com": ("/product/",),
+    "wholesaleclub.ca": ("/product/",),
+    "oldnavy.gapcanada.ca": ("/browse/product.do",),
+}
 
 
 def retailer_domain(merchant: str) -> Optional[str]:
@@ -54,11 +65,18 @@ def candidate_score(item_name: str, domain: str, title: str, url: str, snippet: 
     barcode = BARCODE_RE.search(item_name or "")
     if barcode and barcode.group(0) in source:
         return 1.0
-    tokens = {t for t in re.findall(r"[a-z0-9]+", item_name.lower()) if len(t) >= 3 and not t.isdigit()}
-    if not tokens:
+    tokens = {
+        t for t in re.findall(r"[a-z0-9]+", item_name.lower())
+        if len(t) >= 3 and not t.isdigit() and t not in NOISE_TOKENS
+    }
+    if len(tokens) < 2:
         return 0.0
     overlap = sum(token in source for token in tokens) / len(tokens)
-    return round(0.35 + 0.65 * overlap, 4)
+    score = 0.35 + 0.65 * overlap
+    path = urllib.parse.urlparse(url).path.lower()
+    if not any(marker in path for marker in PRODUCT_PATH_MARKERS.get(domain, ())):
+        score = min(score, 0.8)
+    return round(score, 4)
 
 
 @dataclass(frozen=True)
