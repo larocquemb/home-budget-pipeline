@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import html
+import io
 import mimetypes
 import os
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from .queries import LedgerQueryService
 from .render import esc, money, page, pager, table
@@ -153,14 +154,77 @@ def receipt_document(evidence_id: int, service: LedgerQueryService = Depends(que
     return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
 
 
-def _receipt_preview(evidence_id: int, evidence: dict[str, object]) -> str:
+def _crop_receipt_image(image, *, threshold: int = 245, padding: int = 24):
+    from PIL import ImageOps
+
+    rgb = image.convert("RGB")
+    grayscale = ImageOps.grayscale(rgb)
+    foreground = grayscale.point(lambda value: 255 if value < threshold else 0)
+    bounds = foreground.getbbox()
+    if bounds is None:
+        return rgb
+    left, top, right, bottom = bounds
+    return rgb.crop((
+        max(0, left - padding),
+        max(0, top - padding),
+        min(rgb.width, right + padding),
+        min(rgb.height, bottom + padding),
+    ))
+
+
+def _render_pdf_page_png(path: Path, page_index: int) -> bytes:
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument(str(path))
+    try:
+        if page_index < 0 or page_index >= len(document):
+            raise HTTPException(status_code=404, detail="receipt PDF page not found")
+        page = document[page_index]
+        try:
+            bitmap = page.render(scale=2)
+            try:
+                image = bitmap.to_pil().convert("RGB")
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
+    finally:
+        document.close()
+
+    cropped = _crop_receipt_image(image)
+    output = io.BytesIO()
+    cropped.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+@app.get(f"{BASE_PATH}/evidence/{{evidence_id}}/preview")
+def receipt_preview_image(evidence_id: int, page_number: int = Query(0, alias="page", ge=0), service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
+    evidence = service.receipt_evidence(evidence_id)
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="receipt evidence not found")
+    source_reference = evidence.get("source_reference")
+    if not source_reference:
+        raise HTTPException(status_code=404, detail="receipt document not available")
+    path = _receipt_document_path(str(source_reference))
+    media_type = evidence.get("mime_type") or mimetypes.guess_type(path.name)[0] or ""
+    if str(media_type).lower() != "application/pdf":
+        raise HTTPException(status_code=415, detail="receipt preview requires a PDF")
+    return Response(
+        content=_render_pdf_page_png(path, page_number),
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+def _receipt_preview_html(evidence_id: int, evidence: dict[str, object]) -> str:
     source_reference = evidence.get("source_reference")
     if not source_reference:
         return '<p class="muted">Receipt document not available.</p>'
     document_url = f"{BASE_PATH}/evidence/{evidence_id}/document"
     media_type = evidence.get("mime_type") or mimetypes.guess_type(str(source_reference))[0] or ""
     if str(media_type).lower() == "application/pdf":
-        preview = f'<iframe class="receipt-preview receipt-preview-pdf" src="{document_url}" title="Receipt PDF" loading="lazy"></iframe>'
+        preview_url = f"{BASE_PATH}/evidence/{evidence_id}/preview"
+        preview = f'<img class="receipt-preview receipt-preview-image" src="{preview_url}" alt="Receipt preview" loading="lazy">'
     elif str(media_type).lower().startswith("image/"):
         preview = f'<img class="receipt-preview receipt-preview-image" src="{document_url}" alt="Receipt image" loading="lazy">'
     else:
@@ -292,7 +356,7 @@ def evidence_page(evidence_id: int, service: LedgerQueryService = Depends(query_
 <div><strong>Canonical expense</strong><br>{expense_link}</div>
 <div><strong>Source</strong><br>{esc(evidence.get('source_reference'))}</div>
 </div></div>
-<h2>Receipt</h2>{_receipt_preview(evidence_id, evidence)}
+<h2>Receipt</h2>{_receipt_preview_html(evidence_id, evidence)}
 <h2>Extracted text</h2><pre>{html.escape(str(evidence.get('raw_text') or ''))}</pre>"""
     return page(f"Receipt evidence {evidence_id}", body, base_path=BASE_PATH, identity=identity)
 

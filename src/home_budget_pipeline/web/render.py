@@ -56,7 +56,6 @@ input, select, button {{ font:inherit; padding:.4rem .5rem; }}
 .card {{ border:1px solid #8885; border-radius:.5rem; padding:1rem; margin:1rem 0; }}
 .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:.75rem 1.5rem; }}
 .receipt-preview {{ display:block; width:100%; border:1px solid #8885; border-radius:.5rem; background:#fff; }}
-.receipt-preview-pdf {{ height:75vh; min-height:32rem; }}
 .receipt-preview-image {{ width:auto; max-width:100%; max-height:75vh; object-fit:contain; }}
 pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
 .pager {{ display:flex; gap:1rem; margin:1rem 0; }}

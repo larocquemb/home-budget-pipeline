@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from PIL import Image
 
 from home_budget_pipeline.web import app as web_app
 
@@ -77,7 +78,7 @@ def test_receipt_document_404_when_evidence_missing():
 
 
 def test_receipt_preview_embeds_image():
-    preview = web_app._receipt_preview(
+    preview = web_app._receipt_preview_html(
         9,
         {"source_reference": "receipt.jpg", "mime_type": "image/jpeg"},
     )
@@ -85,3 +86,37 @@ def test_receipt_preview_embeds_image():
     assert '<img class="receipt-preview receipt-preview-image"' in preview
     assert f'src="{web_app.BASE_PATH}/evidence/9/document"' in preview
     assert "Open original receipt" in preview
+
+
+def test_receipt_crop_removes_white_margins():
+    image = Image.new("RGB", (200, 300), "white")
+    for x in range(70, 130):
+        for y in range(40, 260):
+            image.putpixel((x, y), (180, 180, 180))
+
+    cropped = web_app._crop_receipt_image(image, threshold=245, padding=5)
+
+    assert cropped.size == (70, 230)
+
+
+def test_pdf_preview_endpoint_returns_cached_png(tmp_path, monkeypatch):
+    root = tmp_path / "receipts"
+    root.mkdir()
+    scan = root / "receipt.pdf"
+    scan.write_bytes(b"%PDF-test")
+    monkeypatch.setattr(web_app, "RECEIPT_SOURCE_ROOT", root.resolve())
+    monkeypatch.setattr(web_app, "_render_pdf_page_png", lambda path, page: b"png-data")
+    service = FakeService(
+        {"id": 7, "source_reference": "receipt.pdf", "mime_type": "application/pdf"}
+    )
+
+    response = web_app.receipt_preview_image(
+        evidence_id=7,
+        page_number=0,
+        service=service,
+        _={"user": "Paul", "email": ""},
+    )
+
+    assert response.body == b"png-data"
+    assert response.media_type == "image/png"
+    assert response.headers["cache-control"] == "private, max-age=3600"

@@ -133,11 +133,13 @@ def test_extraction_audit_links_expense_and_evidence():
     assert f'{web_app.BASE_PATH}/evidence/7' in text
 
 
-def test_evidence_page_embeds_pdf_and_keeps_original_link():
+def test_evidence_page_embeds_cropped_pdf_preview_and_keeps_original_link():
     text = web_app.evidence_page(7, service=FakeService(), identity=IDENTITY)
     document_url = f'{web_app.BASE_PATH}/evidence/7/document'
-    assert f'<iframe class="receipt-preview receipt-preview-pdf" src="{document_url}"' in text
+    preview_url = f'{web_app.BASE_PATH}/evidence/7/preview'
+    assert f'<img class="receipt-preview receipt-preview-image" src="{preview_url}"' in text
     assert "Open original receipt" in text
+    assert f'href="{document_url}"' in text
     assert "COSTCO RECEIPT" in text
 
 

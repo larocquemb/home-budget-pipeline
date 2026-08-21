@@ -14,9 +14,9 @@ or parsing.
 
 For each row:
 
-1. Open **Evidence** and compare the embedded receipt preview with the
-   extracted text. Use **Open original receipt** when a separate viewer is
-   more convenient.
+1. Open **Evidence** and compare the cropped receipt image with the extracted
+   text. PDF evidence is rendered as an image with near-white margins removed.
+   Use **Open original receipt** when the full PDF viewer is more convenient.
 2. Compare the scan with its extracted text.
 3. Open **Expense** and compare merchant, date, total, and line items.
 4. Treat `unreadable` as needing new evidence or better OCR.
