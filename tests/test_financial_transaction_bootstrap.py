@@ -38,7 +38,9 @@ def test_reconciliation_and_enrichment_persistence_contract():
 
 
 def test_fresh_bootstrap_stages_transaction_ddl_without_migration():
-    text = Path("k8s/postgres.yaml").read_text()
-    assert "/schema/004-financial-transactions.sql" in text
-    assert "sql/financial_transactions.sql" in text
-    assert "migrations" not in text
+    manifest = Path("k8s/postgres.yaml").read_text()
+    bootstrap = Path("scripts/stage_db_bootstrap.sh").read_text()
+    assert "scripts/stage_db_bootstrap.sh /schema" in manifest
+    assert "004-financial-transactions.sql" in bootstrap
+    assert "sql/financial_transactions.sql" in bootstrap
+    assert "migrations" not in bootstrap

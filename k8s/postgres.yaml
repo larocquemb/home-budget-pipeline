@@ -42,20 +42,7 @@ spec:
           args:
             - |
               set -eu
-              cp /opt/app-root/src/sql/schema_phase1.sql /schema/001-schema.sql
-              home-budget-category-catalog \
-                /opt/app-root/src/config/categories.yaml \
-                /schema/002-categories.sql
-              cp /opt/app-root/src/sql/analytics_views.sql \
-                /schema/003-analytics-views.sql
-              cp /opt/app-root/src/sql/financial_transactions.sql \
-                /schema/004-financial-transactions.sql
-              cp /opt/app-root/src/sql/receipt_deduplication.sql \
-                /schema/005-receipt-deduplication.sql
-              cp /opt/app-root/src/sql/schema_constraints.sql \
-                /schema/006-schema-constraints.sql
-              cp /opt/app-root/src/sql/receipt_processing.sql \
-                /schema/007-receipt-processing.sql
+              /opt/app-root/src/scripts/stage_db_bootstrap.sh /schema
           volumeMounts:
             - name: postgres-init
               mountPath: /schema

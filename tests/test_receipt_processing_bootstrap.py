@@ -29,10 +29,12 @@ def test_receipt_processing_sql_exposes_budget_read_view():
 
 def test_postgres_bootstrap_stages_constraints_and_receipt_processing_sql():
     manifest = Path("k8s/postgres.yaml").read_text(encoding="utf-8")
-    assert "schema_constraints.sql" in manifest
-    assert "/schema/006-schema-constraints.sql" in manifest
-    assert "receipt_processing.sql" in manifest
-    assert "/schema/007-receipt-processing.sql" in manifest
+    bootstrap = Path("scripts/stage_db_bootstrap.sh").read_text(encoding="utf-8")
+    assert "scripts/stage_db_bootstrap.sh /schema" in manifest
+    assert "schema_constraints.sql" in bootstrap
+    assert "006-schema-constraints.sql" in bootstrap
+    assert "receipt_processing.sql" in bootstrap
+    assert "007-receipt-processing.sql" in bootstrap
 
 
 def test_postgres_bootstrap_uses_stable_image_separate_from_app_rollouts():

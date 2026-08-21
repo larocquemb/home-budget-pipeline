@@ -4,7 +4,7 @@ RECEIPT_TEST_ROOT ?= .receipt-test
 RECEIPT_TEST_WORKERS ?= 6
 RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 
-.PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install
+.PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset
 
 status:
 	@./scripts/deployment_status.sh
@@ -21,6 +21,9 @@ dev-web:
 	@set -a; . ./.env.dev; set +a; \
 		LEDGER_BASE_PATH=/ledger HOST=0.0.0.0 PORT=8080 \
 		.venv/bin/python -m home_budget_pipeline.web.app
+
+dev-db-reset:
+	@./scripts/rebuild_local_database.sh .env.dev
 
 dev-cert-install:
 	@mkdir -p .dev-certs

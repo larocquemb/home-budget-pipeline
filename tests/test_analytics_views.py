@@ -68,6 +68,8 @@ def test_review_queue_filters_only_overall_review_rows():
 
 def test_fresh_postgres_bootstrap_stages_analytics_ddl_without_migrations():
     manifest = POSTGRES_MANIFEST.read_text()
-    assert "/opt/app-root/src/sql/analytics_views.sql" in manifest
-    assert "/schema/003-analytics-views.sql" in manifest
-    assert "migrations/kan_71" not in manifest
+    bootstrap = Path("scripts/stage_db_bootstrap.sh").read_text()
+    assert "scripts/stage_db_bootstrap.sh /schema" in manifest
+    assert "sql/analytics_views.sql" in bootstrap
+    assert "003-analytics-views.sql" in bootstrap
+    assert "migrations/kan_71" not in bootstrap
