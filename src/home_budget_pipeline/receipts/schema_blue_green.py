@@ -52,6 +52,18 @@ def _state(conn):
     ).fetchone()
 
 
+def _legacy_ingest_is_physical(conn) -> bool:
+    row = conn.execute(
+        """
+        SELECT c.relkind
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'ingest' AND c.relname = 'receipts'
+        """
+    ).fetchone()
+    return bool(row and row[0] == "r")
+
+
 def _mark_dirty(conn, desired_hash: str) -> None:
     conn.execute(
         """
@@ -104,15 +116,7 @@ def _drop_budget_status_relation(conn) -> None:
 
 
 def _preserve_legacy_ingest(conn) -> str | None:
-    relation_kind = conn.execute(
-        """
-        SELECT c.relkind
-          FROM pg_class c
-          JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'ingest' AND c.relname = 'receipts'
-        """
-    ).fetchone()
-    if relation_kind and relation_kind[0] == "r":
+    if _legacy_ingest_is_physical(conn):
         conn.execute("DROP SCHEMA IF EXISTS ingest_blue CASCADE")
         conn.execute("ALTER SCHEMA ingest RENAME TO ingest_blue")
         return "blue"
@@ -129,10 +133,7 @@ def _cut_over(
     target_schema = _schema(target_color)
     with conn.transaction():
         _drop_budget_status_relation(conn)
-        legacy_color = _preserve_legacy_ingest(conn)
-        if legacy_color and target_color == legacy_color:
-            raise RuntimeError("legacy ingest occupies target blue slot")
-
+        _preserve_legacy_ingest(conn)
         conn.execute("CREATE SCHEMA ingest")
         conn.execute(f"CREATE VIEW ingest.receipts AS SELECT * FROM {target_schema}.receipts")
         conn.execute(
@@ -191,9 +192,10 @@ def ensure_receipt_schema(conn, template_path: Path = TEMPLATE_PATH) -> bool:
                     "receipt schema template changed without a SCHEMA_VERSION bump"
                 )
 
-        active_color = state[1] if state else None
+        legacy_physical = state is None and _legacy_ingest_is_physical(conn)
+        active_color = state[1] if state else ("blue" if legacy_physical else None)
         target_color = "green" if active_color == "blue" else "blue"
-        previous_version = state[0] if state and state[0] else None
+        previous_version = state[0] if state and state[0] else (0 if legacy_physical else None)
 
         _mark_dirty(conn, desired_hash)
         _build_schema(conn, _schema(target_color), template)
