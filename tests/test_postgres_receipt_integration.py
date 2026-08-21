@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -95,7 +96,10 @@ def test_identical_receipt_lines_are_preserved():
             )
             rows = cur.fetchall()
 
-    assert rows == [
-        ("CGOLD HASH BROWNS", 1, 5.49, 5.49),
-        ("CGOLD HASH BROWNS", 1, 5.49, 5.49),
-    ]
+    expected = (
+        "CGOLD HASH BROWNS",
+        Decimal("1.000"),
+        Decimal("5.49"),
+        Decimal("5.49"),
+    )
+    assert rows == [expected, expected]
