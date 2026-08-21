@@ -834,7 +834,13 @@ def _resolve_postgres_dsn(raw_dsn: str) -> str:
 
 
 def _connect_postgres(dsn: str):
-    dsn = _resolve_postgres_dsn(dsn)
+    if (dsn or '').strip():
+        dsn = _resolve_postgres_dsn(dsn)
+    else:
+        # Kubernetes supplies the application connection as a secret-backed
+        # environment variable. It is safe to consume here without echoing it
+        # or requiring it to be repeated on the command line.
+        dsn = os.environ.get('DATABASE_URL', '').strip() or 'dbname=home_budget'
     hb_pg_password = os.environ.get('HOME_BUDGET_PGPASSWORD', '').strip()
     if hb_pg_password and not os.environ.get('PGPASSWORD'):
         os.environ['PGPASSWORD'] = hb_pg_password
@@ -861,6 +867,16 @@ def to_money_decimal(value: object, default_zero: bool = False) -> Optional[Deci
         return Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     except (InvalidOperation, ValueError):
         return Decimal('0.00') if default_zero else None
+
+
+def canonical_category_source(value: object) -> str:
+    """Map extractor detail labels onto the canonical audit vocabulary."""
+    source = str(value or '').strip().lower()
+    if source == 'ai':
+        return 'ai'
+    if source in {'default', ''}:
+        return 'unresolved'
+    return 'rule'
 
 
 def load_expense_categories_from_postgres(dsn: str, schema: str) -> List[str]:
@@ -1018,7 +1034,7 @@ def write_costco_to_postgres(
                     key = (
                         item_name.lower(),
                         item.get('budget_category'),
-                        item.get('category_source'),
+                            canonical_category_source(item.get('category_source')),
                         unit_cost_val,
                     )
                     slot = grouped_items.get(key)
