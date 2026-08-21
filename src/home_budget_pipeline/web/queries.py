@@ -181,6 +181,157 @@ class LedgerQueryService:
         )
         return tuple(str(row["category_name"]) for row in rows)
 
+    def category_rules(self, *, search: Optional[str] = None) -> tuple[dict[str, Any], ...]:
+        predicate = ""
+        params: tuple[Any, ...] = ()
+        if search:
+            predicate = """
+             WHERE match_text ILIKE %s OR merchant ILIKE %s
+                OR source ILIKE %s OR category_name ILIKE %s
+            """
+            term = f"%{search}%"
+            params = (term, term, term, term)
+        return self._fetch(
+            f"""
+            SELECT id, source, merchant, match_type, match_text, category_name,
+                   priority, is_active, provenance, is_approved, updated_at
+              FROM budget.expense_category_mappings
+              {predicate}
+             ORDER BY is_active DESC, priority, lower(match_text), id
+             LIMIT 500
+            """,
+            params,
+        )
+
+    def category_rule_audit(self, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
+        return self._fetch(
+            """
+            SELECT id, mapping_id, actor_user, actor_email, action, match_text,
+                   source, merchant, old_category, new_category,
+                   affected_item_count, created_at
+              FROM budget.expense_category_mapping_audit
+             ORDER BY created_at DESC, id DESC
+             LIMIT %s
+            """,
+            (limit,),
+        )
+
+    def save_category_rule(
+        self,
+        *,
+        rule_id: Optional[int],
+        source: Optional[str],
+        merchant: Optional[str],
+        match_type: str,
+        match_text: str,
+        category: str,
+        priority: int,
+        is_active: bool,
+        actor_user: str,
+        actor_email: Optional[str] = None,
+    ) -> dict[str, Any]:
+        normalized = normalize_for_match(match_text)
+        if not normalized:
+            raise ValueError("match text must contain letters or numbers")
+        if match_type not in {"exact", "contains"}:
+            raise ValueError("match type must be exact or contains")
+        source = source.strip() if source and source.strip() else None
+        merchant = merchant.strip() if merchant and merchant.strip() else None
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM budget.expense_categories WHERE category_name = %s AND is_active = TRUE",
+                    (category,),
+                )
+                if cur.fetchone() is None:
+                    raise ValueError("category is not active")
+                existing = None
+                if rule_id is not None:
+                    cur.execute(
+                        """
+                        SELECT id, category_name, is_active
+                          FROM budget.expense_category_mappings WHERE id = %s
+                        """,
+                        (rule_id,),
+                    )
+                    existing = cur.fetchone()
+                    if existing is None:
+                        raise LookupError("category rule not found")
+                    old_category = existing["category_name"] if isinstance(existing, dict) else existing[1]
+                    cur.execute(
+                        """
+                        UPDATE budget.expense_category_mappings
+                           SET source = %s, merchant = %s, match_type = %s,
+                               match_text = %s, category_name = %s, priority = %s,
+                               is_active = %s, provenance = 'manual', is_approved = TRUE,
+                               notes = 'Managed from Ledger category rules', updated_at = NOW()
+                         WHERE id = %s RETURNING id
+                        """,
+                        (source, merchant, match_type, normalized, category, priority, is_active, rule_id),
+                    )
+                    mapping_id = rule_id
+                    action = "changed" if is_active else "disabled"
+                else:
+                    old_category = None
+                    cur.execute(
+                        """
+                        INSERT INTO budget.expense_category_mappings (
+                            source, merchant, match_type, match_text, category_name,
+                            priority, is_active, provenance, is_approved, notes
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'manual', TRUE,
+                                  'Managed from Ledger category rules')
+                        RETURNING id
+                        """,
+                        (source, merchant, match_type, normalized, category, priority, is_active),
+                    )
+                    created = cur.fetchone()
+                    mapping_id = created["id"] if isinstance(created, dict) else created[0]
+                    action = "created" if is_active else "disabled"
+
+                affected_items = 0
+                if is_active:
+                    operator = "=" if match_type == "exact" else "LIKE"
+                    comparison = normalized if match_type == "exact" else f"%{normalized}%"
+                    cur.execute(
+                        f"""
+                        UPDATE budget.expense_items i
+                           SET budget_category = %s, category_source = 'rule',
+                               category_confidence = 1,
+                               category_rationale = 'human-approved category rule',
+                               category_requires_review = FALSE, categorized_at = NOW(),
+                               updated_at = NOW()
+                          FROM budget.expenses e
+                         WHERE e.id = i.expense_pk
+                           AND trim(lower(regexp_replace(i.item_name, '[^a-zA-Z0-9]+', ' ', 'g'))) {operator} %s
+                           AND (%s::text IS NULL OR e.source = %s::text)
+                           AND (%s::text IS NULL OR lower(trim(e.store_name)) = lower(trim(%s::text)))
+                        """,
+                        (category, comparison, source, source, merchant, merchant),
+                    )
+                    affected_items = cur.rowcount
+                cur.execute(
+                    """
+                    INSERT INTO budget.expense_category_mapping_audit (
+                        mapping_id, actor_user, actor_email, action, item_name,
+                        match_text, source, merchant, old_category, new_category,
+                        affected_item_count
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (mapping_id, actor_user, actor_email, action, match_text,
+                     normalized, source, merchant, old_category, category, affected_items),
+                )
+                audit = cur.fetchone()
+                audit_id = audit["id"] if isinstance(audit, dict) else audit[0]
+            conn.commit()
+            return {"mapping_id": mapping_id, "audit_id": audit_id, "affected_items": affected_items}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def save_category_override(
         self,
         expense_item_id: int,

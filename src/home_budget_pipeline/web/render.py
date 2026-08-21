@@ -27,6 +27,7 @@ def page(title: str, body: str, *, base_path: str, identity: Mapping[str, str]) 
         f'<a href="{base_path}">Home</a>'
         f'<a href="{base_path}/expenses">Expenses</a>'
         f'<a href="{base_path}/category-spend">Category spend</a>'
+        f'<a href="{base_path}/category-rules">Category rules</a>'
         f'<a href="{base_path}/review-queue">Review queue</a>'
         f'<a href="{base_path}/duplicates">Duplicates</a>'
         f'<a href="{base_path}/transactions">Transactions</a>'
