@@ -4,7 +4,10 @@ RECEIPT_TEST_ROOT ?= .receipt-test
 RECEIPT_TEST_WORKERS ?= 6
 RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 
-.PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts
+.PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts status
+
+status:
+	@./scripts/deployment_status.sh
 
 test:
 	pytest -q -m "not integration"

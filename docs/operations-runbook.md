@@ -86,6 +86,20 @@ PreSync migration image remains tied to the application deployment.
 
 ## Argo CD deployment
 
+Show recent CI runs, Argo status, Kubernetes Jobs, and Pods in one read-only
+dashboard:
+
+```bash
+make status
+```
+
+The underlying script is `scripts/deployment_status.sh`. Its defaults can be
+overridden when needed:
+
+```bash
+RUN_LIMIT=10 ARGO_APP=ledger KUBE_NAMESPACE=home-budget make status
+```
+
 The `ledger` application tracks `main` with automated sync, pruning, and
 self-healing. A PreSync hook runs `home-budget-db-setup` before workloads are
 updated. The hook applies current constraint policy and receipt-schema updates.
