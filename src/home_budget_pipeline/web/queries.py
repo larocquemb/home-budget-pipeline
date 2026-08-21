@@ -12,6 +12,7 @@ class Page:
     rows: tuple[dict[str, Any], ...]
     limit: int
     offset: int
+    total_count: int | None = None
 
 
 class LedgerQueryService:
@@ -62,6 +63,13 @@ class LedgerQueryService:
             where.append("requires_review = %s")
             params.append(requires_review)
         predicate = " WHERE " + " AND ".join(where) if where else ""
+        count_sql = f"""
+            SELECT COUNT(*) AS total_count
+              FROM budget.analytics_expenses
+              {predicate}
+        """
+        count_rows = self._fetch(count_sql, tuple(params))
+        total_count = int(count_rows[0]["total_count"])
         sql = f"""
             SELECT expense_pk, source, order_date, transaction_datetime, store_name,
                    account_name, expense_total, extraction_status, requires_review
@@ -71,7 +79,8 @@ class LedgerQueryService:
              LIMIT %s OFFSET %s
         """
         params.extend([limit, offset])
-        return Page(self._fetch(sql, tuple(params)), limit, offset)
+        rows = self._fetch(sql, tuple(params))
+        return Page(rows, limit, offset, total_count)
 
     def category_spend(self, *, limit: int = 100, offset: int = 0) -> Page:
         sql = """

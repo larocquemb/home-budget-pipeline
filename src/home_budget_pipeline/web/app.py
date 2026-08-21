@@ -288,8 +288,11 @@ def expenses_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, g
 <label>Rows<input name="limit" type="number" min="1" max="200" value="{limit}"></label>
 <button type="submit">Filter</button>
 </form>"""
+    if result.total_count is not None:
+        noun = "expense" if result.total_count == 1 else "expenses"
+        body += f'<p><strong>{result.total_count:,}</strong> {noun}</p>'
     body += table(result.rows, (("expense_pk", "Expense"), ("source", "Source"), ("order_date", "Date"), ("store_name", "Merchant"), ("account_name", "Account"), ("expense_total", "Total"), ("extraction_status", "Extraction"), ("requires_review", "Review")), links={"expense_pk": f"{BASE_PATH}/expenses/{{value}}"}, money_columns={"expense_total"})
-    body += pager(f"{BASE_PATH}/expenses", limit=limit, offset=offset, row_count=len(result.rows), query={"source": source, "merchant": merchant, "requires_review": review_value})
+    body += pager(f"{BASE_PATH}/expenses", limit=limit, offset=offset, row_count=len(result.rows), total_count=result.total_count, query={"source": source, "merchant": merchant, "requires_review": review_value})
     return page("Expenses", body, base_path=BASE_PATH, identity=identity)
 
 
