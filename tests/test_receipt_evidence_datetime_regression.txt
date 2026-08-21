@@ -1,0 +1,1 @@
+Regression covered in tests/test_receipt_evidence.py: psycopg returns PostgreSQL timestamps as native datetime objects, and candidate_score must accept them without calling datetime.fromisoformat() on an existing datetime.
