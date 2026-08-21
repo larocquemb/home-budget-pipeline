@@ -32,6 +32,18 @@ class FakeService:
     def review_queue(self, **kwargs):
         return Page((), kwargs.get("limit", 50), kwargs.get("offset", 0))
 
+    def extraction_audit(self, **kwargs):
+        return Page(({
+            "expense_pk": 42,
+            "evidence_id": 7,
+            "source_reference": "receipt.pdf",
+            "order_date": "2026-08-20",
+            "store_name": "Costco",
+            "expense_total": "295.47",
+            "extraction_status": "complete",
+            "item_count": 3,
+        },), kwargs.get("limit", 100), kwargs.get("offset", 0))
+
     def pending_duplicates(self, **kwargs):
         return Page(({
             "id": 1,
@@ -108,6 +120,16 @@ def test_expense_detail_shows_items_and_evidence():
     assert "Line items" in text
     assert "Milk" in text
     assert "Receipt evidence" in text
+    assert f'{web_app.BASE_PATH}/evidence/7' in text
+
+
+def test_extraction_audit_links_expense_and_evidence():
+    text = web_app.extraction_audit_page(
+        service=FakeService(), identity=IDENTITY, limit=100, offset=0, max_items=4
+    )
+    assert "Extraction audit" in text
+    assert "receipt.pdf" in text
+    assert f'{web_app.BASE_PATH}/expenses/42' in text
     assert f'{web_app.BASE_PATH}/evidence/7' in text
 
 

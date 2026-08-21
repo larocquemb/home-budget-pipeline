@@ -94,6 +94,36 @@ class LedgerQueryService:
         """
         return Page(self._fetch(sql, (limit, offset)), limit, offset)
 
+    def extraction_audit(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        status: Optional[str] = None,
+        max_items: int = 4,
+    ) -> Page:
+        where = "WHERE e.extraction_status = %s" if status else ""
+        params: list[Any] = [status] if status else []
+        sql = f"""
+            SELECT e.id AS expense_pk,
+                   (SELECT MIN(re.id) FROM budget.receipt_evidence re
+                     WHERE re.expense_pk = e.id) AS evidence_id,
+                   e.source,
+                   e.source_reference, e.order_date, e.store_name,
+                   e.expense_total, e.extraction_status,
+                   COUNT(i.id) AS item_count
+              FROM budget.expenses e
+              LEFT JOIN budget.expense_items i ON i.expense_pk = e.id
+              {where}
+             GROUP BY e.id, e.source, e.source_reference, e.order_date,
+                      e.store_name, e.expense_total, e.extraction_status
+            HAVING COUNT(i.id) <= %s
+             ORDER BY item_count, e.order_date DESC NULLS LAST, e.id DESC
+             LIMIT %s OFFSET %s
+        """
+        params.extend([max_items, limit, offset])
+        return Page(self._fetch(sql, tuple(params)), limit, offset)
+
     def expense_detail(self, expense_pk: int) -> dict[str, Any] | None:
         rows = self._fetch(
             """

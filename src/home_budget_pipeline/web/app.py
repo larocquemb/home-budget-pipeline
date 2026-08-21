@@ -95,6 +95,11 @@ def api_review_queue(limit: int = Query(50, ge=1, le=200), offset: int = Query(0
     return service.review_queue(limit=limit, offset=offset)
 
 
+@app.get(f"{BASE_PATH}/api/extraction-audit")
+def api_extraction_audit(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), status_filter: Optional[str] = Query(None, alias="status"), max_items: int = Query(4, ge=0, le=1000), service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
+    return service.extraction_audit(limit=limit, offset=offset, status=status_filter or None, max_items=max_items)
+
+
 @app.get(f"{BASE_PATH}/api/expenses/{{expense_pk}}")
 def api_expense_detail(expense_pk: int, service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
     result = service.expense_detail(expense_pk)
@@ -157,6 +162,7 @@ def ledger_home(identity: dict[str, str] = Depends(authenticated_identity)) -> s
 <div class="card"><h2><a href="{BASE_PATH}/expenses">Expenses</a></h2><p>Browse and filter canonical expenses, then drill into line items and receipts.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/category-spend">Category spend</a></h2><p>Inspect the KAN-71 category-spend analytics view.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/review-queue">Review queue</a></h2><p>See canonical expenses requiring extraction, reconciliation, or quality review.</p></div>
+<div class="card"><h2><a href="{BASE_PATH}/extraction-audit">Extraction audit</a></h2><p>Find receipts with suspiciously few canonical line items.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/duplicates">Duplicates</a></h2><p>Inspect unresolved KAN-77 receipt duplicate candidates.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/transactions">Transactions</a></h2><p>Inspect KAN-78 matched, ambiguous, and unmatched financial transactions.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/receipt-processing">Receipt processing</a></h2><p>See KAN-82 processing attempts, failures, and receipts requiring review.</p></div>
@@ -196,6 +202,22 @@ def review_queue_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(
     body = table(result.rows, (("expense_pk", "Expense"), ("source", "Source"), ("order_date", "Date"), ("store_name", "Merchant"), ("expense_total", "Total"), ("extraction_status", "Extraction"), ("data_quality_status", "Quality"), ("data_quality_violation_count", "Violations")), links={"expense_pk": f"{BASE_PATH}/expenses/{{value}}"}, money_columns={"expense_total"})
     body += pager(f"{BASE_PATH}/review-queue", limit=limit, offset=offset, row_count=len(result.rows))
     return page("Review queue", body, base_path=BASE_PATH, identity=identity)
+
+
+@app.get(f"{BASE_PATH}/extraction-audit", response_class=HTMLResponse)
+def extraction_audit_page(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), status_filter: Optional[str] = Query(None, alias="status"), max_items: int = Query(4, ge=0, le=1000), service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
+    status_value = status_filter.strip() if isinstance(status_filter, str) else ""
+    result = service.extraction_audit(limit=limit, offset=offset, status=status_value or None, max_items=max_items)
+    body = f"""
+<form class="toolbar" method="get">
+<label>Status<select name="status"><option value="">All</option><option value="complete"{' selected' if status_value == 'complete' else ''}>Complete</option><option value="review"{' selected' if status_value == 'review' else ''}>Review</option><option value="unreadable"{' selected' if status_value == 'unreadable' else ''}>Unreadable</option></select></label>
+<label>Maximum items<input name="max_items" type="number" min="0" max="1000" value="{max_items}"></label>
+<label>Rows<input name="limit" type="number" min="1" max="500" value="{limit}"></label>
+<button type="submit">Filter</button>
+</form>"""
+    body += table(result.rows, (("expense_pk", "Expense"), ("evidence_id", "Evidence"), ("source_reference", "Receipt"), ("order_date", "Date"), ("store_name", "Merchant"), ("expense_total", "Total"), ("extraction_status", "Extraction"), ("item_count", "Items")), links={"expense_pk": f"{BASE_PATH}/expenses/{{value}}", "evidence_id": f"{BASE_PATH}/evidence/{{value}}"}, money_columns={"expense_total"})
+    body += pager(f"{BASE_PATH}/extraction-audit", limit=limit, offset=offset, row_count=len(result.rows), query={"status": status_value, "max_items": max_items})
+    return page("Extraction audit", body, base_path=BASE_PATH, identity=identity)
 
 
 @app.get(f"{BASE_PATH}/duplicates", response_class=HTMLResponse)

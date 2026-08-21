@@ -413,6 +413,7 @@ The main browser pages include:
 /ledger/expenses
 /ledger/category-spend
 /ledger/review
+/ledger/extraction-audit
 /ledger/duplicates
 /ledger/transactions
 /ledger/expenses/<expense_pk>

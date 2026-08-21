@@ -90,6 +90,19 @@ def test_review_queue_reads_kan71_review_view():
     assert "FROM budget.analytics_review_queue" in cursor.executed[1][0]
 
 
+def test_extraction_audit_counts_items_and_applies_threshold():
+    service, _, cursor = service_with()
+
+    service.extraction_audit(limit=25, offset=5, status="complete", max_items=4)
+
+    sql, params = cursor.executed[1]
+    assert "LEFT JOIN budget.expense_items" in sql
+    assert "COUNT(i.id) AS item_count" in sql
+    assert "HAVING COUNT(i.id) <= %s" in sql
+    assert "e.extraction_status = %s" in sql
+    assert params == ("complete", 4, 25, 5)
+
+
 def test_duplicate_queue_is_pending_only():
     service, _, cursor = service_with()
 
