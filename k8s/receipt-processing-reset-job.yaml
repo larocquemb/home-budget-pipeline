@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: receipt-processing-reset
+  name: receipt-processing-schema-upgrade
   namespace: home-budget
   annotations:
     argocd.argoproj.io/hook: PreSync
@@ -12,27 +12,19 @@ spec:
   template:
     metadata:
       labels:
-        app: receipt-processing-reset
+        app: receipt-processing-schema-upgrade
     spec:
       restartPolicy: Never
       imagePullSecrets:
         - name: ghcr-secret
       containers:
-        - name: reset-receipt-state
+        - name: upgrade-receipt-schema
           image: ghcr.io/larocquemb/home-budget-pipeline
           imagePullPolicy: IfNotPresent
           command:
             - python
-            - -c
-          args:
-            - |
-              import os
-              from pathlib import Path
-              import psycopg
-
-              sql = Path('/opt/app-root/src/sql/receipt_processing.sql').read_text(encoding='utf-8')
-              with psycopg.connect(os.environ['DATABASE_URL']) as conn:
-                  conn.execute(sql)
+            - -m
+            - home_budget_pipeline.receipts.schema_blue_green
           env:
             - name: DATABASE_URL
               valueFrom:

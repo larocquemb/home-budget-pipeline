@@ -3,8 +3,6 @@
 
 BEGIN;
 
--- Remove the legacy budget receipt-processing relation regardless of whether
--- an older deployment created it as a table or a view.
 DO $$
 DECLARE
     relation_kind "char";
@@ -24,8 +22,6 @@ BEGIN
 END;
 $$;
 
--- ingest is disposable workflow/cache state. Rebuild it cleanly rather than
--- carrying forward or migrating stale processing records.
 DROP SCHEMA IF EXISTS ingest CASCADE;
 CREATE SCHEMA ingest;
 
@@ -39,8 +35,6 @@ BEGIN
 END;
 $$;
 
--- Stable source identity for rebuildable receipt data. source_sha256 is the
--- cross-schema join key; source_reference is the human-readable relative path.
 CREATE TABLE ingest.receipts (
     source_sha256 TEXT PRIMARY KEY,
     source_reference TEXT NOT NULL,
@@ -75,8 +69,6 @@ CREATE TRIGGER trg_receipt_processing_status_set_updated_at
 BEFORE UPDATE ON ingest.receipt_processing_status
 FOR EACH ROW EXECUTE FUNCTION ingest.set_updated_at();
 
--- Read-only compatibility surface for the Ledger UI. The underlying lifecycle
--- state remains disposable in ingest.
 CREATE VIEW budget.receipt_processing_status AS
 SELECT
     s.source_sha256,
