@@ -8,7 +8,7 @@ from pathlib import Path
 from home_budget_pipeline.receipts.schema_blue_green import ensure_receipt_schema
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SQL_DIR = REPO_ROOT / "sql"
+SQL_DIR = Path(os.environ.get("HOME_BUDGET_SQL_DIR", REPO_ROOT / "sql"))
 BASE_SCHEMA = SQL_DIR / "schema_phase1.sql"
 CONSTRAINTS_SCHEMA = SQL_DIR / "schema_constraints.sql"
 RECEIPT_TEMPLATE = SQL_DIR / "receipt_processing_template.sql"

@@ -1,6 +1,18 @@
+import importlib
 from unittest.mock import MagicMock, patch
 
 from home_budget_pipeline import db_setup
+
+
+def test_sql_directory_can_be_configured_for_installed_runtime(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME_BUDGET_SQL_DIR", str(tmp_path))
+
+    reloaded = importlib.reload(db_setup)
+
+    assert reloaded.SQL_DIR == tmp_path
+    assert reloaded.CONSTRAINTS_SCHEMA == tmp_path / "schema_constraints.sql"
+    monkeypatch.delenv("HOME_BUDGET_SQL_DIR")
+    importlib.reload(db_setup)
 
 
 def test_existing_base_schema_applies_constraints_and_ensures_receipt_schema(tmp_path, monkeypatch):

@@ -4,7 +4,8 @@ FROM ${OCR_BASE_IMAGE}
 
 LABEL org.opencontainers.image.source="https://github.com/larocquemb/home-budget-pipeline"
 
-ENV HOME_BUDGET_DATA_ROOT=/data
+ENV HOME_BUDGET_DATA_ROOT=/data \
+    HOME_BUDGET_SQL_DIR=/opt/app-root/src/sql
 
 USER 0
 
