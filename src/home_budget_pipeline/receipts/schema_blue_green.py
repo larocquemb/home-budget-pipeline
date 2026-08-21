@@ -11,7 +11,7 @@ import psycopg
 COMPONENT = "receipt_ingest"
 SCHEMA_VERSION = 1
 LOCK_NAME = "home-budget-receipt-backlog"
-TEMPLATE_PATH = Path("/opt/app-root/src/sql/receipt_processing.sql")
+TEMPLATE_PATH = Path("/opt/app-root/src/sql/receipt_processing_template.sql")
 
 
 def _ensure_state_table(conn) -> None:
