@@ -7,6 +7,7 @@ argo_app="${ARGO_APP:-ledger}"
 kube_namespace="${KUBE_NAMESPACE:-home-budget}"
 ledger_deployment="${LEDGER_DEPLOYMENT:-ledger-web}"
 exit_status=0
+configured_image=''
 
 section() {
     printf '\n== %s ==\n' "$1"
@@ -29,9 +30,22 @@ if ! command -v argocd >/dev/null 2>&1; then
     printf 'argocd is not installed\n'
     exit_status=1
 else
-    if ! argocd app get "$argo_app" --grpc-web -o json | jq -r \
-        '"Target:        \(.spec.source.targetRevision)\nRevision:      \(.status.sync.revision[0:7])\nSync Status:   \(.status.sync.status)\nHealth Status: \(.status.health.status)"'; then
+    argo_details=$(argocd app get "$argo_app" --grpc-web -o json | jq -r \
+        '[.spec.source.targetRevision, .status.sync.revision[0:7], .status.sync.status, .status.health.status] | @tsv')
+    argo_status=$?
+    if [ "$argo_status" -ne 0 ]; then
         exit_status=1
+    else
+        IFS=$'\t' read -r argo_target argo_revision sync_status health_status <<< "$argo_details"
+        if command -v kubectl >/dev/null 2>&1; then
+            configured_image=$(kubectl -n "$kube_namespace" get deployment "$ledger_deployment" \
+                -o jsonpath='{.spec.template.spec.containers[?(@.name=="ledger-web")].image}')
+        fi
+        application_commit="${configured_image##*:}"
+        printf 'Target:        %s\n' "$argo_target"
+        printf 'Revision:      %s -> Application: %.7s\n' "$argo_revision" "$application_commit"
+        printf 'Sync Status:   %s\n' "$sync_status"
+        printf 'Health Status: %s\n' "$health_status"
     fi
 fi
 
@@ -40,9 +54,12 @@ if ! command -v kubectl >/dev/null 2>&1; then
     printf 'kubectl is not installed\n'
     exit_status=1
 else
-    configured_image=$(kubectl -n "$kube_namespace" get deployment "$ledger_deployment" \
-        -o jsonpath='{.spec.template.spec.containers[?(@.name=="ledger-web")].image}')
-    image_status=$?
+    image_status=0
+    if [ -z "$configured_image" ]; then
+        configured_image=$(kubectl -n "$kube_namespace" get deployment "$ledger_deployment" \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="ledger-web")].image}')
+        image_status=$?
+    fi
     pod_details=$(kubectl -n "$kube_namespace" get pods -l app=ledger-web \
         --sort-by=.metadata.creationTimestamp \
         -o jsonpath='{.items[-1].metadata.name}{"\t"}{.items[-1].status.containerStatuses[?(@.name=="ledger-web")].imageID}')

@@ -12,9 +12,10 @@ def test_deployment_status_covers_ci_argocd_jobs_and_pods():
     assert '(printf "%.7s" .headSha)' in text
     assert '{{if eq .conclusion ""}}{{tablerow .status' in text
     assert 'argocd app get "$argo_app" --grpc-web -o json' in text
-    assert "Revision:      \\(.status.sync.revision[0:7])" in text
-    assert "Sync Status:   \\(.status.sync.status)" in text
-    assert "Health Status: \\(.status.health.status)" in text
+    assert ".status.sync.revision[0:7]" in text
+    assert "Revision:      %s -> Application: %.7s" in text
+    assert "Sync Status:   %s" in text
+    assert "Health Status: %s" in text
     assert 'LEDGER_DEPLOYMENT:-ledger-web' in text
     assert 'docker buildx imagetools inspect "$configured_image"' in text
     assert 'application_commit="${application_commit:0:7}"' in text
