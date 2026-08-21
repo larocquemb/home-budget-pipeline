@@ -6,8 +6,6 @@ import hashlib
 import os
 from pathlib import Path
 
-import psycopg
-
 COMPONENT = "receipt_ingest"
 SCHEMA_VERSION = 1
 LOCK_NAME = "home-budget-receipt-backlog"
@@ -211,6 +209,8 @@ def ensure_receipt_schema(conn, template_path: Path = TEMPLATE_PATH) -> bool:
 
 
 def main() -> int:
+    import psycopg
+
     dsn = os.environ.get("DATABASE_URL") or os.environ.get("HOME_BUDGET_PG_DSN")
     if not dsn:
         raise RuntimeError("DATABASE_URL or HOME_BUDGET_PG_DSN is required")
