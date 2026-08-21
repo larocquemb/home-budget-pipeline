@@ -1,8 +1,33 @@
 -- Disposable receipt-ingestion identity and processing state.
+-- This state is derived and intentionally rebuilt instead of migrated.
 
 BEGIN;
 
-CREATE SCHEMA IF NOT EXISTS ingest;
+-- Remove the legacy budget receipt-processing relation regardless of whether
+-- an older deployment created it as a table or a view.
+DO $$
+DECLARE
+    relation_kind "char";
+BEGIN
+    SELECT c.relkind
+      INTO relation_kind
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'budget'
+       AND c.relname = 'receipt_processing_status';
+
+    IF relation_kind = 'v' THEN
+        EXECUTE 'DROP VIEW budget.receipt_processing_status CASCADE';
+    ELSIF relation_kind IS NOT NULL THEN
+        EXECUTE 'DROP TABLE budget.receipt_processing_status CASCADE';
+    END IF;
+END;
+$$;
+
+-- ingest is disposable workflow/cache state. Rebuild it cleanly rather than
+-- carrying forward or migrating stale processing records.
+DROP SCHEMA IF EXISTS ingest CASCADE;
+CREATE SCHEMA ingest;
 
 CREATE OR REPLACE FUNCTION ingest.set_updated_at()
 RETURNS TRIGGER
@@ -50,9 +75,8 @@ CREATE TRIGGER trg_receipt_processing_status_set_updated_at
 BEFORE UPDATE ON ingest.receipt_processing_status
 FOR EACH ROW EXECUTE FUNCTION ingest.set_updated_at();
 
--- Read-only compatibility surface for the existing Ledger UI. The underlying
--- lifecycle state remains disposable in ingest; source_reference is joined by
--- the stable SHA identity rather than duplicated in the status table.
+-- Read-only compatibility surface for the Ledger UI. The underlying lifecycle
+-- state remains disposable in ingest.
 CREATE VIEW budget.receipt_processing_status AS
 SELECT
     s.source_sha256,
