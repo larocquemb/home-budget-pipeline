@@ -12,11 +12,20 @@ USER 0
 WORKDIR /opt/app-root/src
 
 COPY pyproject.toml README.md ./
+
+# Install third-party dependencies before copying application source so this
+# expensive layer remains cached for source-only changes. The temporary package
+# lets pip resolve the canonical dependency metadata directly from pyproject.
+RUN mkdir -p src/home_budget_pipeline \
+    && touch src/home_budget_pipeline/__init__.py \
+    && python -m pip install --no-cache-dir 'setuptools>=77' \
+    && python -m pip install --no-cache-dir --no-build-isolation '.[db]'
+
 COPY src ./src
 COPY sql ./sql
 COPY config ./config
 
-RUN python -m pip install --no-cache-dir '.[db]' \
+RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation --force-reinstall . \
     && mkdir -p /data \
     && chown -R 1001:0 /data /opt/app-root/src \
     && chmod -R g=u /data /opt/app-root/src

@@ -38,6 +38,10 @@ home-budget-db-setup
 The container sets `HOME_BUDGET_SQL_DIR=/opt/app-root/src/sql`; local execution
 uses the repository `sql/` directory.
 
+The Dockerfile installs third-party dependencies before application source is
+copied. Source-only builds therefore reuse the dependency layer; changes to
+`pyproject.toml` intentionally invalidate it.
+
 ## Commit and push
 
 ```bash
