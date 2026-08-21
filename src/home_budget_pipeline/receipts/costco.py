@@ -1034,7 +1034,7 @@ def write_costco_to_postgres(
                     key = (
                         item_name.lower(),
                         item.get('budget_category'),
-                            canonical_category_source(item.get('category_source')),
+                        canonical_category_source(item.get('category_source')),
                         unit_cost_val,
                     )
                     slot = grouped_items.get(key)
@@ -1042,7 +1042,7 @@ def write_costco_to_postgres(
                         grouped_items[key] = {
                             'item_name': item_name,
                             'budget_category': item.get('budget_category'),
-                            'category_source': item.get('category_source'),
+                            'category_source': canonical_category_source(item.get('category_source')),
                             'unit_qty': 1.0,
                             'unit_cost': unit_cost_val,
                             'line_total': unit_cost_val,
