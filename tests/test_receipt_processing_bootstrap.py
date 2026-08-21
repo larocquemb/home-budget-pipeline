@@ -27,6 +27,12 @@ def test_postgres_bootstrap_stages_constraints_and_receipt_processing_sql():
     assert "/schema/007-receipt-processing.sql" in manifest
 
 
+def test_postgres_bootstrap_uses_kustomize_managed_app_image():
+    manifest = Path("k8s/postgres.yaml").read_text(encoding="utf-8")
+    assert "image: ghcr.io/larocquemb/home-budget-pipeline\n" in manifest
+    assert "home-budget-pipeline:KAN-68" not in manifest
+
+
 def test_processing_status_has_index_for_operational_review():
     sql = Path("sql/receipt_processing.sql").read_text(encoding="utf-8")
     assert "idx_receipt_processing_status_status" in sql
