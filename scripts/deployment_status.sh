@@ -30,7 +30,7 @@ if ! command -v argocd >/dev/null 2>&1; then
     exit_status=1
 else
     if ! argocd app get "$argo_app" --grpc-web -o json | jq -r \
-        '"Target:        \(.spec.source.targetRevision)\nRevision:      \(.status.sync.revision)\nSync Status:   \(.status.sync.status)\nHealth Status: \(.status.health.status)"'; then
+        '"Target:        \(.spec.source.targetRevision)\nRevision:      \(.status.sync.revision[0:7])\nSync Status:   \(.status.sync.status)\nHealth Status: \(.status.health.status)"'; then
         exit_status=1
     fi
 fi
