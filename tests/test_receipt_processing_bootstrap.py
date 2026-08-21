@@ -3,7 +3,8 @@ from pathlib import Path
 
 def test_receipt_processing_sql_defines_disposable_ingest_state():
     sql = Path("sql/receipt_processing.sql").read_text(encoding="utf-8")
-    assert "CREATE SCHEMA IF NOT EXISTS ingest" in sql
+    assert "DROP SCHEMA IF EXISTS ingest CASCADE" in sql
+    assert "CREATE SCHEMA ingest" in sql
     assert "CREATE TABLE ingest.receipts" in sql
     assert "CREATE TABLE ingest.receipt_processing_status" in sql
     assert "source_sha256 TEXT PRIMARY KEY" in sql
@@ -11,6 +12,13 @@ def test_receipt_processing_sql_defines_disposable_ingest_state():
     assert "review_required" in sql
     assert "failed" in sql
     assert "attempts INTEGER" in sql
+
+
+def test_receipt_processing_sql_removes_legacy_budget_relation():
+    sql = Path("sql/receipt_processing.sql").read_text(encoding="utf-8")
+    assert "c.relname = 'receipt_processing_status'" in sql
+    assert "DROP VIEW budget.receipt_processing_status CASCADE" in sql
+    assert "DROP TABLE budget.receipt_processing_status CASCADE" in sql
 
 
 def test_receipt_processing_sql_exposes_budget_read_view():
