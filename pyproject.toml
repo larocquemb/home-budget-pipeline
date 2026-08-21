@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 home-budget-scan = "home_budget_pipeline.receipts.parallel_ingest:main"
 home-budget-process-receipts = "home_budget_pipeline.receipts.backlog_ingest:main"
+home-budget-db-setup = "home_budget_pipeline.db_setup:main"
 home-budget-ledger = "home_budget_pipeline.web.app:main"
 home-budget-categorize = "home_budget_pipeline.categorization.command:main"
 home-budget-category-catalog = "home_budget_pipeline.categorization.catalog_config:main"
