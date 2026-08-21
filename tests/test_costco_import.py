@@ -40,3 +40,16 @@ def test_costco_general_towels_are_indoor_supplies_without_overriding_beach_towe
         "Indoor Supplies",
         "verified_cache",
     )
+
+
+def test_costco_refund_amounts_with_trailing_minus_are_negative():
+    text = """WW DRESS 29.99-
+SUBTOTAL 29.99-
+TAX 3.60-
+**** TOTAL 33.59-
+(A) PST 2.10-
+(B) 5% GST 1.50-
+TOTAL TAX 3.60-
+"""
+
+    assert costco.parse_receipt_amounts(text) == (-29.99, -3.60, -33.59)

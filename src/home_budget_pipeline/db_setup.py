@@ -13,6 +13,7 @@ BASE_SCHEMA = SQL_DIR / "schema_phase1.sql"
 CONSTRAINTS_SCHEMA = SQL_DIR / "schema_constraints.sql"
 RECEIPT_TEMPLATE = SQL_DIR / "receipt_processing_template.sql"
 CATEGORY_MAPPING_AUDIT_MIGRATION = SQL_DIR / "migrations" / "category_mapping_audit.sql"
+ITEM_DESCRIPTIONS_MIGRATION = SQL_DIR / "migrations" / "expense_item_descriptions.sql"
 
 
 def _relation_exists(conn, qualified_name: str) -> bool:
@@ -36,6 +37,7 @@ def ensure_database_schema(conn) -> dict[str, bool]:
     # obsolete content-based unique index must be removed wherever it exists.
     _execute_sql_file(conn, CONSTRAINTS_SCHEMA)
     _execute_sql_file(conn, CATEGORY_MAPPING_AUDIT_MIGRATION)
+    _execute_sql_file(conn, ITEM_DESCRIPTIONS_MIGRATION)
 
     receipt_changed = ensure_receipt_schema(conn, RECEIPT_TEMPLATE)
     return {

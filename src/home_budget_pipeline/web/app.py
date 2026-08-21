@@ -41,6 +41,12 @@ class CategoryRuleRequest(BaseModel):
     is_active: bool = True
 
 
+class ItemDescriptionRequest(BaseModel):
+    expense_item_id: int = Field(gt=0)
+    product_description: Optional[str] = Field(default=None, max_length=1000)
+    product_url: Optional[str] = Field(default=None, max_length=2000)
+
+
 def _header_text(value: object) -> Optional[str]:
     if isinstance(value, str):
         value = value.strip()
@@ -173,6 +179,18 @@ def api_category_rule(
             actor_user=identity["user"],
             actor_email=identity.get("email") or None,
         )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(f"{BASE_PATH}/api/item-descriptions")
+def api_item_description(request: ItemDescriptionRequest, x_ledger_action: Optional[str] = Header(default=None), service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)):
+    if x_ledger_action != "item-description":
+        raise HTTPException(status_code=403, detail="item description action header missing")
+    try:
+        return service.save_item_description(request.expense_item_id, request.product_description, request.product_url, actor_user=identity["user"], actor_email=identity.get("email") or None)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -517,6 +535,7 @@ def expense_page(expense_pk: int, service: LedgerQueryService = Depends(query_se
         )
         item_rows.append(f"""<tr>
 <td>{esc(item.get('item_name'))}</td>
+<td><form class="item-description-form" data-item-id="{esc(item.get('expense_item_id'))}"><input name="product_description" value="{esc(item.get('product_description'))}" placeholder="Additional description"><input name="product_url" type="url" value="{esc(item.get('product_url'))}" placeholder="Merchant product URL"><button type="submit">Save</button><small class="description-save-status muted"></small>{f'<br><a href="{esc(item.get("product_url"))}" target="_blank" rel="noopener">View product</a>' if item.get('product_url') else ''}</form></td>
 <td><form class="category-override-form" data-item-id="{esc(item.get('expense_item_id'))}">
 <select name="category" aria-label="Category for {esc(item.get('item_name'))}">{options}</select>
 <button type="submit">Save override</button><small class="category-save-status muted"></small>
@@ -527,9 +546,16 @@ def expense_page(expense_pk: int, service: LedgerQueryService = Depends(query_se
 <td>{esc(item.get('category_confidence'))}</td>
 </tr>""")
     detail += """<h2>Line items</h2><table><thead><tr>
-<th>Item</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th><th>Confidence</th>
+<th>Receipt item</th><th>Additional description</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th><th>Confidence</th>
 </tr></thead><tbody>""" + "".join(item_rows) + """</tbody></table>
 <script>
+for (const form of document.querySelectorAll('.item-description-form')) {
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); const status = form.querySelector('.description-save-status'); status.textContent = ' Saving…';
+    const response = await fetch('""" + f"{BASE_PATH}/api/item-descriptions" + """', {method:'POST', headers:{'Content-Type':'application/json','X-Ledger-Action':'item-description'}, body:JSON.stringify({expense_item_id:Number(form.dataset.itemId), product_description:form.product_description.value || null, product_url:form.product_url.value || null})});
+    const result = await response.json(); status.textContent = response.ok ? ' Saved' : ` ${result.detail || 'Unable to save'}`;
+  });
+}
 for (const form of document.querySelectorAll('.category-override-form')) {
   form.addEventListener('submit', async event => {
     event.preventDefault();
