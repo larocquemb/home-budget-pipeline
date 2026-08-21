@@ -331,14 +331,8 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
         total, total_tolerant = total_candidates[-1]
         if tender_candidates:
             tender, tender_tolerant = tender_candidates[-1]
-            # OCR can inject an extra leading digit into a damaged TOTAL line
-            # (e.g. "TOTAE P2229 .02") while the payment/tender line remains
-            # clean ("MasterCard TENDER $229 .02"). Prefer corroborating tender
-            # when the total came from tolerant parsing and is wildly larger.
             if total_tolerant and tender != 0 and abs(total) > abs(tender) * 2:
                 total = tender
-            # Prefer an exact tender over a tolerant total when they agree to
-            # within ordinary OCR punctuation noise.
             elif total_tolerant and not tender_tolerant and abs(abs(total) - abs(tender)) <= 1.0:
                 total = tender
     elif tender_candidates:
@@ -496,7 +490,7 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                 f"""INSERT INTO {schema}.expense_items (
                     expense_pk, item_name, unit_qty, unit_cost, line_total,
                     original_line_total, category_source
-                ) VALUES (%s, %s, 1, %s, %s, %s, 'scanned_ocr')""",
+                ) VALUES (%s, %s, 1, %s, %s, %s, NULL)""",
                 (expense_pk, item.item_name, item.line_total, item.line_total, item.line_total),
             )
     return expense_pk
