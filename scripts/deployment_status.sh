@@ -5,6 +5,7 @@ set -uo pipefail
 run_limit="${RUN_LIMIT:-3}"
 argo_app="${ARGO_APP:-ledger}"
 kube_namespace="${KUBE_NAMESPACE:-home-budget}"
+ledger_deployment="${LEDGER_DEPLOYMENT:-ledger-web}"
 exit_status=0
 
 section() {
@@ -16,7 +17,9 @@ if ! command -v gh >/dev/null 2>&1; then
     printf 'gh is not installed\n'
     exit_status=1
 else
-    if ! gh run list --branch main --limit "$run_limit"; then
+    if ! gh run list --branch main --limit "$run_limit" \
+        --json conclusion,status,displayTitle,headBranch,headSha,databaseId,createdAt \
+        --template '{{tablerow "STATUS" "TITLE" "BRANCH" "COMMIT" "RUN ID" "AGE"}}{{range .}}{{tablerow .conclusion .displayTitle .headBranch (printf "%.7s" .headSha) .databaseId (timeago .createdAt)}}{{end}}{{tablerender}}'; then
         exit_status=1
     fi
 fi
@@ -29,6 +32,56 @@ else
     if ! argocd app get "$argo_app" --grpc-web -o json | jq -r \
         '"Target:        \(.spec.source.targetRevision)\nRevision:      \(.status.sync.revision)\nSync Status:   \(.status.sync.status)\nHealth Status: \(.status.health.status)"'; then
         exit_status=1
+    fi
+fi
+
+section "Image verification (${kube_namespace})"
+if ! command -v kubectl >/dev/null 2>&1; then
+    printf 'kubectl is not installed\n'
+    exit_status=1
+else
+    configured_image=$(kubectl -n "$kube_namespace" get deployment "$ledger_deployment" \
+        -o jsonpath='{.spec.template.spec.containers[?(@.name=="ledger-web")].image}')
+    image_status=$?
+    pod_details=$(kubectl -n "$kube_namespace" get pods -l app=ledger-web \
+        --sort-by=.metadata.creationTimestamp \
+        -o jsonpath='{.items[-1].metadata.name}{"\t"}{.items[-1].status.containerStatuses[?(@.name=="ledger-web")].imageID}')
+    pod_status=$?
+
+    if [ "$image_status" -ne 0 ] || [ "$pod_status" -ne 0 ] || [ -z "$configured_image" ]; then
+        printf 'Unable to resolve the configured image or running pod\n'
+        exit_status=1
+    else
+        IFS=$'\t' read -r pod_name pod_image_id <<< "$pod_details"
+        application_commit="${configured_image##*:}"
+        pod_digest="${pod_image_id##*@}"
+        ghcr_digest='unavailable'
+        match='UNKNOWN'
+
+        if ! command -v docker >/dev/null 2>&1; then
+            printf 'docker is not installed; GHCR digest lookup unavailable\n'
+            exit_status=1
+        else
+            ghcr_digest=$(docker buildx imagetools inspect "$configured_image" \
+                --format '{{json .Manifest}}' | jq -r '.digest')
+            ghcr_status=$?
+            if [ "$ghcr_status" -ne 0 ] || [ -z "$ghcr_digest" ] || [ "$ghcr_digest" = "null" ]; then
+                ghcr_digest='unavailable'
+                exit_status=1
+            elif [ "$ghcr_digest" = "$pod_digest" ]; then
+                match='YES'
+            else
+                match='NO'
+                exit_status=1
+            fi
+        fi
+
+        printf 'Application commit:  %s\n' "$application_commit"
+        printf 'Kubernetes image:    %s\n' "$configured_image"
+        printf 'GHCR digest:         %s\n' "$ghcr_digest"
+        printf 'Pod:                 %s\n' "$pod_name"
+        printf 'Pod running digest:  %s\n' "$pod_digest"
+        printf 'Match:               %s\n' "$match"
     fi
 fi
 
