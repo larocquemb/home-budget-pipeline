@@ -12,6 +12,13 @@ COMPONENT = "receipt_ingest"
 SCHEMA_VERSION = 1
 LOCK_NAME = "home-budget-receipt-backlog"
 TEMPLATE_PATH = Path("/opt/app-root/src/sql/receipt_processing_template.sql")
+COLORS = ("blue", "green")
+
+
+def _schema(color: str) -> str:
+    if color not in COLORS:
+        raise ValueError(f"invalid ingest color: {color}")
+    return f"ingest_{color}"
 
 
 def _ensure_state_table(conn) -> None:
@@ -21,24 +28,23 @@ def _ensure_state_table(conn) -> None:
         CREATE TABLE IF NOT EXISTS ops.schema_state (
             component TEXT PRIMARY KEY,
             version INTEGER NOT NULL DEFAULT 0,
-            current_schema TEXT,
-            previous_schema TEXT,
+            active_color TEXT CHECK (active_color IN ('blue', 'green')),
+            previous_version INTEGER,
             schema_hash TEXT NOT NULL DEFAULT '',
             is_dirty BOOLEAN NOT NULL DEFAULT FALSE,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """
     )
-    conn.execute(
-        "ALTER TABLE ops.schema_state ADD COLUMN IF NOT EXISTS previous_schema TEXT"
-    )
+    conn.execute("ALTER TABLE ops.schema_state ADD COLUMN IF NOT EXISTS active_color TEXT")
+    conn.execute("ALTER TABLE ops.schema_state ADD COLUMN IF NOT EXISTS previous_version INTEGER")
     conn.commit()
 
 
 def _state(conn):
     return conn.execute(
         """
-        SELECT version, current_schema, previous_schema, schema_hash, is_dirty
+        SELECT version, active_color, previous_version, schema_hash, is_dirty
           FROM ops.schema_state
          WHERE component = %s
         """,
@@ -50,7 +56,7 @@ def _mark_dirty(conn, desired_hash: str) -> None:
     conn.execute(
         """
         INSERT INTO ops.schema_state (
-            component, version, current_schema, previous_schema, schema_hash, is_dirty
+            component, version, active_color, previous_version, schema_hash, is_dirty
         )
         VALUES (%s, 0, NULL, NULL, %s, TRUE)
         ON CONFLICT (component) DO UPDATE SET
@@ -79,16 +85,13 @@ def _drop_budget_status_relation(conn) -> None:
     conn.execute(
         """
         DO $$
-        DECLARE
-            relation_kind "char";
+        DECLARE relation_kind "char";
         BEGIN
-            SELECT c.relkind
-              INTO relation_kind
+            SELECT c.relkind INTO relation_kind
               FROM pg_class c
               JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = 'budget'
                AND c.relname = 'receipt_processing_status';
-
             IF relation_kind = 'v' THEN
                 EXECUTE 'DROP VIEW budget.receipt_processing_status CASCADE';
             ELSIF relation_kind IS NOT NULL THEN
@@ -100,11 +103,7 @@ def _drop_budget_status_relation(conn) -> None:
     )
 
 
-def _preserve_legacy_ingest(conn, previous_schema: str | None) -> str | None:
-    if previous_schema:
-        conn.execute("DROP SCHEMA IF EXISTS ingest CASCADE")
-        return previous_schema
-
+def _preserve_legacy_ingest(conn) -> str | None:
     relation_kind = conn.execute(
         """
         SELECT c.relkind
@@ -114,36 +113,28 @@ def _preserve_legacy_ingest(conn, previous_schema: str | None) -> str | None:
         """
     ).fetchone()
     if relation_kind and relation_kind[0] == "r":
-        conn.execute("DROP SCHEMA IF EXISTS ingest_v0 CASCADE")
-        conn.execute("ALTER SCHEMA ingest RENAME TO ingest_v0")
-        return "ingest_v0"
-
+        conn.execute("DROP SCHEMA IF EXISTS ingest_blue CASCADE")
+        conn.execute("ALTER SCHEMA ingest RENAME TO ingest_blue")
+        return "blue"
     conn.execute("DROP SCHEMA IF EXISTS ingest CASCADE")
     return None
 
 
-def _prune_old_versions(conn, keep: set[str]) -> None:
-    schemas = conn.execute(
-        "SELECT nspname FROM pg_namespace WHERE nspname ~ '^ingest_v[0-9]+$'"
-    ).fetchall()
-    for (schema_name,) in schemas:
-        if schema_name not in keep:
-            conn.execute(f'DROP SCHEMA "{schema_name}" CASCADE')
-
-
 def _cut_over(
     conn,
-    target_schema: str,
+    target_color: str,
     desired_hash: str,
-    previous_schema: str | None,
+    previous_version: int | None,
 ) -> None:
+    target_schema = _schema(target_color)
     with conn.transaction():
         _drop_budget_status_relation(conn)
-        previous_schema = _preserve_legacy_ingest(conn, previous_schema)
+        legacy_color = _preserve_legacy_ingest(conn)
+        if legacy_color and target_color == legacy_color:
+            raise RuntimeError("legacy ingest occupies target blue slot")
+
         conn.execute("CREATE SCHEMA ingest")
-        conn.execute(
-            f"CREATE VIEW ingest.receipts AS SELECT * FROM {target_schema}.receipts"
-        )
+        conn.execute(f"CREATE VIEW ingest.receipts AS SELECT * FROM {target_schema}.receipts")
         conn.execute(
             f"CREATE VIEW ingest.receipt_processing_status AS "
             f"SELECT * FROM {target_schema}.receipt_processing_status"
@@ -168,30 +159,25 @@ def _cut_over(
         conn.execute(
             """
             INSERT INTO ops.schema_state (
-                component, version, current_schema, previous_schema,
+                component, version, active_color, previous_version,
                 schema_hash, is_dirty, updated_at
             ) VALUES (%s, %s, %s, %s, %s, FALSE, NOW())
             ON CONFLICT (component) DO UPDATE SET
                 version = EXCLUDED.version,
-                previous_schema = EXCLUDED.previous_schema,
-                current_schema = EXCLUDED.current_schema,
+                active_color = EXCLUDED.active_color,
+                previous_version = EXCLUDED.previous_version,
                 schema_hash = EXCLUDED.schema_hash,
                 is_dirty = FALSE,
                 updated_at = NOW()
             """,
-            (COMPONENT, SCHEMA_VERSION, target_schema, previous_schema, desired_hash),
+            (COMPONENT, SCHEMA_VERSION, target_color, previous_version, desired_hash),
         )
-        keep = {target_schema}
-        if previous_schema:
-            keep.add(previous_schema)
-        _prune_old_versions(conn, keep)
 
 
 def ensure_receipt_schema(conn, template_path: Path = TEMPLATE_PATH) -> bool:
-    """Build/cut over only when an intentional schema version requires it."""
+    """Rebuild the inactive color only when the tracked schema version changes."""
     template = template_path.read_text(encoding="utf-8")
     desired_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
-    target_schema = f"ingest_v{SCHEMA_VERSION}"
 
     _ensure_state_table(conn)
     conn.execute("SELECT pg_advisory_lock(hashtext(%s))", (LOCK_NAME,))
@@ -205,10 +191,13 @@ def ensure_receipt_schema(conn, template_path: Path = TEMPLATE_PATH) -> bool:
                     "receipt schema template changed without a SCHEMA_VERSION bump"
                 )
 
-        previous_schema = state[1] if state else None
+        active_color = state[1] if state else None
+        target_color = "green" if active_color == "blue" else "blue"
+        previous_version = state[0] if state and state[0] else None
+
         _mark_dirty(conn, desired_hash)
-        _build_schema(conn, target_schema, template)
-        _cut_over(conn, target_schema, desired_hash, previous_schema)
+        _build_schema(conn, _schema(target_color), template)
+        _cut_over(conn, target_color, desired_hash, previous_version)
         conn.commit()
         return True
     except Exception:
