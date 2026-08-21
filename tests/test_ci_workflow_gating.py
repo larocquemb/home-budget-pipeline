@@ -29,3 +29,10 @@ def test_deployment_pointer_is_committed_only_to_main():
     text = workflow_text()
     assert "git push origin HEAD:main" in text
     assert "git push origin HEAD:${GITHUB_REF_NAME}" not in text
+
+
+def test_deployment_image_targets_cluster_architecture_only():
+    text = workflow_text()
+    assert "platforms: linux/amd64" in text
+    assert "linux/arm64" not in text
+    assert "docker/setup-qemu-action" not in text
