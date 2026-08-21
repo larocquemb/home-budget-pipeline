@@ -32,7 +32,7 @@ spec:
         - name: ghcr-secret
       initContainers:
         - name: stage-db-bootstrap
-          image: ghcr.io/larocquemb/home-budget-pipeline:KAN-68
+          image: ghcr.io/larocquemb/home-budget-pipeline
           imagePullPolicy: Always
           command:
             - /bin/sh
