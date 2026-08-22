@@ -13,9 +13,9 @@ USER 0
 
 WORKDIR /opt/app-root/src
 
-# Paddle's CPU wheel links against the GNU OpenMP runtime. The slim OCR base
-# deliberately omits compiler runtimes, so install only the shared library.
-RUN microdnf install -y libgomp \
+# Paddle's CPU wheel links against GNU OpenMP, while PaddleX's required OpenCV
+# wheel links against libGL. The slim OCR base omits both runtime libraries.
+RUN microdnf install -y libgomp mesa-libGL \
     && microdnf clean all
 
 COPY pyproject.toml README.md ./
@@ -26,9 +26,7 @@ COPY pyproject.toml README.md ./
 RUN mkdir -p src/home_budget_pipeline \
     && touch src/home_budget_pipeline/__init__.py \
     && python -m pip install --no-cache-dir 'setuptools>=77' \
-    && python -m pip install --no-cache-dir --no-build-isolation '.[db,paddle]' \
-    && python -m pip uninstall -y opencv-contrib-python \
-    && python -m pip install --no-cache-dir 'opencv-contrib-python-headless==4.10.0.84'
+    && python -m pip install --no-cache-dir --no-build-isolation '.[db,paddle]'
 
 COPY src ./src
 COPY sql ./sql
