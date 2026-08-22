@@ -18,7 +18,7 @@ MONTH_NAME_RE = re.compile(
     re.I,
 )
 YMD_RE = re.compile(r"\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\b")
-MDY_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(20\d{2}|\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\b")
+MDY_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/|,\s*')[,']*(20\d{2}|\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\b")
 YMD2_RE = re.compile(r"\b(\d{2})/\s*(\d{1,2})\s*[,']?\s*/?\s*[,']?\s*(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\b")
 
 
@@ -59,13 +59,23 @@ def extract_transaction_datetime(text: str) -> Optional[str]:
             if value:
                 return value
     for line in text.splitlines():
+        if re.search(r"\b(?:effective|policy|policies|expires?|clearance)\b", line, re.I):
+            continue
         m = MDY_RE.search(line)
         if m:
             year = int(m.group(3))
             if year < 100:
                 year += 2000
             has_time = m.group(4) is not None
-            value = _iso(year, int(m.group(1)), int(m.group(2)), int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), has_time)
+            month = int(m.group(1))
+            day = int(m.group(2))
+            value = _iso(year, month, day, int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), has_time)
+            # Tesseract commonly confuses the flat-topped receipt-printer 5 with
+            # 6.  Repair only the unambiguous impossible 6/31 case, and only
+            # when it is paired with a transaction time; never silently clamp
+            # a general invalid date.
+            if value is None and month == 6 and day == 31 and has_time:
+                value = _iso(year, 5, day, int(m.group(4)), int(m.group(5)), int(m.group(6) or 0), True)
             if value:
                 return value
     for line in text.splitlines():

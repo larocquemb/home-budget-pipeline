@@ -34,6 +34,24 @@ class ReceiptDatetimeTests(unittest.TestCase):
             "2026-05-31T10:35:11",
         )
 
+    def test_repairs_michaels_five_misread_as_six_and_ignores_policy_date(self):
+        text = """4171968 SALE RIN 925! 3907 040 6/31,'26 10:07
+Effective 11/27/2022 Clearance sales are considered final
+6/31/26 10:07"""
+        self.assertEqual(
+            extract_transaction_datetime(text),
+            "2026-05-31T10:07:00",
+        )
+
+    def test_prefers_later_receipt_timestamp_over_effective_policy_date(self):
+        text = """SALE £/31/26 10:07
+Effective 11/27/2022 Clearance sales are considered final
+5/31/26 10:07"""
+        self.assertEqual(
+            extract_transaction_datetime(text),
+            "2026-05-31T10:07:00",
+        )
+
     def test_date_part(self):
         self.assertEqual(date_part("2026-05-18T14:32:00"), "2026-05-18")
         self.assertEqual(date_part("2026-05-18"), "2026-05-18")

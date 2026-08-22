@@ -59,6 +59,21 @@ SUBTOTAL 6.88
         self.assertEqual(scan.extract_date("13-May-2026 17:39:52"), "2026-05-13")
         self.assertEqual(scan.extract_date("226001555720260707"), "2026-07-07")
 
+    def test_literal_timestamp_quality_rejects_impossible_ocr_date(self):
+        self.assertFalse(scan._has_literal_valid_timestamp("SALE 6/31,'26 10:07"))
+        self.assertTrue(scan._has_literal_valid_timestamp("SALE 5/31/26 10:07"))
+
+    def test_ocr_preprocessing_crops_scanner_whitespace(self):
+        from PIL import Image, ImageDraw
+
+        image = Image.new("L", (500, 700), 255)
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((150, 100, 350, 500), fill=245)
+        for y in range(150, 451, 20):
+            draw.line((175, y, 325, y), fill=20, width=3)
+        prepared = scan._prepare_ocr_image(image)
+        self.assertLess(prepared.width, image.width)
+
     def test_total_extraction_accepts_amount_due_and_tender_fallback(self):
         self.assertEqual(scan.extract_totals("PURCHASE TOTAL $42.17")[2], 42.17)
         self.assertEqual(scan.extract_totals("AMOUNT DUE 19.84")[2], 19.84)
