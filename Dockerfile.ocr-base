@@ -12,7 +12,6 @@ ARG TESSERACT_VERSION
 RUN microdnf install -y \
       autoconf \
       automake \
-      curl \
       gcc \
       gcc-c++ \
       gzip \
