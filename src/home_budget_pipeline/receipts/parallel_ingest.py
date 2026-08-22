@@ -87,7 +87,7 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
         total=total,
         payment_method=payment.payment_method,
         card_last4=payment.card_last4,
-        items=scan.extract_items(text),
+        items=scan.normalize_item_signs(scan.extract_items(text), total),
         page_text=list(pages),
         text=text,
     )

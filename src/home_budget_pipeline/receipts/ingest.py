@@ -36,6 +36,8 @@ from payment_card_lookup import resolve_owner_from_db
 from receipt_payment import extract_payment_provenance
 
 SUPPORTED_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff"}
+OCR_RENDER_DPIS = (150, 200, 300)
+OCR_PAGE_SEGMENTATION_MODES = ("4", "6", "11")
 MONEY_RE = re.compile(r"-?\$?\s*(\d{1,6}(?:,\d{3})*\.\d{2})-?")
 OCR_MONEY_RE = re.compile(
     r"(?P<lead>-)?\$?\s*(?P<whole>\d{1,6})(?:\s*[,.:]\s*\.?\s*|\s+\.\s*)(?P<cents>\d{2})(?P<trail>-)?"
@@ -208,6 +210,18 @@ def _ocr_candidate_score(text: str) -> int:
     return score
 
 
+def _ocr_supplement_score(text: str) -> int:
+    subtotal, tax, total = extract_totals(text)
+    payment = extract_payment_provenance(text)
+    return (
+        (40 if subtotal is not None else 0)
+        + (60 if tax is not None else 0)
+        + (100 if total is not None else 0)
+        + (40 if payment.payment_method else 0)
+        + (100 if payment.card_last4 else 0)
+    )
+
+
 def _ocr_pdf_pages(path: Path) -> List[str]:
     try:
         import pypdfium2 as pdfium  # type: ignore
@@ -217,28 +231,58 @@ def _ocr_pdf_pages(path: Path) -> List[str]:
     doc = pdfium.PdfDocument(str(path))
     try:
         for idx in range(len(doc)):
-            best_text = ""
-            # Thermal-printer glyphs can become less accurate when rendered at
-            # higher resolution. Retry at a second resolution only when the
-            # first pass has no calendar-valid timestamp.
-            for dpi in (150, 200):
-                image = _prepare_ocr_image(doc[idx].render(scale=dpi / 72).to_pil())
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                    tmp_path = Path(tmp.name)
-                try:
-                    image.save(tmp_path)
-                    candidates = [_run_tesseract(tmp_path, psm) for psm in ("6", "11")]
-                finally:
-                    tmp_path.unlink(missing_ok=True)
-                candidate = max(candidates, key=_ocr_candidate_score)
-                if _ocr_candidate_score(candidate) > _ocr_candidate_score(best_text):
-                    best_text = candidate
-                if _has_literal_valid_timestamp(best_text):
-                    break
+            candidates: List[str] = []
+            # Resolution changes the apparent shape of thermal-printer glyphs,
+            # so evaluate every DPI/layout combination instead of assuming the
+            # highest resolution or first valid timestamp is most accurate.
+            for dpi in OCR_RENDER_DPIS:
+                raw_image = doc[idx].render(scale=dpi / 72).to_pil()
+                # Raw rendering preserves separation in heavy/bold glyphs;
+                # enhancement recovers faint thermal printing.
+                for image in (raw_image, _prepare_ocr_image(raw_image)):
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                        tmp_path = Path(tmp.name)
+                    try:
+                        image.save(tmp_path)
+                        candidates.extend(_run_tesseract(tmp_path, psm) for psm in OCR_PAGE_SEGMENTATION_MODES)
+                    finally:
+                        tmp_path.unlink(missing_ok=True)
+            best_text = max(candidates, key=_ocr_candidate_score, default="")
+            for candidate in sorted(candidates, key=_ocr_supplement_score, reverse=True):
+                best_text = _supplement_missing_receipt_summary(best_text, candidate)
             pages.append(best_text)
     finally:
         doc.close()
     return pages
+
+
+def _supplement_missing_receipt_summary(primary: str, alternative: str) -> str:
+    """Add only missing summary/payment lines from another OCR layer."""
+    values = list(extract_totals(primary))
+    payment = extract_payment_provenance(primary)
+    additions: List[str] = []
+    for raw_line in alternative.splitlines():
+        line = normalize_line(raw_line)
+        if not line or line in primary:
+            continue
+        candidate = extract_totals(line)
+        candidate_payment = extract_payment_provenance(line)
+        supplied = False
+        for index, value in enumerate(candidate):
+            if values[index] is None and value is not None:
+                values[index] = value
+                supplied = True
+        if payment.payment_method is None and candidate_payment.payment_method:
+            payment = candidate_payment
+            supplied = True
+        elif payment.card_last4 is None and candidate_payment.card_last4:
+            payment = candidate_payment
+            supplied = True
+        if supplied:
+            additions.append(line)
+        if all(value is not None for value in values) and payment.payment_method and payment.card_last4:
+            break
+    return primary + (("\n" + "\n".join(additions)) if additions else "")
 
 
 def extract_page_text(path: Path) -> List[str]:
@@ -262,9 +306,9 @@ def extract_page_text(path: Path) -> List[str]:
                     # A valid timestamp is strong evidence that preprocessing
                     # recovered receipt text the embedded OCR layer damaged.
                     if _has_literal_valid_timestamp(ocr) and not _has_literal_valid_timestamp(embedded):
-                        selected.append(ocr)
+                        selected.append(_supplement_missing_receipt_summary(ocr, embedded))
                     else:
-                        selected.append(embedded or ocr)
+                        selected.append(_supplement_missing_receipt_summary(embedded or ocr, ocr if embedded else ""))
                 return selected
         return embedded_pages
     try:
@@ -308,6 +352,7 @@ def merge_page_text(pages: Sequence[str], max_overlap_lines: int = 25) -> str:
 
 
 def parse_money(line: str) -> Optional[float]:
+    line = normalize_leading_decimal_money(line)
     matches = list(MONEY_RE.finditer(line))
     if not matches:
         return None
@@ -315,6 +360,20 @@ def parse_money(line: str) -> Optional[float]:
     value = float(m.group(1).replace(",", ""))
     token = m.group(0).strip()
     return -value if token.startswith("-") or token.endswith("-") else value
+
+
+def normalize_leading_decimal_money(line: str) -> str:
+    """Restore a zero in standalone OCR amounts such as ``@ .01-``.
+
+    The non-numeric prefix requirement deliberately leaves damaged values such
+    as ``42 .54-`` for the tolerant semantic parser instead of turning them
+    into ``0.54-``.
+    """
+    return re.sub(
+        r"(^|[^\d\s])(\s*)\.(\d{2})(-?)",
+        lambda match: f"{match.group(1)}{match.group(2)}0.{match.group(3)}{match.group(4)}",
+        line,
+    )
 
 
 def parse_money_tolerant(line: str) -> Optional[float]:
@@ -445,12 +504,13 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
     for raw in text.splitlines():
         line = normalize_line(raw)
         total_like = bool(TOTAL_LIKE_RE.search(line))
+        tax_like = bool(re.search(r"\b(?:total\s+tax|tax|gst|pst|rst|hst)\b", line, re.I))
         tender_like = bool(TENDER_LINE_RE.search(line)) and not re.search(
             r"\b(?:change|auth|reference|card\s+number)\b", line, re.I
         )
         amount = parse_money(line)
         tolerant = False
-        if amount is None and (total_like or tender_like):
+        if amount is None and (total_like or tender_like or tax_like):
             amount = parse_money_tolerant(line)
             tolerant = amount is not None
         if amount is None:
@@ -458,7 +518,7 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
         if re.search(r"\bsub\s*total\b", line, re.I):
             subtotal = amount
             continue
-        if re.search(r"\b(?:total\s+tax|tax|gst|pst|hst)\b", line, re.I):
+        if tax_like:
             tax = (tax or 0.0) + amount
             continue
         if total_like:
@@ -478,6 +538,10 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
                 total = tender
     elif tender_candidates:
         total = tender_candidates[-1][0]
+    if subtotal is not None and total is not None and subtotal * total > 0:
+        derived_tax = round(abs(total) - abs(subtotal), 2)
+        if 0 <= derived_tax <= max(0.01, abs(subtotal) * 0.30) and (tax is None or abs(tax) < derived_tax):
+            tax = derived_tax if total > 0 else -derived_tax
     return subtotal, tax, total
 
 
@@ -485,7 +549,7 @@ def extract_items(text: str) -> List[ScannedItem]:
     items: List[ScannedItem] = []
     raw_lines = text.splitlines()
     for index, raw in enumerate(raw_lines):
-        line = normalize_line(raw)
+        line = normalize_leading_decimal_money(normalize_line(raw))
         if not line or TOTAL_WORDS.search(line) or NON_ITEM_WORDS.search(line):
             continue
         matches = list(MONEY_RE.finditer(line))
@@ -508,6 +572,13 @@ def extract_items(text: str) -> List[ScannedItem]:
         amount = parse_money(line)
         if amount is not None:
             items.append(ScannedItem(name, amount))
+    return items
+
+
+def normalize_item_signs(items: List[ScannedItem], total: Optional[float]) -> List[ScannedItem]:
+    """Apply a refund total's sign when OCR loses trailing item minus signs."""
+    if total is not None and total < 0:
+        return [ScannedItem(item.item_name, -abs(item.line_total)) for item in items]
     return items
 
 
@@ -563,7 +634,7 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
         merchant=extract_merchant(text), transaction_date=extract_date(text),
         receipt_id=extract_receipt_id(text), subtotal=subtotal, tax=tax, total=total,
         payment_method=payment.payment_method, card_last4=payment.card_last4,
-        items=extract_items(text), page_text=list(pages), text=text,
+        items=normalize_item_signs(extract_items(text), total), page_text=list(pages), text=text,
     )
     receipt.extraction_confidence = confidence_for(receipt)
     receipt.review_reasons = review_reasons_for(receipt)
