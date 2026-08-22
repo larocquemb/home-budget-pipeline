@@ -126,6 +126,23 @@ def test_expenses_page_has_filter_and_drilldown():
     assert text.index("Filter</button>") < text.index("<strong>101</strong> expenses") < text.index("</form>")
     assert "Page 1 of 3" in text
     assert "Next →" in text
+    assert 'href="/ledger/expenses?limit=50&amp;sort=expense_total&amp;direction=asc"' in text
+    assert "Date ▼" in text
+
+
+def test_expenses_page_preserves_filters_when_sorting_and_toggles_direction():
+    text = web_app.expenses_page(
+        service=FakeService(), identity=IDENTITY, limit=25, offset=0,
+        source="costco", merchant="Regent", requires_review="true",
+        sort="store_name", direction="asc",
+    )
+
+    assert "Merchant ▲" in text
+    assert "source=costco" in text
+    assert "merchant=Regent" in text
+    assert "requires_review=true" in text
+    assert "sort=store_name" in text
+    assert "direction=desc" in text
 
 
 def test_expense_detail_shows_items_and_evidence():

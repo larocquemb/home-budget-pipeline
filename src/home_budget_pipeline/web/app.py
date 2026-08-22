@@ -8,6 +8,7 @@ import mimetypes
 import os
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -108,8 +109,8 @@ def me(
 
 
 @app.get(f"{BASE_PATH}/api/analytics/expenses")
-def api_analytics_expenses(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), source: Optional[str] = None, merchant: Optional[str] = None, requires_review: Optional[str] = None, service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
-    return service.analytics_expenses(limit=limit, offset=offset, source=source, merchant=merchant, requires_review=_optional_bool_query(requires_review))
+def api_analytics_expenses(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), source: Optional[str] = None, merchant: Optional[str] = None, requires_review: Optional[str] = None, sort: str = "order_date", direction: str = "desc", service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
+    return service.analytics_expenses(limit=limit, offset=offset, source=source, merchant=merchant, requires_review=_optional_bool_query(requires_review), sort=sort, direction=direction)
 
 
 @app.get(f"{BASE_PATH}/api/analytics/category-spend")
@@ -365,9 +366,12 @@ def ledger_home(identity: dict[str, str] = Depends(authenticated_identity)) -> s
 
 
 @app.get(f"{BASE_PATH}/expenses", response_class=HTMLResponse)
-def expenses_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), source: Optional[str] = None, merchant: Optional[str] = None, requires_review: Optional[str] = None, service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
+def expenses_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), source: Optional[str] = None, merchant: Optional[str] = None, requires_review: Optional[str] = None, sort: str = "order_date", direction: str = "desc", service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
     review_filter = _optional_bool_query(requires_review)
-    result = service.analytics_expenses(limit=limit, offset=offset, source=source, merchant=merchant, requires_review=review_filter)
+    sort_keys = {"expense_pk", "source", "order_date", "store_name", "account_name", "expense_total", "extraction_status", "requires_review"}
+    sort = sort if sort in sort_keys else "order_date"
+    direction = "asc" if direction.lower() == "asc" else "desc"
+    result = service.analytics_expenses(limit=limit, offset=offset, source=source, merchant=merchant, requires_review=review_filter, sort=sort, direction=direction)
     review_value = "" if review_filter is None else str(review_filter).lower()
     if result.total_count is None:
         total_summary = ""
@@ -376,14 +380,22 @@ def expenses_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, g
         total_summary = f'<span><strong>{result.total_count:,}</strong> {noun}</span>'
     body = f"""
 <form class="toolbar" method="get">
+<input type="hidden" name="sort" value="{esc(sort)}"><input type="hidden" name="direction" value="{direction}">
 <label>Source<input name="source" value="{esc(source)}"></label>
 <label>Merchant<input name="merchant" value="{esc(merchant)}"></label>
 <label>Review<select name="requires_review"><option value="">All</option><option value="true"{' selected' if review_value == 'true' else ''}>Needs review</option><option value="false"{' selected' if review_value == 'false' else ''}>No review</option></select></label>
 <label>Rows<input name="limit" type="number" min="1" max="200" value="{limit}"></label>
 <button type="submit">Filter</button>{total_summary}
 </form>"""
-    body += table(result.rows, (("expense_pk", "Expense"), ("source", "Source"), ("order_date", "Date"), ("store_name", "Merchant"), ("account_name", "Account"), ("expense_total", "Total"), ("extraction_status", "Extraction"), ("requires_review", "Review")), links={"expense_pk": f"{BASE_PATH}/expenses/{{value}}"}, money_columns={"expense_total"})
-    body += pager(f"{BASE_PATH}/expenses", limit=limit, offset=offset, row_count=len(result.rows), total_count=result.total_count, query={"source": source, "merchant": merchant, "requires_review": review_value})
+    columns = (("expense_pk", "Expense"), ("source", "Source"), ("order_date", "Date"), ("store_name", "Merchant"), ("account_name", "Account"), ("expense_total", "Total"), ("extraction_status", "Extraction"), ("requires_review", "Review"))
+    header_links = {}
+    for key, _ in columns:
+        next_direction = "asc" if key != sort or direction == "desc" else "desc"
+        query = {"source": source, "merchant": merchant, "requires_review": review_value, "limit": limit, "sort": key, "direction": next_direction}
+        header_links[key] = f"{BASE_PATH}/expenses?{urlencode({k: v for k, v in query.items() if v not in (None, '')})}"
+    columns = tuple((key, f"{label} {'▲' if direction == 'asc' else '▼'}" if key == sort else label) for key, label in columns)
+    body += table(result.rows, columns, links={"expense_pk": f"{BASE_PATH}/expenses/{{value}}"}, money_columns={"expense_total"}, header_links=header_links)
+    body += pager(f"{BASE_PATH}/expenses", limit=limit, offset=offset, row_count=len(result.rows), total_count=result.total_count, query={"source": source, "merchant": merchant, "requires_review": review_value, "sort": sort, "direction": direction})
     return page("Expenses", body, base_path=BASE_PATH, identity=identity)
 
 

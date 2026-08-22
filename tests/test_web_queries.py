@@ -103,6 +103,29 @@ def test_expense_filters_are_server_side_and_parameterized():
     assert params == ("costco", "%Regent%", True, 25, 50)
 
 
+def test_expense_sorting_uses_allowlisted_server_side_column():
+    service, _, cursor = service_with(
+        responses=(([(0,)], ("total_count",)), ([], ()))
+    )
+
+    service.analytics_expenses(sort="expense_total", direction="asc")
+
+    sql, _ = cursor.executed[3]
+    assert "ORDER BY expense_total ASC NULLS LAST" in sql
+
+
+def test_unknown_expense_sort_falls_back_to_date_descending():
+    service, _, cursor = service_with(
+        responses=(([(0,)], ("total_count",)), ([], ()))
+    )
+
+    service.analytics_expenses(sort="expense_total; DROP TABLE budget.expenses", direction="sideways")
+
+    sql, _ = cursor.executed[3]
+    assert "ORDER BY COALESCE(order_date, transaction_datetime::date) DESC NULLS LAST" in sql
+    assert "DROP TABLE" not in sql
+
+
 def test_expenses_include_filtered_total_for_pagination():
     service, _, cursor = service_with(
         responses=(

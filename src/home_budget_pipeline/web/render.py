@@ -96,11 +96,16 @@ for (const image of document.querySelectorAll('[data-hover-zoom]')) {{
 </body></html>"""
 
 
-def table(rows: Iterable[Mapping[str, Any]], columns: tuple[tuple[str, str], ...], *, links: Mapping[str, str] | None = None, money_columns: set[str] | None = None) -> str:
+def table(rows: Iterable[Mapping[str, Any]], columns: tuple[tuple[str, str], ...], *, links: Mapping[str, str] | None = None, money_columns: set[str] | None = None, header_links: Mapping[str, str] | None = None) -> str:
     rows = tuple(rows)
     links = links or {}
     money_columns = money_columns or set()
-    head = "".join(f"<th>{esc(label)}</th>" for _, label in columns)
+    header_links = header_links or {}
+    head = "".join(
+        f'<th><a href="{esc(header_links[key])}">{esc(label)}</a></th>'
+        if key in header_links else f"<th>{esc(label)}</th>"
+        for key, label in columns
+    )
     rendered = []
     for row in rows:
         cells = []
