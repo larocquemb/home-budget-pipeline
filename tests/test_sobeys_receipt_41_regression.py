@@ -34,18 +34,18 @@ def test_receipt_41_filename_populates_missing_receipt_info():
     assert receipt.total == expected["total"]
 
 
-def test_receipt_41_item_name_corrections():
-    for correction in _fixture()["item_corrections"]:
-        items = ingest.extract_items(correction["ocr_line"])
+def test_receipt_41_detected_items():
+    for detected in _fixture()["detected_items"]:
+        items = ingest.extract_items(detected["ocr_line"])
         assert [(item.item_name, item.line_total) for item in items] == [
-            (correction["item_name"], correction["line_total"])
+            (detected["item_name"], detected["line_total"])
         ]
 
 
 def test_receipt_41_post_ocr_display():
     fixture = _fixture()
     expected = fixture["expected"]
-    correction = fixture["item_corrections"][0]
+    detected = fixture["detected_items"][0]
     text = web_app._post_ocr_text(
         {
             "source_reference": fixture["filename"],
@@ -56,9 +56,9 @@ def test_receipt_41_post_ocr_display():
         {
             "items": tuple(
                 {
-                    "item_name": correction["ocr_line"].split(" $")[0],
-                    "line_total": str(correction["line_total"]),
-                    "product_description": correction["product_description"],
+                    "item_name": detected["ocr_line"].split(" $")[0],
+                    "line_total": str(detected["line_total"]),
+                    "product_description": detected["product_description"],
                 }
                 for _ in range(2)
             )

@@ -10,6 +10,7 @@ class ScannedReceiptIngestTests(unittest.TestCase):
     def test_ocr_evaluates_all_requested_resolution_and_layout_variants(self):
         self.assertEqual(scan.OCR_RENDER_DPIS, (150, 200, 300))
         self.assertEqual(scan.OCR_PAGE_SEGMENTATION_MODES, ("4", "6", "11"))
+        self.assertEqual((scan.OCR_HIGH_DETAIL_DPI, scan.OCR_HIGH_DETAIL_PSM), (450, "6"))
 
     def test_discover_scans_recursive_and_supported_only(self):
         with tempfile.TemporaryDirectory() as td:
@@ -108,6 +109,56 @@ CRCT IO PUFF 12x1 93573447143 1 @ .01-"""
         sparse_noise = "STORE 123 random text"
         receipt = "TRANSACTION 123\n5/31/26 10:07\nSUBTOTAL 10.00\nGST 0.50\nTOTAL 10.50"
         self.assertGreater(scan._ocr_candidate_score(receipt), scan._ocr_candidate_score(sparse_noise))
+
+    def test_ocr_candidate_tie_prefers_later_high_detail_pass(self):
+        low_detail = "Pretzel Cracker Rane $5.49"
+        high_detail = "Pretzel Cracker Ranc $5.49"
+        self.assertEqual(scan._ocr_candidate_score(low_detail), scan._ocr_candidate_score(high_detail))
+        candidates = [
+            scan.OCRCandidate(low_detail, (scan.OCRLine(low_detail, 95.0),), 300, "6"),
+            scan.OCRCandidate(high_detail, (scan.OCRLine(high_detail, 91.7),), 450, "6"),
+        ]
+        self.assertEqual(scan._select_ocr_candidate(candidates).text, high_detail)
+        self.assertEqual(scan._line_consensus_text(candidates), high_detail)
+
+    def test_line_consensus_prefers_valid_timestamp_over_impossible_date(self):
+        invalid = "SALE 6/31/26 10:07"
+        valid = "SALE 5/31/26 10:07"
+        candidates = [
+            scan.OCRCandidate(invalid, (scan.OCRLine(invalid, 99.0),), 450, "6"),
+            scan.OCRCandidate(valid, (scan.OCRLine(valid, 80.0),), 200, "6"),
+        ]
+        self.assertEqual(scan._line_consensus_text(candidates), valid)
+
+    def test_paddle_confidence_improves_descriptions_without_losing_amounts(self):
+        tesseract_lines = (
+            scan.OCRLine("Cep Pic Med $6.49 C", 89.0),
+            scan.OCRLine("Cep Pic Med $6.49 C", 89.0),
+            scan.OCRLine("Pretzel Cracker Rane $5.49 BC", 95.0),
+        )
+        paddle_lines = (
+            scan.OCRLine("Oep Pic Med", 99.13),
+            scan.OCRLine("Cep Pic Med", 98.37),
+            scan.OCRLine("Pretzel Cracker Ranc", 99.91),
+        )
+        candidates = [
+            scan.OCRCandidate("\n".join(line.text for line in tesseract_lines), tesseract_lines, 450, "6"),
+            scan.OCRCandidate(
+                "\n".join(line.text for line in paddle_lines),
+                paddle_lines,
+                200,
+                "paddle",
+                "paddle",
+            ),
+        ]
+        self.assertEqual(
+            scan._line_consensus_text(candidates).splitlines(),
+            [
+                "Oep Pic Med $6.49 C",
+                "Cep Pic Med $6.49 C",
+                "Pretzel Cracker Ranc $5.49 BC",
+            ],
+        )
 
     def test_alternate_ocr_supplements_only_missing_summary_fields(self):
         primary = "MICHAELS\n5/31/26 10:07\nITEM 37.98-\nSUBTOTAL 37.98-"

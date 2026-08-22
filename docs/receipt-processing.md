@@ -16,7 +16,7 @@ Configuration can be supplied with `DATABASE_URL`, `RECEIPT_SOURCE_ROOT`, and `H
 
 `k8s/receipt-processor-cronjob.yaml` runs every 15 minutes. `concurrencyPolicy: Forbid` prevents Kubernetes from starting a second scheduled job while the previous job is still running, and the PostgreSQL advisory lock provides an additional guard against manual or accidental concurrent runs.
 
-The job starts with two Python worker processes for OCR/parsing. The pod requests 500m CPU and 512Mi memory and is limited to 2 CPUs and 2Gi memory. Tune workers only after observing real workload usage with `kubectl -n home-budget top pod`.
+The job uses one Python worker so the medium PaddleOCR models are loaded only once. PaddleOCR contributes high-confidence line candidates to the Tesseract DPI/layout consensus and falls back cleanly when unavailable. The pod requests 2 CPUs and 4Gi memory and is limited to 4 CPUs and 8Gi memory. The K3s node must have enough capacity for the measured Paddle peak plus PostgreSQL, Ledger, and system workloads.
 
 The shared `home-budget-data` PVC is mounted at `/data`, so raw receipts and the OCR cache are available to the processor. Database credentials come from `postgres-secret`.
 
