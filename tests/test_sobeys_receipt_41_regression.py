@@ -45,7 +45,7 @@ def test_receipt_41_detected_items():
 def test_receipt_41_post_ocr_display():
     fixture = _fixture()
     expected = fixture["expected"]
-    detected = fixture["detected_items"][0]
+    detected = fixture["detected_items"][:2]
     text = web_app._post_ocr_text(
         {
             "source_reference": fixture["filename"],
@@ -56,11 +56,11 @@ def test_receipt_41_post_ocr_display():
         {
             "items": tuple(
                 {
-                    "item_name": detected["ocr_line"].split(" $")[0],
-                    "line_total": str(detected["line_total"]),
-                    "product_description": detected["product_description"],
+                    "item_name": item["item_name"],
+                    "line_total": str(item["line_total"]),
+                    "product_description": item["product_description"],
                 }
-                for _ in range(2)
+                for item in detected
             )
         },
     )

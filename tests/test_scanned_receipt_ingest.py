@@ -155,7 +155,7 @@ CRCT IO PUFF 12x1 93573447143 1 @ .01-"""
             scan._line_consensus_text(candidates).splitlines(),
             [
                 "Oep Pic Med $6.49 C",
-                "Cep Pic Med $6.49 C",
+                "Oep Pic Med $6.49 C",
                 "Pretzel Cracker Ranc $5.49 BC",
             ],
         )

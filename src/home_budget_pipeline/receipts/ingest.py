@@ -347,12 +347,41 @@ def _merge_ocr_line_evidence(base: str, winner: str) -> str:
     return winner
 
 
+def _single_glyph_item_variant(left: str, right: str) -> bool:
+    """Match same-price item descriptions that differ by one OCR glyph."""
+    left_amount, right_amount = parse_money(left), parse_money(right)
+    if left_amount is None or right_amount is None or abs(left_amount - right_amount) > 0.001:
+        return False
+    left_key = _line_key(re.sub(r"\b(?:BC|NC|TP|C)\b\s*$", "", MONEY_RE.sub("", left))).replace(" ", "")
+    right_key = _line_key(re.sub(r"\b(?:BC|NC|TP|C)\b\s*$", "", MONEY_RE.sub("", right))).replace(" ", "")
+    return (
+        len(left_key) >= 6
+        and len(left_key) == len(right_key)
+        and sum(a != b for a, b in zip(left_key, right_key)) == 1
+    )
+
+
+def _reconcile_duplicate_ocr_lines(lines: list[Tuple[str, float]]) -> list[str]:
+    """Apply the strongest spelling to every one-glyph duplicate item line."""
+    reconciled = [text for text, _ in lines]
+    for index, (text, confidence) in enumerate(lines):
+        variants = [
+            (other_text, other_confidence)
+            for other_text, other_confidence in lines
+            if _single_glyph_item_variant(text, other_text)
+        ]
+        if variants:
+            winner, _ = max([(text, confidence), *variants], key=lambda item: item[1])
+            reconciled[index] = _merge_ocr_line_evidence(text, winner)
+    return reconciled
+
+
 def _line_consensus_text(candidates: Sequence[OCRCandidate]) -> str:
     """Choose each base line using aligned OCR confidence and resolution evidence."""
     base = _select_ocr_candidate(candidates)
     if not base.lines:
         return base.text
-    chosen: list[str] = []
+    chosen: list[Tuple[str, float]] = []
     for base_index, base_line in enumerate(base.lines):
         occurrence = sum(
             1 for prior in base.lines[:base_index] if _ocr_lines_match(base_line.text, prior.text)
@@ -363,22 +392,27 @@ def _line_consensus_text(candidates: Sequence[OCRCandidate]) -> str:
             if matches:
                 alternatives.append((matches[min(occurrence, len(matches) - 1)], candidate))
         if not alternatives:
-            chosen.append(base_line.text)
+            chosen.append((base_line.text, base_line.confidence))
             continue
         support = Counter(_line_key(line.text) for line, _ in alternatives)
-        winner, _ = max(
-            alternatives,
-            key=lambda alternative: (
-                1 if _has_literal_valid_timestamp(alternative[0].text) else 0,
+        def evidence_score(alternative: Tuple[OCRLine, OCRCandidate]) -> float:
+            return (
                 alternative[0].confidence
                 + min(18.0, alternative[1].dpi / 25.0)
                 + min(2.0, support[_line_key(alternative[0].text)] * 0.5)
-                + (8.0 if alternative[1].engine == "paddle" else 0.0),
+                + (8.0 if alternative[1].engine == "paddle" else 0.0)
+            )
+
+        winner, winner_candidate = max(
+            alternatives,
+            key=lambda alternative: (
+                1 if _has_literal_valid_timestamp(alternative[0].text) else 0,
+                evidence_score(alternative),
                 alternative[1].dpi,
             ),
         )
-        chosen.append(_merge_ocr_line_evidence(base_line.text, winner.text))
-    return "\n".join(chosen)
+        chosen.append((_merge_ocr_line_evidence(base_line.text, winner.text), evidence_score((winner, winner_candidate))))
+    return "\n".join(_reconcile_duplicate_ocr_lines(chosen))
 
 
 def _ocr_pdf_pages(path: Path) -> List[str]:

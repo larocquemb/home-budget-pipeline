@@ -1,6 +1,6 @@
 {
   "filename": "20260214_sobeys_363_95.pdf",
-  "ocr_text": "GROCERY\nOep Pic Med $6.49 C\nCep Pic Med $6.49 C\nPretzel Cracker Ranc $5.49 BC\nMastercard",
+  "ocr_text": "GROCERY\nOep Pic Med $6.49 C\nOep Pic Med $6.49 C\nPretzel Cracker Ranc $5.49 BC\nMastercard",
   "expected": {
     "transaction_date": "2026-02-14",
     "merchant": "Sobeys",
@@ -15,6 +15,13 @@
     "- Oep Pic Med: 12.98 (2 entries combined)"
   ],
   "detected_items": [
+    {
+      "ocr_line": "Oep Pic Med $6.49 C",
+      "item_name": "Oep Pic Med",
+      "line_total": 6.49,
+      "product_description": "Old El Paso Salsa Picante Style Restaurant Medium 650 mL",
+      "product_url": "https://www.sobeys.com/products/old-el-paso-salsa-picante-style-restaurant-medium-650-ml"
+    },
     {
       "ocr_line": "Oep Pic Med $6.49 C",
       "item_name": "Oep Pic Med",
