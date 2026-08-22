@@ -18,9 +18,11 @@ The raw OCR text and page text are retained in raw_payload for later reprocessin
 from __future__ import annotations
 
 import argparse
+import csv
 from collections import Counter
 from difflib import SequenceMatcher
 import hashlib
+import io
 import json
 import os
 import re
@@ -38,6 +40,8 @@ from receipt_payment import extract_payment_provenance
 SUPPORTED_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff"}
 OCR_RENDER_DPIS = (150, 200, 300)
 OCR_PAGE_SEGMENTATION_MODES = ("4", "6", "11")
+OCR_HIGH_DETAIL_DPI = 450
+OCR_HIGH_DETAIL_PSM = "6"
 MONEY_RE = re.compile(r"-?\$?\s*(\d{1,6}(?:,\d{3})*\.\d{2})-?")
 OCR_MONEY_RE = re.compile(
     r"(?P<lead>-)?\$?\s*(?P<whole>\d{1,6})(?:\s*[,.:]\s*\.?\s*|\s+\.\s*)(?P<cents>\d{2})(?P<trail>-)?"
@@ -110,6 +114,21 @@ class ScannedReceipt:
         return f"scan:{self.source_sha256}"
 
 
+@dataclass(frozen=True)
+class OCRLine:
+    text: str
+    confidence: float
+
+
+@dataclass(frozen=True)
+class OCRCandidate:
+    text: str
+    lines: Tuple[OCRLine, ...]
+    dpi: int
+    psm: str
+    engine: str = "tesseract"
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Ingest scanned paper receipts into the canonical budget pipeline.")
     p.add_argument("input_path", help="Scan file or directory containing scanned receipts.")
@@ -143,6 +162,79 @@ def _run_tesseract(path: Path, psm: str = "4") -> str:
         return ""
     proc = subprocess.run([binary, str(path), "stdout", "--psm", psm], capture_output=True, text=True, check=False)
     return proc.stdout if proc.returncode == 0 else ""
+
+
+def _run_tesseract_candidate(path: Path, *, dpi: int, psm: str) -> OCRCandidate:
+    """Run Tesseract once and retain reconstructed lines and word confidence."""
+    binary = shutil.which("tesseract")
+    if not binary:
+        return OCRCandidate("", (), dpi, psm)
+    proc = subprocess.run(
+        [binary, str(path), "stdout", "--psm", psm, "tsv"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return OCRCandidate("", (), dpi, psm)
+    grouped: dict[Tuple[str, str, str, str], list[Tuple[str, float]]] = {}
+    for row in csv.DictReader(io.StringIO(proc.stdout), delimiter="\t"):
+        word = (row.get("text") or "").strip()
+        if row.get("level") != "5" or not word:
+            continue
+        key = tuple(row.get(field, "") for field in ("page_num", "block_num", "par_num", "line_num"))
+        try:
+            confidence = max(0.0, float(row.get("conf", "-1")))
+        except ValueError:
+            confidence = 0.0
+        grouped.setdefault(key, []).append((word, confidence))
+    lines: list[OCRLine] = []
+    for words in grouped.values():
+        text = normalize_line(" ".join(word for word, _ in words))
+        weight = sum(len(word) for word, _ in words)
+        confidence = sum(len(word) * value for word, value in words) / weight if weight else 0.0
+        lines.append(OCRLine(text, confidence))
+    return OCRCandidate("\n".join(line.text for line in lines), tuple(lines), dpi, psm)
+
+
+_PADDLE_OCR = None
+
+
+def _paddle_ocr_enabled() -> bool:
+    return os.getenv("HOME_BUDGET_PADDLE_OCR", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _run_paddle_candidate(image, *, dpi: int) -> OCRCandidate:
+    """Run the optional Paddle engine and retain its line confidence."""
+    global _PADDLE_OCR
+    if not _paddle_ocr_enabled():
+        return OCRCandidate("", (), dpi, "paddle", "paddle")
+    try:
+        if _PADDLE_OCR is None:
+            from paddleocr import PaddleOCR  # type: ignore
+
+            _PADDLE_OCR = PaddleOCR(
+                text_detection_model_name=os.getenv("HOME_BUDGET_PADDLE_DET_MODEL", "PP-OCRv6_medium_det"),
+                text_recognition_model_name=os.getenv("HOME_BUDGET_PADDLE_REC_MODEL", "PP-OCRv6_medium_rec"),
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+            )
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            image.save(tmp_path)
+            result = list(_PADDLE_OCR.predict(str(tmp_path)))[0].json["res"]
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        lines = tuple(
+            OCRLine(normalize_line(str(text)), float(score) * 100.0)
+            for text, score in zip(result.get("rec_texts", ()), result.get("rec_scores", ()))
+            if normalize_line(str(text))
+        )
+        return OCRCandidate("\n".join(line.text for line in lines), lines, dpi, "paddle", "paddle")
+    except Exception:
+        return OCRCandidate("", (), dpi, "paddle", "paddle")
 
 
 def _prepare_ocr_image(image):
@@ -222,6 +314,117 @@ def _ocr_supplement_score(text: str) -> int:
     )
 
 
+def _select_ocr_candidate(candidates: Sequence[OCRCandidate]) -> OCRCandidate:
+    """Prefer higher structural quality, then DPI and layout detail."""
+    return max(
+        candidates,
+        key=lambda candidate: (_ocr_candidate_score(candidate.text), candidate.dpi, candidate.psm),
+        default=OCRCandidate("", (), 0, ""),
+    )
+
+
+def _ocr_lines_match(left: str, right: str) -> bool:
+    left_key, right_key = _line_key(left), _line_key(right)
+    if not left_key or not right_key:
+        return False
+    left_amount, right_amount = parse_money(left), parse_money(right)
+    if left_amount is not None and right_amount is not None and abs(left_amount - right_amount) > 0.001:
+        return False
+    left_description = _line_key(re.sub(r"\b(?:BC|NC|TP|C)\b\s*$", "", MONEY_RE.sub("", left)))
+    right_description = _line_key(re.sub(r"\b(?:BC|NC|TP|C)\b\s*$", "", MONEY_RE.sub("", right)))
+    return max(
+        SequenceMatcher(None, left_key, right_key).ratio(),
+        SequenceMatcher(None, left_description, right_description).ratio(),
+    ) >= 0.78
+
+
+def _merge_ocr_line_evidence(base: str, winner: str) -> str:
+    """Keep a winning description while retaining base amount/tax columns."""
+    if parse_money(winner) is None:
+        money = MONEY_RE.search(base)
+        if money:
+            return normalize_line(f"{winner} {base[money.start():]}")
+    return winner
+
+
+def _single_glyph_item_variant(left: str, right: str) -> bool:
+    """Match same-price item descriptions that differ by one OCR glyph."""
+    left_amount, right_amount = parse_money(left), parse_money(right)
+    if left_amount is None or right_amount is None or abs(left_amount - right_amount) > 0.001:
+        return False
+    left_key = _line_key(re.sub(r"\b(?:BC|NC|TP|C)\b\s*$", "", MONEY_RE.sub("", left))).replace(" ", "")
+    right_key = _line_key(re.sub(r"\b(?:BC|NC|TP|C)\b\s*$", "", MONEY_RE.sub("", right))).replace(" ", "")
+    return (
+        len(left_key) >= 6
+        and len(left_key) == len(right_key)
+        and sum(a != b for a, b in zip(left_key, right_key)) == 1
+    )
+
+
+def _reconcile_duplicate_ocr_lines(lines: list[Tuple[str, float, str]]) -> list[str]:
+    """Prefer Paddle spelling, then confidence, for one-glyph duplicates."""
+    reconciled = [text for text, _, _ in lines]
+    for index, (text, confidence, engine) in enumerate(lines):
+        variants = [
+            (other_text, other_confidence, other_engine)
+            for other_text, other_confidence, other_engine in lines
+            if _single_glyph_item_variant(text, other_text)
+        ]
+        if variants:
+            winner, _, _ = max(
+                [(text, confidence, engine), *variants],
+                key=lambda item: (item[2] == "paddle", item[1]),
+            )
+            reconciled[index] = _merge_ocr_line_evidence(text, winner)
+    return reconciled
+
+
+def _line_consensus_text(candidates: Sequence[OCRCandidate]) -> str:
+    """Choose each base line using aligned OCR confidence and resolution evidence."""
+    base = _select_ocr_candidate(candidates)
+    if not base.lines:
+        return base.text
+    chosen: list[Tuple[str, float, str]] = []
+    for base_index, base_line in enumerate(base.lines):
+        occurrence = sum(
+            1 for prior in base.lines[:base_index] if _ocr_lines_match(base_line.text, prior.text)
+        )
+        alternatives: list[Tuple[OCRLine, OCRCandidate]] = []
+        for candidate in candidates:
+            matches = [line for line in candidate.lines if _ocr_lines_match(base_line.text, line.text)]
+            if matches:
+                alternatives.append((matches[min(occurrence, len(matches) - 1)], candidate))
+        if not alternatives:
+            chosen.append((base_line.text, base_line.confidence, base.engine))
+            continue
+        support = Counter(_line_key(line.text) for line, _ in alternatives)
+        def evidence_score(alternative: Tuple[OCRLine, OCRCandidate]) -> float:
+            return (
+                alternative[0].confidence
+                + min(18.0, alternative[1].dpi / 25.0)
+                + min(2.0, support[_line_key(alternative[0].text)] * 0.5)
+                + (8.0 if alternative[1].engine == "paddle" else 0.0)
+            )
+
+        winner, winner_candidate = max(
+            alternatives,
+            key=lambda alternative: (
+                1 if _has_literal_valid_timestamp(alternative[0].text) else 0,
+                1 if alternative[1].engine == "paddle" else 0,
+                evidence_score(alternative),
+                alternative[1].dpi,
+            ),
+        )
+        chosen.append(
+            (
+                _merge_ocr_line_evidence(base_line.text, winner.text),
+                evidence_score((winner, winner_candidate)),
+                winner_candidate.engine,
+            )
+        )
+    return "\n".join(_reconcile_duplicate_ocr_lines(chosen))
+
+
 def _ocr_pdf_pages(path: Path) -> List[str]:
     try:
         import pypdfium2 as pdfium  # type: ignore
@@ -231,7 +434,7 @@ def _ocr_pdf_pages(path: Path) -> List[str]:
     doc = pdfium.PdfDocument(str(path))
     try:
         for idx in range(len(doc)):
-            candidates: List[str] = []
+            candidates: List[OCRCandidate] = []
             # Resolution changes the apparent shape of thermal-printer glyphs,
             # so evaluate every DPI/layout combination instead of assuming the
             # highest resolution or first valid timestamp is most accurate.
@@ -244,12 +447,34 @@ def _ocr_pdf_pages(path: Path) -> List[str]:
                         tmp_path = Path(tmp.name)
                     try:
                         image.save(tmp_path)
-                        candidates.extend(_run_tesseract(tmp_path, psm) for psm in OCR_PAGE_SEGMENTATION_MODES)
+                        candidates.extend(
+                            _run_tesseract_candidate(tmp_path, dpi=dpi, psm=psm)
+                            for psm in OCR_PAGE_SEGMENTATION_MODES
+                        )
                     finally:
                         tmp_path.unlink(missing_ok=True)
-            best_text = max(candidates, key=_ocr_candidate_score, default="")
-            for candidate in sorted(candidates, key=_ocr_supplement_score, reverse=True):
-                best_text = _supplement_missing_receipt_summary(best_text, candidate)
+                if dpi == 200 and _paddle_ocr_enabled():
+                    candidates.append(_run_paddle_candidate(raw_image, dpi=dpi))
+            # A single high-resolution structured pass recovers small final
+            # glyphs (for example, a trailing "c") without multiplying every
+            # expensive DPI/layout/preprocessing combination.
+            high_detail_image = doc[idx].render(scale=OCR_HIGH_DETAIL_DPI / 72).to_pil()
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            try:
+                high_detail_image.save(tmp_path)
+                candidates.append(
+                    _run_tesseract_candidate(
+                        tmp_path,
+                        dpi=OCR_HIGH_DETAIL_DPI,
+                        psm=OCR_HIGH_DETAIL_PSM,
+                    )
+                )
+            finally:
+                tmp_path.unlink(missing_ok=True)
+            best_text = _line_consensus_text(candidates)
+            for candidate in sorted(candidates, key=lambda item: _ocr_supplement_score(item.text), reverse=True):
+                best_text = _supplement_missing_receipt_summary(best_text, candidate.text)
             pages.append(best_text)
     finally:
         doc.close()

@@ -183,10 +183,11 @@ def process_backlog(
 
     try:
         plan = plan_unprocessed_receipts(conn, root, ingest_schema=ingest_schema)
+        pending = plan.discovered if refresh_ocr_cache else plan.pending
         summary["discovered"] = len(plan.discovered)
-        summary["skipped"] = len(plan.skipped)
+        summary["skipped"] = 0 if refresh_ocr_cache else len(plan.skipped)
 
-        for candidate in plan.pending:
+        for candidate in pending:
             try:
                 _mark_processing(conn, candidate, root, ingest_schema)
                 conn.commit()
@@ -202,7 +203,12 @@ def process_backlog(
                     raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
 
                 receipt = receipts[0]
-                persist_evidence_first(conn, [receipt], budget_schema)
+                persist_evidence_first(
+                    conn,
+                    [receipt],
+                    budget_schema,
+                    replace_existing=refresh_ocr_cache,
+                )
                 status = "review_required" if receipt.extraction_status != "complete" else "succeeded"
                 _mark_completed(conn, candidate, root, ingest_schema, status)
                 conn.commit()

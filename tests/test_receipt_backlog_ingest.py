@@ -132,6 +132,42 @@ def test_process_backlog_returns_without_ocr_when_everything_is_skipped(monkeypa
     }
 
 
+def test_refresh_ocr_cache_reprocesses_completed_receipts(monkeypatch):
+    conn = FakeConn(lock=True)
+    candidate = _candidate("completed.pdf", "aaa")
+    plan = backlog_ingest.DiscoveryPlan(
+        discovered=(candidate,),
+        pending=(),
+        skipped=(candidate,),
+    )
+    monkeypatch.setattr(backlog_ingest, "plan_unprocessed_receipts", lambda *args, **kwargs: plan)
+    refresh_values = []
+
+    def fake_parse(paths, root, workers, cache_dir, refresh):
+        assert paths == [candidate.path]
+        refresh_values.append(refresh)
+        return [SimpleNamespace(extraction_status="complete")]
+
+    monkeypatch.setattr(backlog_ingest, "parse_scans_parallel", fake_parse)
+    monkeypatch.setattr(backlog_ingest, "persist_evidence_first", lambda *args, **kwargs: None)
+
+    summary = backlog_ingest.process_backlog(
+        conn,
+        Path("/receipts"),
+        Path("/cache"),
+        refresh_ocr_cache=True,
+    )
+
+    assert refresh_values == [True]
+    assert summary == {
+        "discovered": 1,
+        "skipped": 0,
+        "succeeded": 1,
+        "failed": 0,
+        "review_required": 0,
+    }
+
+
 def test_process_backlog_rejects_concurrent_run(monkeypatch):
     conn = FakeConn(lock=False)
     monkeypatch.setattr(
@@ -158,7 +194,11 @@ def test_process_backlog_isolates_failed_receipt_and_continues(monkeypatch):
 
     persisted = []
     monkeypatch.setattr(backlog_ingest, "parse_scans_parallel", fake_parse)
-    monkeypatch.setattr(backlog_ingest, "persist_evidence_first", lambda conn, receipts, schema: persisted.extend(receipts))
+    monkeypatch.setattr(
+        backlog_ingest,
+        "persist_evidence_first",
+        lambda conn, receipts, schema, **kwargs: persisted.extend(receipts),
+    )
 
     summary = backlog_ingest.process_backlog(conn, Path("/receipts"), Path("/cache"))
 

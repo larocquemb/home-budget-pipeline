@@ -156,13 +156,29 @@ def _persist_transaction_datetime(conn, receipt: scan.ScannedReceipt, schema: st
         )
 
 
-def persist_evidence_first(conn, receipts: list[scan.ScannedReceipt], schema: str) -> dict[str, int]:
+def persist_evidence_first(
+    conn,
+    receipts: list[scan.ScannedReceipt],
+    schema: str,
+    *,
+    replace_existing: bool = False,
+) -> dict[str, int]:
     """Persist evidence, reconciling before creating a new canonical expense."""
     stats = {"matched": 0, "ambiguous": 0, "new": 0}
 
     for receipt in receipts:
         receipt.merchant = resolve_merchant_alias(conn, receipt.merchant, schema)
         evidence_id = upsert_evidence(conn, receipt, schema, evidence_type="scanned")
+        if replace_existing:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT expense_pk FROM {schema}.receipt_evidence WHERE id = %s", (evidence_id,))
+                existing_expense_pk = cur.fetchone()[0]
+            if existing_expense_pk is not None:
+                expense_pk = scan.upsert_receipt(conn, receipt, schema)
+                _persist_transaction_datetime(conn, receipt, schema)
+                attach_evidence(conn, evidence_id, expense_pk, schema)
+                stats["matched"] += 1
+                continue
         match = find_match(conn, receipt, schema)
 
         if match.disposition == "matched" and match.expense_pk is not None:

@@ -20,7 +20,8 @@ dev-web:
 	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
 	@set -a; . ./.env.dev; set +a; \
 		LEDGER_BASE_PATH=/ledger HOST=0.0.0.0 PORT=8080 \
-		.venv/bin/python -m home_budget_pipeline.web.app
+		.venv/bin/uvicorn home_budget_pipeline.web.app:app \
+			--host 0.0.0.0 --port 8080 --reload
 
 dev-db-reset:
 	@./scripts/rebuild_local_database.sh .env.dev

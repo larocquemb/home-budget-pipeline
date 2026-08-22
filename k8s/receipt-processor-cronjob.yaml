@@ -31,7 +31,7 @@ spec:
               args:
                 - /data/receipts/raw/scanned/inbox
                 - --workers
-                - "2"
+                - "1"
               env:
                 - name: DATABASE_URL
                   valueFrom:
@@ -42,13 +42,15 @@ spec:
                   value: /data/receipts/raw/scanned/inbox
                 - name: HOME_BUDGET_OCR_CACHE
                   value: /data/receipts/derived/ocr-cache
+                - name: HOME_BUDGET_PADDLE_OCR
+                  value: "true"
               resources:
                 requests:
-                  cpu: 500m
-                  memory: 512Mi
-                limits:
                   cpu: "2"
-                  memory: 2Gi
+                  memory: 4Gi
+                limits:
+                  cpu: "4"
+                  memory: 8Gi
               volumeMounts:
                 - name: receipt-data
                   mountPath: /data

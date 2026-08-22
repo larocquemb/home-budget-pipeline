@@ -9,11 +9,14 @@ def test_receipt_processor_cronjob_contract():
     assert "kind: CronJob" in text
     assert "concurrencyPolicy: Forbid" in text
     assert "home-budget-process-receipts" in text
-    assert "--workers" in text and '"2"' in text
+    assert "--workers" in text and '"1"' in text
+    assert "HOME_BUDGET_PADDLE_OCR" in text
+    assert 'value: "true"' in text
     assert "claimName: home-budget-data" in text
     assert "name: postgres-secret" in text
     assert 'cpu: "2"' in text
-    assert "memory: 2Gi" in text
+    assert "memory: 4Gi" in text
+    assert "memory: 8Gi" in text
     assert "fsGroup: 1000" in text
     assert "fsGroupChangePolicy: OnRootMismatch" in text
 

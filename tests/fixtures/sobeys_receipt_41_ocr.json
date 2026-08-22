@@ -1,0 +1,69 @@
+{
+  "filename": "20260214_sobeys_363_95.pdf",
+  "ocr_text": "GROCERY\nOep Pic Med $6.49 C\nOep Pic Med $6.49 C\nPretzel Cracker Ranc $5.49 BC\nMastercard",
+  "expected": {
+    "transaction_date": "2026-02-14",
+    "merchant": "Sobeys",
+    "total": 363.95,
+    "payment_method": "Mastercard"
+  },
+  "post_ocr_lines": [
+    "Merchant: Sobeys",
+    "Date/time: 2026-02-14",
+    "Total: 363.95",
+    "Payment method: Mastercard",
+    "- Oep Pic Med: 12.98 (2 entries combined)"
+  ],
+  "detected_items": [
+    {
+      "ocr_line": "Oep Pic Med $6.49 C",
+      "item_name": "Oep Pic Med",
+      "line_total": 6.49,
+      "product_description": "Old El Paso Salsa Picante Style Restaurant Medium 650 mL",
+      "product_url": "https://www.sobeys.com/products/old-el-paso-salsa-picante-style-restaurant-medium-650-ml"
+    },
+    {
+      "ocr_line": "Oep Pic Med $6.49 C",
+      "item_name": "Oep Pic Med",
+      "line_total": 6.49,
+      "product_description": "Old El Paso Salsa Picante Style Restaurant Medium 650 mL",
+      "product_url": "https://www.sobeys.com/products/old-el-paso-salsa-picante-style-restaurant-medium-650-ml"
+    },
+    {
+      "ocr_line": "Pretzel Cracker Ranc $5.49 C",
+      "item_name": "Pretzel Cracker Ranc",
+      "line_total": 5.49
+    }
+  ],
+  "items_to_find": [
+    {"ocr_names": ["Pie Filling S/Berry"], "line_totals": [6.49]},
+    {"ocr_names": ["Pretzels HoneyMus tar"], "line_totals": [5.49]},
+    {"ocr_names": ["Chips Rstrnt Sty Lin"], "line_totals": [5.29]},
+    {"ocr_names": ["Dil Pkls Xt Grice Snd"], "line_totals": [4.99]},
+    {"ocr_names": ["Comp Quick Oats 1KG"], "line_totals": [4.79]},
+    {"ocr_names": ["Candy GMS Org"], "line_totals": [3.49]},
+    {"ocr_names": ["Cake Mx CarrotSprmst"], "line_totals": [2.49]},
+    {"ocr_names": ["Licorice S/Berry", "Licorice $/Berry"], "line_totals": [1.79]},
+    {"ocr_names": ["Gloves Cmfrt Med 1EA", "Cloves Cmfrt Med 1EA"], "line_totals": [4.29]},
+    {"ocr_names": ["Scourer Refill 1EA"], "line_totals": [3.69]},
+    {"ocr_names": ["Butter Sticks Uns]td", "Butter Sticks Uns] td"], "line_totals": [8.49]},
+    {"ocr_names": ["Cottage Cheese 1%MF", "Cottage Cheese 1&MF", "Cottage Cheese 14MF"], "line_totals": [6.49, 4.79]},
+    {"ocr_names": ["Topping Dessert 1L"], "line_totals": [5.99]},
+    {"ocr_names": ["Basil Freeze Drd 8G", "Basi] Freeze Drd 8G"], "line_totals": [6.99]},
+    {"ocr_names": ["Dill Freeze Ord 10G", "Bill Freeze Ord 10G"], "line_totals": [6.99]},
+    {"ocr_names": ["Org Straws"], "line_totals": [6.49]},
+    {"ocr_names": ["Little Yellows"], "line_totals": [4.99]},
+    {"ocr_names": ["Cheese Slice Med Chd"], "line_totals": [15.49]},
+    {"ocr_names": ["Chekn Brst Roast Ckd"], "line_totals": [5.46]}
+  ],
+  "parser_noise": [
+    "YOU SAVED",
+    "INSTANT SAVINGS",
+    "+EHC",
+    "1.275 kg @",
+    "0.985 kg @",
+    "1.170 kg @",
+    "1.260 kg @",
+    "0.525 kg @"
+  ]
+}
