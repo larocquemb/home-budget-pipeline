@@ -22,6 +22,17 @@ class ReceiptDatetimeTests(unittest.TestCase):
             "2026-07-09T11:25:23",
         )
 
+    def test_numeric_mdy_tolerates_ocr_spacing_and_punctuation(self):
+        variants = (
+            "5 / 31 / 26 10 : 07",
+            "05-31-2026 10:07",
+            "5.31.26 10:07",
+            "5/31,’26 10:07",
+        )
+        for text in variants:
+            with self.subTest(text=text):
+                self.assertEqual(extract_transaction_datetime(text), "2026-05-31T10:07:00")
+
     def test_terminal_yymmdd_with_time(self):
         self.assertEqual(
             extract_transaction_datetime("PIES TIME : 26/06/03 17:30:42"),
@@ -34,14 +45,11 @@ class ReceiptDatetimeTests(unittest.TestCase):
             "2026-05-31T10:35:11",
         )
 
-    def test_repairs_michaels_five_misread_as_six_and_ignores_policy_date(self):
+    def test_rejects_invalid_ocr_date_and_ignores_policy_date(self):
         text = """4171968 SALE RIN 925! 3907 040 6/31,'26 10:07
 Effective 11/27/2022 Clearance sales are considered final
 6/31/26 10:07"""
-        self.assertEqual(
-            extract_transaction_datetime(text),
-            "2026-05-31T10:07:00",
-        )
+        self.assertIsNone(extract_transaction_datetime(text))
 
     def test_prefers_later_receipt_timestamp_over_effective_policy_date(self):
         text = """SALE £/31/26 10:07
