@@ -10,7 +10,8 @@ KAN-76 design goals:
 - assign extraction confidence/status so weak scans can be reviewed
 - retain payment method/card provenance and resolve payer from time-bounded DB data
 
-OCR is deliberately local: Tesseract is invoked only when a PDF has no useful text layer.
+OCR is deliberately local. Image-based PDFs are re-OCRed after receipt-focused
+preprocessing instead of blindly trusting a potentially inaccurate embedded text layer.
 The raw OCR text and page text are retained in raw_payload for later reprocessing.
 """
 
@@ -132,12 +133,62 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _run_tesseract(path: Path, psm: str = "6") -> str:
+def _run_tesseract(path: Path, psm: str = "4") -> str:
     binary = shutil.which("tesseract")
     if not binary:
         return ""
     proc = subprocess.run([binary, str(path), "stdout", "--psm", psm], capture_output=True, text=True, check=False)
     return proc.stdout if proc.returncode == 0 else ""
+
+
+def _prepare_ocr_image(image):
+    """Crop scanner whitespace and enhance faint thermal-receipt printing."""
+    from PIL import Image, ImageFilter, ImageOps
+
+    gray = image.convert("L")
+    width, height = gray.size
+    # Requiring several dark pixels per row/column ignores isolated scanner
+    # marks while retaining the receipt edges and printed content.
+    min_column_ink = max(12, height // 200)
+    min_row_ink = max(20, width // 100)
+    ink = gray.point(lambda value: 255 if value < 225 else 0)
+    # BOX resampling computes the projections in native code. Converting every
+    # pixel in Python made a single full-page scan take minutes.
+    column_projection = ink.resize((width, 1), resample=Image.Resampling.BOX)
+    row_projection = ink.resize((1, height), resample=Image.Resampling.BOX)
+    columns = list(column_projection.get_flattened_data())
+    rows = list(row_projection.get_flattened_data())
+    column_threshold = 255 * min_column_ink / height
+    row_threshold = 255 * min_row_ink / width
+    xs = [x for x, value in enumerate(columns) if value >= column_threshold]
+    ys = [y for y, value in enumerate(rows) if value >= row_threshold]
+    if xs and ys:
+        margin = max(12, min(width, height) // 100)
+        gray = gray.crop((
+            max(0, min(xs) - margin),
+            max(0, min(ys) - margin),
+            min(width, max(xs) + margin + 1),
+            min(height, max(ys) + margin + 1),
+        ))
+    gray = ImageOps.autocontrast(gray, cutoff=1)
+    if gray.width < 1800:
+        gray = gray.resize((gray.width * 2, gray.height * 2))
+    return gray.filter(ImageFilter.UnsharpMask(radius=1, percent=180, threshold=2))
+
+
+def _has_literal_valid_timestamp(text: str) -> bool:
+    """Return true only for a valid numeric date printed beside a time."""
+    pattern = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/|,\s*')[,']*(20\d{2}|\d{2})\s+(\d{1,2}):(\d{2})\b")
+    for match in pattern.finditer(text):
+        year = int(match.group(3))
+        if year < 100:
+            year += 2000
+        try:
+            datetime(year, int(match.group(1)), int(match.group(2)), int(match.group(4)), int(match.group(5)))
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _ocr_pdf_pages(path: Path) -> List[str]:
@@ -149,7 +200,7 @@ def _ocr_pdf_pages(path: Path) -> List[str]:
     doc = pdfium.PdfDocument(str(path))
     try:
         for idx in range(len(doc)):
-            image = doc[idx].render(scale=300 / 72).to_pil()
+            image = _prepare_ocr_image(doc[idx].render(scale=200 / 72).to_pil())
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 tmp_path = Path(tmp.name)
             try:
@@ -164,16 +215,43 @@ def _ocr_pdf_pages(path: Path) -> List[str]:
 
 def extract_page_text(path: Path) -> List[str]:
     if path.suffix.lower() == ".pdf":
+        embedded_pages: List[str] = []
+        image_based = False
         try:
             import pdfplumber  # type: ignore
             with pdfplumber.open(str(path)) as pdf:
-                pages = [(page.extract_text() or "") for page in pdf.pages]
-            if any(p.strip() for p in pages):
-                return pages
+                embedded_pages = [(page.extract_text() or "") for page in pdf.pages]
+                image_based = any(page.images for page in pdf.pages)
         except Exception:
             pass
-        return _ocr_pdf_pages(path)
-    return [_run_tesseract(path)]
+        if image_based or not any(page.strip() for page in embedded_pages):
+            ocr_pages = _ocr_pdf_pages(path)
+            if ocr_pages:
+                selected: List[str] = []
+                for idx in range(max(len(embedded_pages), len(ocr_pages))):
+                    embedded = embedded_pages[idx] if idx < len(embedded_pages) else ""
+                    ocr = ocr_pages[idx] if idx < len(ocr_pages) else ""
+                    # A valid timestamp is strong evidence that preprocessing
+                    # recovered receipt text the embedded OCR layer damaged.
+                    if _has_literal_valid_timestamp(ocr) and not _has_literal_valid_timestamp(embedded):
+                        selected.append(ocr)
+                    else:
+                        selected.append(embedded or ocr)
+                return selected
+        return embedded_pages
+    try:
+        from PIL import Image
+        with Image.open(path) as image:
+            prepared = _prepare_ocr_image(image)
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            try:
+                prepared.save(tmp_path)
+                return [_run_tesseract(tmp_path)]
+            finally:
+                tmp_path.unlink(missing_ok=True)
+    except Exception:
+        return [_run_tesseract(path)]
 
 
 def normalize_line(line: str) -> str:
