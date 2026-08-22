@@ -15,7 +15,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
-from home_budget_pipeline.receipts.ingest import clean_extracted_item_name
+from home_budget_pipeline.receipts.ingest import (
+    clean_extracted_item_name,
+    prefer_filename_merchant,
+    receipt_info_from_filename,
+)
 
 from .queries import LedgerQueryService
 from .render import esc, money, page, pager, table
@@ -60,11 +64,15 @@ def _header_text(value: object) -> Optional[str]:
 
 def _post_ocr_text(evidence: dict, expense: Optional[dict]) -> str:
     """Render the structured extraction produced from the OCR transcript."""
+    filename_date, filename_merchant, filename_total = receipt_info_from_filename(
+        Path(str(evidence.get("source_reference") or ""))
+    )
+    extracted_merchant = evidence.get("merchant") or (expense or {}).get("store_name")
     lines = [
-        f"Merchant: {evidence.get('merchant') or (expense or {}).get('store_name') or ''}",
-        f"Date/time: {evidence.get('transaction_datetime') or (expense or {}).get('transaction_datetime') or (expense or {}).get('order_date') or ''}",
+        f"Merchant: {prefer_filename_merchant(extracted_merchant, filename_merchant) or ''}",
+        f"Date/time: {evidence.get('transaction_datetime') or (expense or {}).get('transaction_datetime') or (expense or {}).get('order_date') or filename_date or ''}",
         f"Receipt ID: {evidence.get('receipt_id') or ''}",
-        f"Total: {evidence.get('total') or (expense or {}).get('expense_total') or ''}",
+        f"Total: {evidence.get('total') or (expense or {}).get('expense_total') or filename_total or ''}",
         f"Payment method: {evidence.get('payment_method') or ''}",
         f"Card last four: {evidence.get('card_last4') or ''}",
     ]

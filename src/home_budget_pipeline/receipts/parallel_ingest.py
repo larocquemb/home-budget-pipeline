@@ -67,9 +67,12 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
     text = scan.merge_page_text(pages)
     subtotal, tax, total = scan.extract_totals(text)
     total = reconcile_total_from_text(text, total)
+    filename_date, filename_merchant, filename_total = scan.receipt_info_from_filename(path)
+    if total is None:
+        total = filename_total
     payment = extract_payment_provenance(text)
     transaction_datetime = extract_transaction_datetime(text)
-    transaction_date = date_part(transaction_datetime) or scan.extract_date(text)
+    transaction_date = date_part(transaction_datetime) or scan.extract_date(text) or filename_date
     try:
         reference = str(path.relative_to(root)) if root.is_dir() else path.name
     except ValueError:
@@ -79,7 +82,7 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
         path=str(path),
         source_reference=reference,
         source_sha256=source_sha256,
-        merchant=scan.extract_merchant(text),
+        merchant=scan.prefer_filename_merchant(scan.extract_merchant(text), filename_merchant),
         transaction_date=transaction_date,
         receipt_id=scan.extract_receipt_id(text),
         subtotal=subtotal,

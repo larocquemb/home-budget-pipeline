@@ -244,6 +244,20 @@ def test_evidence_page_embeds_cropped_pdf_preview_and_keeps_original_link():
     assert "<summary>OCR text</summary>" in text
 
 
+def test_post_ocr_display_uses_filename_for_generic_merchant_and_missing_date():
+    text = web_app._post_ocr_text(
+        {
+            "source_reference": "20260214_sobeys_363_95.pdf",
+            "merchant": "GROCERY",
+            "total": "363.95",
+            "payment_method": "Mastercard",
+        },
+        None,
+    )
+    assert "Merchant: Sobeys" in text
+    assert "Date/time: 2026-02-14" in text
+
+
 def test_duplicate_page_links_both_evidence_records():
     text = web_app.duplicates_page(service=FakeService(), identity=IDENTITY, limit=50, offset=0)
     assert f'{web_app.BASE_PATH}/evidence/7' in text

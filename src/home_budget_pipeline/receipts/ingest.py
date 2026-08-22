@@ -635,10 +635,34 @@ def status_for(receipt: ScannedReceipt) -> str:
     return "complete"
 
 
+def receipt_info_from_filename(path: Path) -> Tuple[Optional[str], Optional[str], Optional[float]]:
+    """Extract date, merchant, and total from YYYYMMDD_merchant_dollars_cents."""
+    match = re.fullmatch(r"(\d{8})[_-](.+)[_-](\d+)[_-](\d{2})", path.stem)
+    if not match:
+        return None, None, None
+    raw_date, raw_merchant, dollars, cents = match.groups()
+    try:
+        parsed_date = datetime.strptime(raw_date, "%Y%m%d").date().isoformat()
+    except ValueError:
+        return None, None, None
+    merchant = normalize_merchant(raw_merchant.replace("_", " ").replace("-", " "))
+    total = float(f"{dollars}.{cents}")
+    return parsed_date, merchant, total
+
+
+def prefer_filename_merchant(extracted: Optional[str], filename_merchant: Optional[str]) -> Optional[str]:
+    """Use filename evidence when OCR returns a generic receipt section label."""
+    generic = {"grocery", "groceries", "market", "store", "supermarket"}
+    if filename_merchant and (not extracted or normalize_line(extracted).lower() in generic):
+        return filename_merchant
+    return extracted
+
+
 def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt:
     pages = extract_page_text(path)
     text = merge_page_text(pages)
     subtotal, tax, total = extract_totals(text)
+    filename_date, filename_merchant, filename_total = receipt_info_from_filename(path)
     payment = extract_payment_provenance(text)
     try:
         reference = str(path.relative_to(source_root)) if source_root and source_root.is_dir() else path.name
@@ -646,11 +670,14 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
         reference = path.name
     receipt = ScannedReceipt(
         path=str(path), source_reference=reference, source_sha256=sha256_file(path),
-        merchant=extract_merchant(text), transaction_date=extract_date(text),
+        merchant=prefer_filename_merchant(extract_merchant(text), filename_merchant),
+        transaction_date=extract_date(text) or filename_date,
         receipt_id=extract_receipt_id(text), subtotal=subtotal, tax=tax, total=total,
         payment_method=payment.payment_method, card_last4=payment.card_last4,
         items=normalize_item_signs(extract_items(text), total), page_text=list(pages), text=text,
     )
+    if receipt.total is None:
+        receipt.total = filename_total
     receipt.extraction_confidence = confidence_for(receipt)
     receipt.review_reasons = review_reasons_for(receipt)
     receipt.extraction_status = status_for(receipt)

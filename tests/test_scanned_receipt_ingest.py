@@ -48,6 +48,26 @@ TOTAL 11.48
         self.assertEqual(total, 11.48)
         self.assertEqual([(x.item_name, x.line_total) for x in scan.extract_items(text)], [("Milk", 5.94), ("Bread", 4.99)])
 
+    def test_sobeys_receipt_filename_populates_missing_receipt_info(self):
+        path = Path("20260214_sobeys_363_95.pdf")
+        self.assertEqual(
+            scan.receipt_info_from_filename(path),
+            ("2026-02-14", "Sobeys", 363.95),
+        )
+        with patch.object(scan, "extract_page_text", return_value=["Milk 5.94"]), patch.object(
+            scan, "sha256_file", return_value="abc"
+        ):
+            receipt = scan.parse_scan(path)
+        self.assertEqual(receipt.transaction_date, "2026-02-14")
+        self.assertEqual(receipt.merchant, "Sobeys")
+        self.assertEqual(receipt.total, 363.95)
+
+    def test_sobeys_filename_replaces_generic_ocr_merchant(self):
+        _, filename_merchant, _ = scan.receipt_info_from_filename(
+            Path("20260214_sobeys_363_95.pdf")
+        )
+        self.assertEqual(scan.prefer_filename_merchant("GROCERY", filename_merchant), "Sobeys")
+
     def test_item_amount_wrapped_to_next_ocr_line_is_preserved(self):
         text = """079594233699 5PK YARD BAG <A>
 203. 44 6.88
