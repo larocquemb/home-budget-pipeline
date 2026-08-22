@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import ingest as scan
 from receipt_datetime import date_part, extract_transaction_datetime
-from receipt_evidence import attach_evidence, find_match, upsert_evidence
+from receipt_evidence import attach_evidence, find_match, resolve_merchant_alias, upsert_evidence
 from receipt_payment import extract_payment_provenance
 from receipt_total_reconcile import reconcile_total_from_text
 
@@ -158,6 +158,7 @@ def persist_evidence_first(conn, receipts: list[scan.ScannedReceipt], schema: st
     stats = {"matched": 0, "ambiguous": 0, "new": 0}
 
     for receipt in receipts:
+        receipt.merchant = resolve_merchant_alias(conn, receipt.merchant, schema)
         evidence_id = upsert_evidence(conn, receipt, schema, evidence_type="scanned")
         match = find_match(conn, receipt, schema)
 

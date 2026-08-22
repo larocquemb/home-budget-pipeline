@@ -33,6 +33,23 @@ def _norm(value: Optional[str]) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
 
+def resolve_merchant_alias(conn, merchant: Optional[str], schema: str = "budget") -> Optional[str]:
+    """Resolve an OCR merchant candidate using database-managed aliases."""
+    schema = _safe_schema(schema)
+    normalized = _norm(merchant)
+    if not normalized:
+        return merchant
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT alias_name, merchant_name FROM {schema}.merchant_aliases WHERE is_active ORDER BY length(alias_name) DESC"
+        )
+        for alias_name, merchant_name in cur.fetchall():
+            alias = _norm(alias_name)
+            if alias and re.search(rf"(?:^|\s){re.escape(alias)}(?:\s|$)", normalized):
+                return str(merchant_name)
+    return merchant
+
+
 def _dt(value: str | datetime | None) -> Optional[datetime]:
     if value is None or value == "":
         return None

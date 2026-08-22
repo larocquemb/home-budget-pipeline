@@ -14,3 +14,4 @@ cp "$repo_root/sql/financial_transactions.sql" "$destination/004-financial-trans
 cp "$repo_root/sql/receipt_deduplication.sql" "$destination/005-receipt-deduplication.sql"
 cp "$repo_root/sql/schema_constraints.sql" "$destination/006-schema-constraints.sql"
 cp "$repo_root/sql/receipt_processing.sql" "$destination/007-receipt-processing.sql"
+cp "$repo_root/sql/merchant_aliases.sql" "$destination/008-merchant-aliases.sql"
