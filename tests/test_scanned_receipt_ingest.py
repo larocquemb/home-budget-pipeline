@@ -7,6 +7,10 @@ from home_budget_pipeline.receipts import ingest as scan
 
 
 class ScannedReceiptIngestTests(unittest.TestCase):
+    def test_ocr_evaluates_all_requested_resolution_and_layout_variants(self):
+        self.assertEqual(scan.OCR_RENDER_DPIS, (150, 200, 300))
+        self.assertEqual(scan.OCR_PAGE_SEGMENTATION_MODES, ("4", "6", "11"))
+
     def test_discover_scans_recursive_and_supported_only(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -54,6 +58,19 @@ SUBTOTAL 6.88
             [("079594233699 5PK YARD BAG <A>", 6.88)],
         )
 
+    def test_michaels_crct_io_puff_item_description(self):
+        self.assertEqual(
+            [(item.item_name, item.line_total) for item in scan.extract_items("CRCT IO PUFF 12x1 18.99")],
+            [("CRCT IO PUFF 12x1", 18.99)],
+        )
+
+    def test_item_amount_accepts_contextual_missing_leading_zero(self):
+        self.assertEqual(
+            [(item.item_name, item.line_total) for item in scan.extract_items("CRCT IO PUFF 12x1 @ .01-")],
+            [("CRCT IO PUFF 12x1 @", -0.01)],
+        )
+        self.assertEqual(scan.normalize_leading_decimal_money("Visa *9809 42 .54-"), "Visa *9809 42 .54-")
+
     def test_date_extraction_accepts_real_ocr_formats(self):
         self.assertEqual(scan.extract_date("DATE/TIME: 26/04/26 19:01:05"), "2026-04-26")
         self.assertEqual(scan.extract_date("13-May-2026 17:39:52"), "2026-05-13")
@@ -67,6 +84,35 @@ SUBTOTAL 6.88
         sparse_noise = "STORE 123 random text"
         receipt = "TRANSACTION 123\n5/31/26 10:07\nSUBTOTAL 10.00\nGST 0.50\nTOTAL 10.50"
         self.assertGreater(scan._ocr_candidate_score(receipt), scan._ocr_candidate_score(sparse_noise))
+
+    def test_alternate_ocr_supplements_only_missing_summary_fields(self):
+        primary = "MICHAELS\n5/31/26 10:07\nITEM 37.98-\nSUBTOTAL 37.98-"
+        alternative = "ITEM 37.98-\nGST 1.90-\nRST 2.66-\nTOTFL 42.54-"
+        combined = scan._supplement_missing_receipt_summary(primary, alternative)
+        self.assertEqual(scan.extract_totals(combined), (-37.98, -4.56, -42.54))
+        self.assertEqual(combined.count("ITEM 37.98-"), 1)
+
+    def test_alternate_ocr_supplements_payment_details(self):
+        combined = scan._supplement_missing_receipt_summary(
+            "MICHAELS\nSUBTOTAL 37.98-",
+            "Visa *9809 42 .54-",
+        )
+        payment = scan.extract_payment_provenance(combined)
+        self.assertEqual((payment.payment_method, payment.card_last4), ("Visa", "9809"))
+        self.assertEqual(scan.extract_totals(combined)[2], -42.54)
+
+    def test_total_and_subtotal_recover_missing_combined_tax(self):
+        self.assertEqual(
+            scan.extract_totals("SUBTOTAL 37.98-\nGST 1,90-\nVisa *9809 42.54-"),
+            (-37.98, -4.56, -42.54),
+        )
+
+    def test_refund_total_restores_item_minus_signs_lost_by_ocr(self):
+        items = [scan.ScannedItem("Returned item", 18.99), scan.ScannedItem("Returned item 2", -18.98)]
+        self.assertEqual(
+            [item.line_total for item in scan.normalize_item_signs(items, -42.54)],
+            [-18.99, -18.98],
+        )
 
     def test_ocr_preprocessing_crops_scanner_whitespace(self):
         from PIL import Image, ImageDraw

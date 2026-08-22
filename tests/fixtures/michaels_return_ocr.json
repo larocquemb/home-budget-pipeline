@@ -1,0 +1,22 @@
+{
+  "primary": "Everything to create anything\nMICHFIELS STORE #3907\nSALE 5/31/'26 10:07\nRETURNS\nCRCT IO PUFF 12x1 92573913341 1 @ 18.99\nCRCT IO PUFF 12x1 93573447143 1 @ 18.98\nCRCT IO PUFF 12x1 93573447143 1 @ .01-\nSUBTOTAL 37.98-\nSIGN-UP AT MICHAELS.CA\nTHANK YOU FOR SHOPPING AT MICHAELS\nPolicies are available at Michaels.ca",
+  "alternatives": [
+    "GST 1,90-\nVisa *9809 42.54-",
+    "RST 2.66-\nTOTAL 42.54-"
+  ],
+  "expected": {
+    "merchant": "MICHAELS",
+    "transaction_datetime": "2026-05-31T10:07:00",
+    "subtotal": -37.98,
+    "tax": -4.56,
+    "total": -42.54,
+    "payment_method": "Visa",
+    "card_last4": "9809",
+    "item_names": [
+      "CRCT IO PUFF 12x1 92573913341 1 @",
+      "CRCT IO PUFF 12x1 93573447143 1 @",
+      "CRCT IO PUFF 12x1 93573447143 1 @"
+    ],
+    "item_totals": [-18.99, -18.98, -0.01]
+  }
+}
