@@ -194,7 +194,11 @@ def test_process_backlog_isolates_failed_receipt_and_continues(monkeypatch):
 
     persisted = []
     monkeypatch.setattr(backlog_ingest, "parse_scans_parallel", fake_parse)
-    monkeypatch.setattr(backlog_ingest, "persist_evidence_first", lambda conn, receipts, schema: persisted.extend(receipts))
+    monkeypatch.setattr(
+        backlog_ingest,
+        "persist_evidence_first",
+        lambda conn, receipts, schema, **kwargs: persisted.extend(receipts),
+    )
 
     summary = backlog_ingest.process_backlog(conn, Path("/receipts"), Path("/cache"))
 

@@ -203,7 +203,12 @@ def process_backlog(
                     raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
 
                 receipt = receipts[0]
-                persist_evidence_first(conn, [receipt], budget_schema)
+                persist_evidence_first(
+                    conn,
+                    [receipt],
+                    budget_schema,
+                    replace_existing=refresh_ocr_cache,
+                )
                 status = "review_required" if receipt.extraction_status != "complete" else "succeeded"
                 _mark_completed(conn, candidate, root, ingest_schema, status)
                 conn.commit()
