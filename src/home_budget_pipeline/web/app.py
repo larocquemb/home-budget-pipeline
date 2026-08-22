@@ -6,6 +6,7 @@ import html
 import io
 import mimetypes
 import os
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
@@ -13,6 +14,8 @@ from urllib.parse import urlencode
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, HTMLResponse, Response
+
+from home_budget_pipeline.receipts.ingest import clean_extracted_item_name
 
 from .queries import LedgerQueryService
 from .render import esc, money, page, pager, table
@@ -53,6 +56,37 @@ def _header_text(value: object) -> Optional[str]:
         value = value.strip()
         return value or None
     return None
+
+
+def _post_ocr_text(evidence: dict, expense: Optional[dict]) -> str:
+    """Render the structured extraction produced from the OCR transcript."""
+    lines = [
+        f"Merchant: {evidence.get('merchant') or (expense or {}).get('store_name') or ''}",
+        f"Date/time: {evidence.get('transaction_datetime') or (expense or {}).get('transaction_datetime') or (expense or {}).get('order_date') or ''}",
+        f"Receipt ID: {evidence.get('receipt_id') or ''}",
+        f"Total: {evidence.get('total') or (expense or {}).get('expense_total') or ''}",
+        f"Payment method: {evidence.get('payment_method') or ''}",
+        f"Card last four: {evidence.get('card_last4') or ''}",
+    ]
+    items = (expense or {}).get("items") or ()
+    lines.append("")
+    lines.append("Line items:")
+    if items:
+        grouped: dict[str, list] = {}
+        for item in items:
+            name = clean_extracted_item_name(str(item.get("item_name") or ""))
+            grouped.setdefault(name, []).append(item.get("line_total"))
+        for name, amounts in grouped.items():
+            try:
+                numeric = [Decimal(str(amount)) for amount in amounts if amount is not None]
+                amount = sum(numeric, Decimal("0")) if len(numeric) == len(amounts) else ""
+            except InvalidOperation:
+                amount = ""
+            suffix = f" ({len(amounts)} entries combined)" if len(amounts) > 1 else ""
+            lines.append(f"- {name}: {amount}{suffix}")
+    else:
+        lines.append("(none extracted)")
+    return "\n".join(lines)
 
 
 def authenticated_identity(
@@ -601,7 +635,10 @@ def evidence_page(evidence_id: int, service: LedgerQueryService = Depends(query_
     evidence = service.receipt_evidence(evidence_id)
     if evidence is None:
         raise HTTPException(status_code=404, detail="receipt evidence not found")
+    expense = service.expense_detail(evidence["expense_pk"]) if evidence.get("expense_pk") else None
     expense_link = f'<a href="{BASE_PATH}/expenses/{evidence["expense_pk"]}">{evidence["expense_pk"]}</a>' if evidence.get("expense_pk") else ""
+    extracted_text = html.escape(_post_ocr_text(evidence, expense))
+    ocr_text = html.escape(str(evidence.get("raw_text") or ""))
     body = f"""<div class="card"><div class="grid">
 <div><strong>Type</strong><br>{esc(evidence.get('evidence_type'))}</div>
 <div><strong>Merchant</strong><br>{esc(evidence.get('merchant'))}</div>
@@ -613,7 +650,8 @@ def evidence_page(evidence_id: int, service: LedgerQueryService = Depends(query_
 </div></div>
 <div class="receipt-review-grid">
 <section><h2>Receipt</h2>{_receipt_preview_html(evidence_id, evidence)}</section>
-<section><h2>Extracted text</h2><pre class="receipt-text">{html.escape(str(evidence.get('raw_text') or ''))}</pre></section>
+<section><h2>Extracted text</h2><p>Parsed extraction after OCR</p><pre class="receipt-text">{extracted_text}</pre>
+<details><summary>OCR text</summary><pre class="receipt-text">{ocr_text}</pre></details></section>
 </div>"""
     return page(f"Receipt evidence {evidence_id}", body, base_path=BASE_PATH, identity=identity)
 

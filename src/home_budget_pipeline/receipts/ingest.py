@@ -566,13 +566,28 @@ def extract_items(text: str) -> List[ScannedItem]:
                         items.append(ScannedItem(line, amount))
             continue
         last = matches[-1]
-        name = normalize_line(line[: last.start()].strip(" :-"))
+        name = clean_extracted_item_name(line[: last.start()].strip(" :-"))
         if len(re.sub(r"[^A-Za-z]", "", name)) < 2:
             continue
         amount = parse_money(line)
         if amount is not None:
             items.append(ScannedItem(name, amount))
     return items
+
+
+def clean_extracted_item_name(name: str) -> str:
+    """Remove checkout metadata that OCR commonly attaches to product names."""
+    cleaned = normalize_line(name)
+    # Retail rows commonly end in ``<UPC> <quantity> @ <unit price>``. The
+    # price is removed by extract_items; remove the remaining UPC/quantity
+    # columns as well, including a short OCR fragment before a damaged UPC.
+    cleaned = re.sub(r"\s+(?:[A-Za-z0-9]{1,3}\s+)?\d[\d ]{6,16}\s+\d+\s+@\s*$", "", cleaned)
+    # This Cricut abbreviation is especially unstable in the Michaels scan
+    # (CRCT/EReT and IO/1]/12), while PUFF and its 12x1 size remain legible.
+    puff = re.search(r"\bPUFF\s+12[xX][1!)](?=\s|$)", cleaned, re.I)
+    if puff and re.match(r"^(?:CRCT|ERET)\b", cleaned, re.I):
+        cleaned = "CRCT " + re.sub(r"[!)]$", "1", puff.group(0), flags=re.I)
+    return normalize_line(cleaned.strip(" :-"))
 
 
 def normalize_item_signs(items: List[ScannedItem], total: Optional[float]) -> List[ScannedItem]:

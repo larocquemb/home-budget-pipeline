@@ -61,13 +61,37 @@ SUBTOTAL 6.88
     def test_michaels_crct_io_puff_item_description(self):
         self.assertEqual(
             [(item.item_name, item.line_total) for item in scan.extract_items("CRCT IO PUFF 12x1 18.99")],
-            [("CRCT IO PUFF 12x1", 18.99)],
+            [("CRCT PUFF 12x1", 18.99)],
+        )
+
+    def test_checkout_upc_quantity_and_unit_price_are_not_part_of_item_name(self):
+        text = """CRCT IO PUFF 12x1 92573913341 1 @ 18.99-
+CRCT IO PUFF 12x1 93573447143 1 @ 18.98-
+CRCT IO PUFF 12x1 93573447143 1 @ .01-"""
+        self.assertEqual(
+            [(item.item_name, item.line_total) for item in scan.extract_items(text)],
+            [
+                ("CRCT PUFF 12x1", -18.99),
+                ("CRCT PUFF 12x1", -18.98),
+                ("CRCT PUFF 12x1", -0.01),
+            ],
+        )
+
+    def test_damaged_michaels_cricut_rows_share_a_stable_product_name(self):
+        names = [
+            "CRCT 1] PUFF 12x1 3 3913341 1 @",
+            "EReT 12 PUFF 12x! 93673447143 1 @",
+            "CRCT 1] PUFF 12x) Gah 73447143 1 @",
+        ]
+        self.assertEqual(
+            [scan.clean_extracted_item_name(name) for name in names],
+            ["CRCT PUFF 12x1"] * 3,
         )
 
     def test_item_amount_accepts_contextual_missing_leading_zero(self):
         self.assertEqual(
             [(item.item_name, item.line_total) for item in scan.extract_items("CRCT IO PUFF 12x1 @ .01-")],
-            [("CRCT IO PUFF 12x1 @", -0.01)],
+            [("CRCT PUFF 12x1", -0.01)],
         )
         self.assertEqual(scan.normalize_leading_decimal_money("Visa *9809 42 .54-"), "Visa *9809 42 .54-")
 

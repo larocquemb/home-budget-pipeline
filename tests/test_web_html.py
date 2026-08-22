@@ -237,6 +237,11 @@ def test_evidence_page_embeds_cropped_pdf_preview_and_keeps_original_link():
     assert "Open original receipt" in text
     assert f'href="{document_url}"' in text
     assert "COSTCO RECEIPT" in text
+    assert "Parsed extraction after OCR" in text
+    assert "Merchant: Costco" in text
+    assert "Line items:" in text
+    assert "Milk" in text
+    assert "<summary>OCR text</summary>" in text
 
 
 def test_duplicate_page_links_both_evidence_records():
