@@ -361,17 +361,20 @@ def _single_glyph_item_variant(left: str, right: str) -> bool:
     )
 
 
-def _reconcile_duplicate_ocr_lines(lines: list[Tuple[str, float]]) -> list[str]:
-    """Apply the strongest spelling to every one-glyph duplicate item line."""
-    reconciled = [text for text, _ in lines]
-    for index, (text, confidence) in enumerate(lines):
+def _reconcile_duplicate_ocr_lines(lines: list[Tuple[str, float, str]]) -> list[str]:
+    """Prefer Paddle spelling, then confidence, for one-glyph duplicates."""
+    reconciled = [text for text, _, _ in lines]
+    for index, (text, confidence, engine) in enumerate(lines):
         variants = [
-            (other_text, other_confidence)
-            for other_text, other_confidence in lines
+            (other_text, other_confidence, other_engine)
+            for other_text, other_confidence, other_engine in lines
             if _single_glyph_item_variant(text, other_text)
         ]
         if variants:
-            winner, _ = max([(text, confidence), *variants], key=lambda item: item[1])
+            winner, _, _ = max(
+                [(text, confidence, engine), *variants],
+                key=lambda item: (item[2] == "paddle", item[1]),
+            )
             reconciled[index] = _merge_ocr_line_evidence(text, winner)
     return reconciled
 
@@ -381,7 +384,7 @@ def _line_consensus_text(candidates: Sequence[OCRCandidate]) -> str:
     base = _select_ocr_candidate(candidates)
     if not base.lines:
         return base.text
-    chosen: list[Tuple[str, float]] = []
+    chosen: list[Tuple[str, float, str]] = []
     for base_index, base_line in enumerate(base.lines):
         occurrence = sum(
             1 for prior in base.lines[:base_index] if _ocr_lines_match(base_line.text, prior.text)
@@ -392,7 +395,7 @@ def _line_consensus_text(candidates: Sequence[OCRCandidate]) -> str:
             if matches:
                 alternatives.append((matches[min(occurrence, len(matches) - 1)], candidate))
         if not alternatives:
-            chosen.append((base_line.text, base_line.confidence))
+            chosen.append((base_line.text, base_line.confidence, base.engine))
             continue
         support = Counter(_line_key(line.text) for line, _ in alternatives)
         def evidence_score(alternative: Tuple[OCRLine, OCRCandidate]) -> float:
@@ -407,11 +410,18 @@ def _line_consensus_text(candidates: Sequence[OCRCandidate]) -> str:
             alternatives,
             key=lambda alternative: (
                 1 if _has_literal_valid_timestamp(alternative[0].text) else 0,
+                1 if alternative[1].engine == "paddle" else 0,
                 evidence_score(alternative),
                 alternative[1].dpi,
             ),
         )
-        chosen.append((_merge_ocr_line_evidence(base_line.text, winner.text), evidence_score((winner, winner_candidate))))
+        chosen.append(
+            (
+                _merge_ocr_line_evidence(base_line.text, winner.text),
+                evidence_score((winner, winner_candidate)),
+                winner_candidate.engine,
+            )
+        )
     return "\n".join(_reconcile_duplicate_ocr_lines(chosen))
 
 
