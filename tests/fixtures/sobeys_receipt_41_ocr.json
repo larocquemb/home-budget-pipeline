@@ -12,13 +12,14 @@
     "Date/time: 2026-02-14",
     "Total: 363.95",
     "Payment method: Mastercard",
-    "- Old El Paso Salsa Picante Style Restaurant Medium 650 mL: 6.49"
+    "- Oep Pic Med: 12.98 (2 entries combined)"
   ],
   "item_corrections": [
     {
       "ocr_line": "Cep Pic Med $6.49 C",
-      "item_name": "Old El Paso Salsa Picante Style Restaurant Medium 650 mL",
+      "item_name": "Oep Pic Med",
       "line_total": 6.49,
+      "product_description": "Old El Paso Salsa Picante Style Restaurant Medium 650 mL",
       "product_url": "https://www.sobeys.com/products/old-el-paso-salsa-picante-style-restaurant-medium-650-ml"
     }
   ],

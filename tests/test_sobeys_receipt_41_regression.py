@@ -54,11 +54,13 @@ def test_receipt_41_post_ocr_display():
             "payment_method": expected["payment_method"],
         },
         {
-            "items": (
+            "items": tuple(
                 {
                     "item_name": correction["ocr_line"].split(" $")[0],
                     "line_total": str(correction["line_total"]),
-                },
+                    "product_description": correction["product_description"],
+                }
+                for _ in range(2)
             )
         },
     )

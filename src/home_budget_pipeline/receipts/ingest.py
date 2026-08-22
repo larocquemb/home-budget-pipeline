@@ -587,14 +587,9 @@ def clean_extracted_item_name(name: str) -> str:
     puff = re.search(r"\bPUFF\s+12[xX][1!)](?=\s|$)", cleaned, re.I)
     if puff and re.match(r"^(?:CRCT|ERET)\b", cleaned, re.I):
         cleaned = "CRCT " + re.sub(r"[!)]$", "1", puff.group(0), flags=re.I)
-    # Receipt 41: Sobeys abbreviates Old El Paso Salsa Picante Medium as
-    # "Oep Pic Med"; OCR sometimes reads the leading O as C.
-    cleaned = re.sub(
-        r"^(?:C|O)ep Pic Med\b",
-        "Old El Paso Salsa Picante Style Restaurant Medium 650 mL",
-        cleaned,
-        flags=re.I,
-    )
+    # Receipt 41: preserve Sobeys' abbreviated item text while correcting the
+    # leading O that OCR sometimes reads as C.
+    cleaned = re.sub(r"^(?:C|O)ep Pic Med\b", "Oep Pic Med", cleaned, flags=re.I)
     return normalize_line(cleaned.strip(" :-"))
 
 
