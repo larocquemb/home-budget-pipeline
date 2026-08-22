@@ -1,4 +1,4 @@
-ARG UBI_PYTHON_IMAGE=registry.access.redhat.com/ubi10/python-312-minimal:10.2
+ARG UBI_PYTHON_IMAGE=registry.access.redhat.com/ubi9/python-312-minimal:9.6
 ARG LEPTONICA_VERSION=1.87.0
 ARG TESSERACT_VERSION=5.5.2
 
@@ -73,7 +73,7 @@ FROM ${UBI_PYTHON_IMAGE}
 
 LABEL org.opencontainers.image.source="https://github.com/larocquemb/home-budget-pipeline" \
       org.opencontainers.image.title="home-budget-ocr-base" \
-      org.opencontainers.image.description="RHEL 10.2 Python 3.12 base with Tesseract OCR"
+      org.opencontainers.image.description="UBI 9.6 Python 3.12 base with Tesseract OCR"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

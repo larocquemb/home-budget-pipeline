@@ -1,6 +1,13 @@
 from pathlib import Path
 
 
+def test_ocr_base_uses_x86_64_v2_compatible_ubi9():
+    dockerfile = Path("Dockerfile.ocr-base").read_text(encoding="utf-8")
+
+    assert "ubi9/python-312-minimal:9.6" in dockerfile
+    assert "ubi10/" not in dockerfile
+
+
 def test_runtime_dependencies_are_cached_before_application_source():
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
 

@@ -46,8 +46,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/larocquemb/home-budget-ocr-base:rhel10.2
-            ghcr.io/larocquemb/home-budget-ocr-base:rhel10.2-tesseract5.5.2
+            ghcr.io/larocquemb/home-budget-ocr-base:rhel9.6
+            ghcr.io/larocquemb/home-budget-ocr-base:rhel9.6-tesseract5.5.2
           labels: |
             org.opencontainers.image.source=https://github.com/larocquemb/home-budget-pipeline
             org.opencontainers.image.revision=${{ github.sha }}
