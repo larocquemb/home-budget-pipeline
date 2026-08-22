@@ -9,6 +9,18 @@ from typing import Any, Callable, Optional
 from home_budget_pipeline.categorization.logic import normalize_for_match
 
 
+EXPENSE_SORT_COLUMNS = {
+    "expense_pk": "expense_pk",
+    "source": "source",
+    "order_date": "COALESCE(order_date, transaction_datetime::date)",
+    "store_name": "store_name",
+    "account_name": "account_name",
+    "expense_total": "expense_total",
+    "extraction_status": "extraction_status",
+    "requires_review": "requires_review",
+}
+
+
 @dataclass(frozen=True)
 class Page:
     rows: tuple[dict[str, Any], ...]
@@ -52,7 +64,11 @@ class LedgerQueryService:
         source: Optional[str] = None,
         merchant: Optional[str] = None,
         requires_review: Optional[bool] = None,
+        sort: str = "order_date",
+        direction: str = "desc",
     ) -> Page:
+        sort_expression = EXPENSE_SORT_COLUMNS.get(sort, EXPENSE_SORT_COLUMNS["order_date"])
+        sort_direction = "ASC" if direction.lower() == "asc" else "DESC"
         where: list[str] = []
         params: list[Any] = []
         if source:
@@ -77,7 +93,8 @@ class LedgerQueryService:
                    account_name, expense_total, extraction_status, requires_review
               FROM budget.analytics_expenses
               {predicate}
-             ORDER BY COALESCE(order_date, transaction_datetime::date) DESC NULLS LAST, expense_pk DESC
+             ORDER BY {sort_expression} {sort_direction} NULLS LAST,
+                      expense_pk {sort_direction}
              LIMIT %s OFFSET %s
         """
         params.extend([limit, offset])

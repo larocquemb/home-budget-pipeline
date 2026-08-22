@@ -20,7 +20,7 @@ if [ -z "${DATABASE_URL:-}" ]; then
 fi
 
 target=$(psql "$DATABASE_URL" -Atqc \
-  "SELECT current_database() || '|' || COALESCE(inet_server_addr()::text, 'local')")
+  "SELECT current_database() || '|' || COALESCE(host(inet_server_addr()), 'local')")
 case "$target" in
   home_budget\|127.0.0.1|home_budget\|::1|home_budget\|local) ;;
   *)
