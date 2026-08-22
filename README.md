@@ -115,6 +115,82 @@ Adjacent scanned pages can be merged while suppressing repeated boundary lines. 
 
 Receipt annotations can also preserve human marks such as category labels, separators, subtotals, checkmarks, or notes for later interpretation.
 
+### Scan-to-product detection
+
+Image-based PDFs are rendered at several resolutions. Tesseract evaluates raw
+and enhanced images with multiple page-segmentation modes, while optional
+PaddleOCR medium models contribute high-confidence product-description lines.
+The consensus layer aligns candidates using text similarity, occurrence order,
+and monetary amounts. It prefers Paddle text for aligned descriptions, retains
+Tesseract amounts and tax codes when necessary, rejects impossible dates, and
+uses a high-resolution Tesseract pass for small or damaged glyphs.
+
+After consensus, the parser extracts receipt fields and line items. Missing
+merchant, date, and total values can be recovered from a structured filename
+such as `20260214_sobeys_363_95.pdf`. The final consensus OCR and parsed receipt
+are cached by source hash and persisted as receipt evidence. Individual engine
+candidates are not currently persisted.
+
+`--refresh-ocr-cache` performs a complete refresh: it bypasses cached OCR,
+reprocesses receipts already marked complete, and replaces their canonical
+extraction and line items. For example:
+
+```bash
+HOME_BUDGET_PADDLE_OCR=true \
+home-budget-process-receipts /path/to/receipt/inbox \
+  --workers 1 \
+  --refresh-ocr-cache \
+  --db-dsn "$DATABASE_URL"
+```
+
+Paddle medium models have a substantial memory footprint, so the Kubernetes
+receipt processor uses one worker. Workers parallelize separate receipt files;
+they do not parallelize stages within one receipt.
+
+### AI-grounded product enrichment
+
+Product enrichment is a separate post-import stage. It does not alter the raw
+receipt evidence. The enrichment command first searches Brave using the literal
+OCR item name and the known retailer domain. If that result is weak, the AI
+product fallback generates fully expanded search queries from the merchant and
+possible OCR spellings. AI output is a search proposal, not product evidence.
+
+Each expanded query is sent back through Brave and must resolve to a recognized
+retailer product page with sufficient title/token agreement. Accepted results
+store the provider, search query, retailer URL, product title, confidence, and
+status in `budget.product_enrichment_results`. Weak or inconsistent matches are
+left in review.
+
+Strong verified product evidence can correct a one-glyph brand initialism. For
+example, a Sobeys page titled `Old El Paso ...` establishes the initialism
+`OEP`; an OCR item named `Cep Pic Med` may therefore be normalized to
+`Oep Pic Med` only when the retailer match confidence is at least `0.95`.
+The rule is based on the verified product title rather than a receipt-specific
+override.
+
+Run enrichment for the pending backlog:
+
+```bash
+DATABASE_URL="$HOME_BUDGET_PG_DSN" \
+BRAVE_SEARCH_API_KEY="$BRAVE_SEARCH_API_KEY" \
+OPENAI_API_KEY="$OPENAI_API_KEY" \
+home-budget-enrich-products --limit 100 --threshold 0.85 --write-db
+```
+
+For a targeted review or retry, repeat `--item-id` as needed:
+
+```bash
+home-budget-enrich-products \
+  --item-id 1656 \
+  --item-id 1657 \
+  --threshold 0.85 \
+  --write-db
+```
+
+The product-query fallback defaults to `gpt-5.6-terra` and can be changed with
+`AI_PRODUCT_MODEL`. Product enrichment currently runs as an explicit command;
+receipt import does not automatically invoke external AI or Brave search.
+
 ---
 
 ## 4. Canonical Expenses and Line Items
