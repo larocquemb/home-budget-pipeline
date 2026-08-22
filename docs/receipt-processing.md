@@ -12,6 +12,9 @@ home-budget-process-receipts /data/receipts/raw/scanned/inbox --workers 2
 
 Configuration can be supplied with `DATABASE_URL`, `RECEIPT_SOURCE_ROOT`, and `HOME_BUDGET_OCR_CACHE`. The process reports discovered, skipped, succeeded, failed, and review-required counts. A PostgreSQL advisory lock prevents overlapping backlog runs.
 
+Pass `--refresh-ocr-cache` to bypass cached OCR and reprocess every discovered
+receipt, including receipts already marked succeeded or review-required.
+
 ## Kubernetes
 
 `k8s/receipt-processor-cronjob.yaml` runs every 15 minutes. `concurrencyPolicy: Forbid` prevents Kubernetes from starting a second scheduled job while the previous job is still running, and the PostgreSQL advisory lock provides an additional guard against manual or accidental concurrent runs.
