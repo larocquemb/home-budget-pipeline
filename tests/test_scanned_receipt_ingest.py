@@ -63,6 +63,11 @@ SUBTOTAL 6.88
         self.assertFalse(scan._has_literal_valid_timestamp("SALE 6/31,'26 10:07"))
         self.assertTrue(scan._has_literal_valid_timestamp("SALE 5/31/26 10:07"))
 
+    def test_ocr_candidate_scoring_prefers_recognizable_receipt_fields(self):
+        sparse_noise = "STORE 123 random text"
+        receipt = "TRANSACTION 123\n5/31/26 10:07\nSUBTOTAL 10.00\nGST 0.50\nTOTAL 10.50"
+        self.assertGreater(scan._ocr_candidate_score(receipt), scan._ocr_candidate_score(sparse_noise))
+
     def test_ocr_preprocessing_crops_scanner_whitespace(self):
         from PIL import Image, ImageDraw
 

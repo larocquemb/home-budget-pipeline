@@ -143,7 +143,7 @@ def _run_tesseract(path: Path, psm: str = "4") -> str:
 
 def _prepare_ocr_image(image):
     """Crop scanner whitespace and enhance faint thermal-receipt printing."""
-    from PIL import Image, ImageFilter, ImageOps
+    from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
     gray = image.convert("L")
     width, height = gray.size
@@ -171,6 +171,7 @@ def _prepare_ocr_image(image):
             min(height, max(ys) + margin + 1),
         ))
     gray = ImageOps.autocontrast(gray, cutoff=1)
+    gray = ImageEnhance.Contrast(gray).enhance(3.0)
     if gray.width < 1800:
         gray = gray.resize((gray.width * 2, gray.height * 2))
     return gray.filter(ImageFilter.UnsharpMask(radius=1, percent=180, threshold=2))
@@ -178,8 +179,11 @@ def _prepare_ocr_image(image):
 
 def _has_literal_valid_timestamp(text: str) -> bool:
     """Return true only for a valid numeric date printed beside a time."""
-    pattern = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/|,\s*')[,']*(20\d{2}|\d{2})\s+(\d{1,2}):(\d{2})\b")
-    for match in pattern.finditer(text):
+    from .datetime import MDY_RE
+
+    for match in MDY_RE.finditer(text):
+        if match.group(4) is None:
+            continue
         year = int(match.group(3))
         if year < 100:
             year += 2000
@@ -191,6 +195,17 @@ def _has_literal_valid_timestamp(text: str) -> bool:
     return False
 
 
+def _ocr_candidate_score(text: str) -> int:
+    """Score OCR using receipt structure without merchant-specific assumptions."""
+    score = min(200, len(re.sub(r"\W", "", text)) // 5)
+    if _has_literal_valid_timestamp(text):
+        score += 500
+    score += min(5, len(MONEY_RE.findall(text))) * 20
+    score += min(3, len(re.findall(r"\b(?:sub\s*total|total|tax|gst|pst|hst)\b", text, re.I))) * 40
+    score += min(2, len(re.findall(r"\b(?:receipt|transaction|invoice|order|auth)\b", text, re.I))) * 25
+    return score
+
+
 def _ocr_pdf_pages(path: Path) -> List[str]:
     try:
         import pypdfium2 as pdfium  # type: ignore
@@ -200,14 +215,25 @@ def _ocr_pdf_pages(path: Path) -> List[str]:
     doc = pdfium.PdfDocument(str(path))
     try:
         for idx in range(len(doc)):
-            image = _prepare_ocr_image(doc[idx].render(scale=200 / 72).to_pil())
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-            try:
-                image.save(tmp_path)
-                pages.append(_run_tesseract(tmp_path))
-            finally:
-                tmp_path.unlink(missing_ok=True)
+            best_text = ""
+            # Thermal-printer glyphs can become less accurate when rendered at
+            # higher resolution. Retry at a second resolution only when the
+            # first pass has no calendar-valid timestamp.
+            for dpi in (150, 200):
+                image = _prepare_ocr_image(doc[idx].render(scale=dpi / 72).to_pil())
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    tmp_path = Path(tmp.name)
+                try:
+                    image.save(tmp_path)
+                    candidates = [_run_tesseract(tmp_path, psm) for psm in ("6", "11")]
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+                candidate = max(candidates, key=_ocr_candidate_score)
+                if _ocr_candidate_score(candidate) > _ocr_candidate_score(best_text):
+                    best_text = candidate
+                if _has_literal_valid_timestamp(best_text):
+                    break
+            pages.append(best_text)
     finally:
         doc.close()
     return pages
