@@ -24,6 +24,7 @@ RUN mkdir -p src/home_budget_pipeline \
 COPY src ./src
 COPY sql ./sql
 COPY config ./config
+COPY scripts/stage_db_bootstrap.sh ./scripts/stage_db_bootstrap.sh
 
 RUN python -m pip install --no-cache-dir --no-deps --no-build-isolation --force-reinstall . \
     && mkdir -p /data \
