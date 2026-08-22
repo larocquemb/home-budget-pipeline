@@ -17,3 +17,13 @@ def test_project_layer_does_not_resolve_dependencies_again():
     project_layer = dockerfile[dockerfile.index("COPY src ./src") :]
 
     assert "--no-deps" in project_layer
+
+
+def test_paddle_uses_headless_opencv_before_model_preload():
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    uninstall_gui_opencv = dockerfile.index("pip uninstall -y opencv-contrib-python")
+    install_headless_opencv = dockerfile.index("opencv-contrib-python-headless==4.10.0.84")
+    paddle_preload = dockerfile.index("from paddleocr import PaddleOCR")
+
+    assert uninstall_gui_opencv < install_headless_opencv < paddle_preload
