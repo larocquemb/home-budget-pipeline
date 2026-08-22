@@ -13,6 +13,11 @@ USER 0
 
 WORKDIR /opt/app-root/src
 
+# Paddle's CPU wheel links against the GNU OpenMP runtime. The slim OCR base
+# deliberately omits compiler runtimes, so install only the shared library.
+RUN microdnf install -y libgomp \
+    && microdnf clean all
+
 COPY pyproject.toml README.md ./
 
 # Install third-party dependencies before copying application source so this
