@@ -32,6 +32,7 @@ spec:
                 - /data/receipts/raw/scanned/inbox
                 - --workers
                 - "1"
+                - --refresh-ocr-cache
               env:
                 - name: DATABASE_URL
                   valueFrom:
