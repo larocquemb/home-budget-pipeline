@@ -49,6 +49,15 @@ CREATE TABLE budget.expense_category_aliases (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE budget.merchant_aliases (
+    id BIGSERIAL PRIMARY KEY,
+    alias_name TEXT NOT NULL UNIQUE,
+    merchant_name TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE budget.expense_category_mappings (
     id BIGSERIAL PRIMARY KEY,
     source TEXT,

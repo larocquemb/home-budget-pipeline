@@ -18,6 +18,8 @@ The raw OCR text and page text are retained in raw_payload for later reprocessin
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+from difflib import SequenceMatcher
 import hashlib
 import json
 import os
@@ -391,8 +393,43 @@ def normalize_merchant(raw: Optional[str]) -> Optional[str]:
     return line or None
 
 
+def _merchant_name_from_store_header(text: str, header: str) -> str:
+    """Recover a merchant spelling from repeated, similar words on a receipt."""
+    marker = re.search(r"\b(?:store|location|branch)\b", header, re.I)
+    prefix = header[:marker.start()] if marker else header
+    prefix_words = re.findall(r"[A-Za-z][A-Za-z'’]{3,}", prefix)
+    if not prefix_words:
+        return header
+    anchor = max(prefix_words, key=len)
+    anchor_norm = re.sub(r"[^a-z]", "", anchor.lower())
+    variants: Counter[str] = Counter()
+    display: dict[str, str] = {}
+    for word in re.findall(r"[A-Za-z][A-Za-z'’]{3,}", text):
+        normalized = re.sub(r"[^a-z]", "", word.lower().removesuffix("s") if word.lower().endswith("'s") else word.lower())
+        if normalized and SequenceMatcher(None, anchor_norm, normalized).ratio() >= 0.72:
+            variants[normalized] += 1
+            display.setdefault(normalized, word.strip("'’"))
+    if variants:
+        winner, support = max(variants.items(), key=lambda item: (item[1], SequenceMatcher(None, anchor_norm, item[0]).ratio()))
+        if support >= 2:
+            return display[winner]
+    return anchor
+
+
 def extract_merchant(text: str) -> Optional[str]:
-    for raw in text.splitlines()[:12]:
+    header_lines = text.splitlines()[:12]
+    # Prefer a recognized merchant anywhere in the header over a preceding
+    # slogan or tagline.
+    for raw in header_lines:
+        line = normalize_line(raw)
+        for pattern, replacement in MERCHANT_ALIASES:
+            if pattern.search(line):
+                return replacement or normalize_merchant(line)
+    for raw in header_lines:
+        line = normalize_line(raw)
+        if re.search(r"\b(?:store|location|branch)\s*#?\s*[A-Z0-9-]*", line, re.I) and re.search(r"[A-Za-z]{3}", line):
+            return _merchant_name_from_store_header(text, line)
+    for raw in header_lines:
         line = normalize_line(raw)
         if not line or MONEY_RE.search(line) or len(line) > 70:
             continue

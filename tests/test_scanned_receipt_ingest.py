@@ -108,6 +108,14 @@ SUBTOTAL 6.88
         self.assertEqual(scan.normalize_merchant("SHOPPERS &"), "Shoppers Drug Mart")
         self.assertEqual(scan.normalize_merchant("Sobeys Sage Creek"), "Sobeys Sage Creek")
 
+    def test_known_merchant_wins_over_slogan_in_receipt_header(self):
+        text = """Everything to create anything
+MICHFIELS STORE #3907
+SIGN-UP AT MICHAELS.CA
+THANK YOU FOR SHOPPING AT MICHAELS
+Policies are available at Michaels.ca"""
+        self.assertEqual(scan.extract_merchant(text), "MICHAELS")
+
     def test_review_reasons_identify_missing_required_fields(self):
         receipt = scan.ScannedReceipt(
             path="receipt.pdf", source_reference="receipt.pdf", source_sha256="abc",

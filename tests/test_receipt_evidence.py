@@ -2,10 +2,34 @@ import unittest
 from datetime import datetime
 from types import SimpleNamespace
 
-from home_budget_pipeline.receipts.evidence import candidate_score
+from home_budget_pipeline.receipts.evidence import candidate_score, resolve_merchant_alias
+
+
+class AliasCursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def execute(self, _sql):
+        return None
+
+    def fetchall(self):
+        return [("michfiels", "Michaels")]
+
+
+class AliasConnection:
+    def cursor(self):
+        return AliasCursor()
 
 
 class ReceiptEvidenceTests(unittest.TestCase):
+    def test_database_merchant_alias_resolves_ocr_candidate(self):
+        self.assertEqual(
+            resolve_merchant_alias(AliasConnection(), "MICHFIELS STORE #3907"),
+            "Michaels",
+        )
     def receipt(self, **overrides):
         values = dict(
             receipt_id="ABC123",
