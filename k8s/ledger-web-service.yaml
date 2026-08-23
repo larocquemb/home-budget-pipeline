@@ -34,7 +34,7 @@ spec:
           image: ghcr.io/larocquemb/home-budget-pipeline:KAN-68
           imagePullPolicy: Always
           args:
-            - home_budget_pipeline.web.app
+            - home_budget_pipeline.web.receipt_app
           env:
             - name: PORT
               value: "8080"
