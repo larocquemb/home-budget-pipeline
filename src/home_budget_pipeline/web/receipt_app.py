@@ -1,9 +1,4 @@
-"""Receipt-first entry point for the BrownRook Ledger web application.
-
-The canonical receipt resource is keyed by the source SHA-256 from ingest.receipts.
-Existing expense routes remain available for accounting-only records, while receipt-backed
-expense/evidence detail URLs redirect to the stable receipt URL.
-"""
+"""Receipt-first entry point for the BrownRook Ledger web application."""
 
 from __future__ import annotations
 
@@ -35,7 +30,6 @@ _EVIDENCE_DETAIL_RE = re.compile(rf"^{re.escape(BASE_PATH)}/evidence/(\d+)$")
 
 
 def receipt_url(source_sha256: str) -> str:
-    """Return the canonical URL for a receipt identity."""
     return f"{BASE_PATH}/receipts/{quote(source_sha256, safe='')}"
 
 
@@ -44,34 +38,30 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int) -> Pa
     total_count = int(count_rows[0]["total_count"]) if count_rows else 0
     rows = service._fetch(
         """
-        SELECT
-            r.source_sha256,
-            r.source_reference,
-            s.status AS processing_status,
-            s.attempts,
-            re.id AS evidence_id,
-            re.expense_pk,
-            COALESCE(re.merchant, e.store_name) AS merchant,
-            COALESCE(re.transaction_datetime, e.transaction_datetime,
-                     e.order_date::timestamp) AS transaction_datetime,
-            COALESCE(re.total, e.expense_total) AS total,
-            COALESCE(re.extraction_status, e.extraction_status) AS extraction_status,
-            re.extraction_confidence
-        FROM ingest.receipts r
-        LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
-        LEFT JOIN LATERAL (
-            SELECT id, expense_pk, merchant, transaction_datetime, total,
-                   extraction_status, extraction_confidence
-            FROM budget.receipt_evidence
-            WHERE source_sha256 = r.source_sha256
-            ORDER BY is_primary_source DESC, id
-            LIMIT 1
-        ) re ON TRUE
-        LEFT JOIN budget.expenses e ON e.id = re.expense_pk
-        ORDER BY COALESCE(re.transaction_datetime, e.transaction_datetime,
-                          e.order_date::timestamp) DESC NULLS LAST,
-                 r.source_reference DESC
-        LIMIT %s OFFSET %s
+        SELECT r.source_sha256, r.source_reference,
+               s.status AS processing_status, s.attempts,
+               re.id AS evidence_id, re.expense_pk,
+               COALESCE(re.merchant, e.store_name) AS merchant,
+               COALESCE(re.transaction_datetime, e.transaction_datetime,
+                        e.order_date::timestamp) AS transaction_datetime,
+               COALESCE(re.total, e.expense_total) AS total,
+               COALESCE(re.extraction_status, e.extraction_status) AS extraction_status,
+               re.extraction_confidence
+          FROM ingest.receipts r
+          LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
+          LEFT JOIN LATERAL (
+              SELECT id, expense_pk, merchant, transaction_datetime, total,
+                     extraction_status, extraction_confidence
+                FROM budget.receipt_evidence
+               WHERE source_sha256 = r.source_sha256
+               ORDER BY is_primary_source DESC, id
+               LIMIT 1
+          ) re ON TRUE
+          LEFT JOIN budget.expenses e ON e.id = re.expense_pk
+         ORDER BY COALESCE(re.transaction_datetime, e.transaction_datetime,
+                           e.order_date::timestamp) DESC NULLS LAST,
+                  r.source_reference DESC
+         LIMIT %s OFFSET %s
         """,
         (limit, offset),
     )
@@ -88,16 +78,16 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
                s.status AS processing_status, s.attempts, s.last_error,
                s.first_attempted_at, s.last_attempted_at, s.completed_at,
                re.id AS evidence_id, re.expense_pk
-        FROM ingest.receipts r
-        LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
-        LEFT JOIN LATERAL (
-            SELECT id, expense_pk
-            FROM budget.receipt_evidence
-            WHERE source_sha256 = r.source_sha256
-            ORDER BY is_primary_source DESC, id
-            LIMIT 1
-        ) re ON TRUE
-        WHERE r.source_sha256 = %s
+          FROM ingest.receipts r
+          LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
+          LEFT JOIN LATERAL (
+              SELECT id, expense_pk
+                FROM budget.receipt_evidence
+               WHERE source_sha256 = r.source_sha256
+               ORDER BY is_primary_source DESC, id
+               LIMIT 1
+          ) re ON TRUE
+         WHERE r.source_sha256 = %s
         """,
         (source_sha256,),
     )
@@ -108,6 +98,26 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
     evidence = service.receipt_evidence(int(evidence_id)) if evidence_id is not None else None
     expense_pk = receipt.get("expense_pk") or (evidence or {}).get("expense_pk")
     expense = service.expense_detail(int(expense_pk)) if expense_pk is not None else None
+    if expense and expense.get("items"):
+        enrichment_rows = service._fetch(
+            """
+            SELECT expense_item_id, provider, search_query, candidate_title,
+                   candidate_url, confidence, status, searched_at
+              FROM budget.product_enrichment_results
+             WHERE expense_item_id = ANY(%s)
+            """,
+            ([int(item["expense_item_id"]) for item in expense["items"]],),
+        )
+        enrichment_by_item = {
+            int(row["expense_item_id"]): dict(row) for row in enrichment_rows
+        }
+        expense["items"] = tuple(
+            {
+                **dict(item),
+                "enrichment": enrichment_by_item.get(int(item["expense_item_id"])),
+            }
+            for item in expense["items"]
+        )
     receipt["evidence"] = evidence
     receipt["expense"] = expense
     return receipt
@@ -117,10 +127,10 @@ def _receipt_for_expense(service: LedgerQueryService, expense_pk: int) -> str | 
     rows = service._fetch(
         """
         SELECT source_sha256
-        FROM budget.receipt_evidence
-        WHERE expense_pk = %s
-        ORDER BY is_primary_source DESC, id
-        LIMIT 1
+          FROM budget.receipt_evidence
+         WHERE expense_pk = %s
+         ORDER BY is_primary_source DESC, id
+         LIMIT 1
         """,
         (expense_pk,),
     )
@@ -137,7 +147,6 @@ def _receipt_for_evidence(service: LedgerQueryService, evidence_id: int) -> str 
 
 @app.middleware("http")
 async def receipt_first_redirects(request: Request, call_next):
-    """Make receipt-backed detail URLs resolve to the canonical receipt resource."""
     if request.method == "GET":
         path = request.url.path
         expense_match = _EXPENSE_DETAIL_RE.fullmatch(path)
@@ -157,7 +166,6 @@ async def receipt_first_redirects(request: Request, call_next):
 
 @app.get(f"{BASE_PATH}/dashboard", response_class=HTMLResponse)
 def dashboard(identity: dict[str, str] = Depends(authenticated_identity)) -> str:
-    """Preserve access to the original accounting/review dashboard."""
     return ledger_home(identity)
 
 
@@ -216,6 +224,30 @@ def receipts_page(
     return page("Receipts", body, base_path=BASE_PATH, identity=identity)
 
 
+def _enrichment_html(item: dict[str, Any]) -> str:
+    enrichment = item.get("enrichment") or {}
+    if not enrichment:
+        return '<span class="muted">Not enriched</span>'
+    provider = esc(enrichment.get("provider"))
+    status = esc(enrichment.get("status"))
+    confidence = enrichment.get("confidence")
+    confidence_text = f"{float(confidence) * 100:.1f}%" if confidence is not None else ""
+    query = esc(enrichment.get("search_query"))
+    candidate = esc(enrichment.get("candidate_title"))
+    candidate_url = str(enrichment.get("candidate_url") or "")
+    product_link = (
+        f'<a href="{html.escape(candidate_url, quote=True)}" target="_blank" rel="noopener">{candidate or "Verified product"}</a>'
+        if candidate_url
+        else candidate
+    )
+    details = (
+        f"<strong>{provider}</strong> · {status} · {esc(confidence_text)}"
+        + (f"<br>{product_link}" if product_link else "")
+        + (f"<details><summary>Search query</summary><code>{query}</code></details>" if query else "")
+    )
+    return details
+
+
 @app.get(f"{BASE_PATH}/receipts/{{source_sha256}}", response_class=HTMLResponse)
 def receipt_page(
     source_sha256: str,
@@ -255,6 +287,7 @@ def receipt_page(
             "<tr>"
             f"<td>{esc(item.get('item_name'))}</td>"
             f"<td>{esc(item.get('product_description'))}</td>"
+            f"<td>{_enrichment_html(dict(item))}</td>"
             f"<td>{esc(item.get('budget_category'))}</td>"
             f"<td>{esc(item.get('category_group_name'))}</td>"
             f'<td class="num">{money(item.get("line_total"))}</td>'
@@ -263,7 +296,8 @@ def receipt_page(
         )
     items_html = (
         "<h2>Line items</h2><table><thead><tr><th>Receipt item</th><th>Description</th>"
-        "<th>Category</th><th>Group</th><th>Amount</th><th>Category source</th></tr></thead><tbody>"
+        "<th>Enrichment</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th>"
+        "</tr></thead><tbody>"
         + "".join(item_rows)
         + "</tbody></table>"
     )
