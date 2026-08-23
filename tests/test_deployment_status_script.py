@@ -19,7 +19,9 @@ def test_deployment_status_covers_ci_argocd_jobs_and_pods():
     assert "Sync Status:   %s" in text
     assert "Health Status: %s" in text
     assert 'LEDGER_DEPLOYMENT:-ledger-web' in text
-    assert 'docker buildx imagetools inspect "$configured_image"' in text
+    assert 'crane digest' in text
+    assert '--username "$registry_username"' in text
+    assert '--password "$registry_password"' in text
     assert 'application_commit="${application_commit:0:7}"' in text
     assert "GHCR digest:        %.7s" in text
     assert "Pod digest:         %.7s" in text
@@ -38,5 +40,6 @@ def test_deployment_status_has_safe_configurable_defaults():
     assert 'ARGO_APP:-ledger' in text
     assert 'KUBE_NAMESPACE:-home-budget' in text
     assert 'KUBECONFIG:-$HOME/.kube/config-brownrook' in text
+    assert 'docker buildx' not in text
     assert "delete" not in text
     assert "apply" not in text
