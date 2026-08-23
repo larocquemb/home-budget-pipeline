@@ -26,14 +26,7 @@ def receipt_patterns(receipt: str) -> tuple[str, ...]:
     return (f"%{name}%",)
 
 
-def _merchant_clause(merchant: str) -> tuple[str, tuple[object, ...]]:
-    merchant_filter = merchant.strip()
-    if not merchant_filter:
-        return "", ()
-    return " AND e.store_name ILIKE %s", (f"%{merchant_filter}%",)
-
-
-def resolve_item_ids(dsn: str, receipt: str, merchant: str = "") -> tuple[int, ...]:
+def resolve_item_ids(dsn: str, receipt: str) -> tuple[int, ...]:
     import psycopg
 
     value = receipt.strip()
@@ -41,8 +34,8 @@ def resolve_item_ids(dsn: str, receipt: str, merchant: str = "") -> tuple[int, .
         raise ValueError("receipt selector is required")
 
     with psycopg.connect(dsn) as conn:
-        # Numeric selectors are the database receipt/expense id. They are
-        # already unique, so merchant is deliberately ignored.
+        # Numeric selectors are the database receipt/expense id. The receipt's
+        # stored store_name is the sole merchant context used downstream.
         if value.isdigit():
             rows = conn.execute(
                 """
@@ -57,7 +50,6 @@ def resolve_item_ids(dsn: str, receipt: str, merchant: str = "") -> tuple[int, .
             return tuple(int(row[0]) for row in rows)
 
         patterns = receipt_patterns(value)
-        merchant_sql, merchant_params = _merchant_clause(merchant)
         clauses: list[str] = []
         params: list[object] = []
         for pattern in patterns:
@@ -71,9 +63,6 @@ def resolve_item_ids(dsn: str, receipt: str, merchant: str = "") -> tuple[int, .
             )
             params.extend((pattern, pattern, pattern))
         where = " OR ".join(f"({clause})" for clause in clauses)
-        if merchant_sql:
-            where = f"({where}){merchant_sql}"
-            params.extend(merchant_params)
         rows = conn.execute(
             f"""
             SELECT i.id
@@ -90,7 +79,6 @@ def resolve_item_ids(dsn: str, receipt: str, merchant: str = "") -> tuple[int, .
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--receipt", required=True)
-    parser.add_argument("--merchant", default="")
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--threshold", type=float, default=0.85)
     parser.add_argument("--write-db", action="store_true")
@@ -101,14 +89,9 @@ def main() -> int:
     if not dsn or not api_key:
         raise RuntimeError("DATABASE_URL and BRAVE_SEARCH_API_KEY are required")
 
-    item_ids = resolve_item_ids(dsn, args.receipt, args.merchant)
+    item_ids = resolve_item_ids(dsn, args.receipt)
     if not item_ids:
-        merchant_text = (
-            f" for merchant {args.merchant!r}"
-            if args.merchant and not args.receipt.strip().isdigit()
-            else ""
-        )
-        raise RuntimeError(f"No line items found for receipt {args.receipt!r}{merchant_text}")
+        raise RuntimeError(f"No line items found for receipt {args.receipt!r}")
 
     result = run(
         dsn=dsn,
@@ -120,7 +103,6 @@ def main() -> int:
     )
     payload = {
         "receipt": args.receipt,
-        "merchant": None if args.receipt.strip().isdigit() else (args.merchant or None),
         "item_ids": list(item_ids),
         **result,
     }
