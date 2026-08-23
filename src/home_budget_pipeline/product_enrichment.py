@@ -44,6 +44,11 @@ def retailer_domain(merchant: str) -> Optional[str]:
     return None
 
 
+def normalized_cache_item_name(item_name: str) -> str:
+    """Stable key for retailer receipt text before enrichment mutates display fields."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", (item_name or "").lower())).strip()
+
+
 def product_query(item_name: str, merchant: str) -> Optional[str]:
     domain = retailer_domain(merchant)
     if not domain:
@@ -79,11 +84,7 @@ def candidate_score(item_name: str, domain: str, title: str, url: str, snippet: 
     return round(score, 4)
 
 
-def normalized_item_name_from_verified_product(
-    item_name: str,
-    product_title: str,
-    confidence: float,
-) -> Optional[str]:
+def normalized_item_name_from_verified_product(item_name: str, product_title: str, confidence: float) -> Optional[str]:
     """Correct a one-glyph brand initialism using strongly verified product evidence."""
     if confidence < 0.95:
         return None
@@ -106,12 +107,7 @@ class SearchResult:
     score: float
 
 
-def ai_product_queries(
-    item_name: str,
-    merchant: str,
-    *,
-    client: object | None = None,
-) -> tuple[str, ...]:
+def ai_product_queries(item_name: str, merchant: str, *, client: object | None = None) -> tuple[str, ...]:
     """Ask AI for search expansions; returned text is never product evidence."""
     if os.getenv("ENABLE_AI_PRODUCT_FALLBACK", "1").lower() not in {"1", "true", "yes"}:
         return ()
@@ -125,16 +121,8 @@ def ai_product_queries(
             return ()
         client = OpenAI(api_key=api_key, timeout=float(os.getenv("AI_TIMEOUT_SECONDS", "12")), max_retries=1)
     schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["queries"],
-        "properties": {
-            "queries": {
-                "type": "array",
-                "maxItems": 3,
-                "items": {"type": "string"},
-            }
-        },
+        "type": "object", "additionalProperties": False, "required": ["queries"],
+        "properties": {"queries": {"type": "array", "maxItems": 3, "items": {"type": "string"}}},
     }
     spelling_variants = [item_name]
     first_token = item_name.split(maxsplit=1)
@@ -154,43 +142,25 @@ def ai_product_queries(
         f"Merchant: {merchant}\nPossible OCR spellings: {'; '.join(spelling_variants)}"
     )
     forbidden = {
-        token.lower()
-        for variant in spelling_variants
-        for token in re.findall(r"[A-Za-z0-9]+", variant)
+        token.lower() for variant in spelling_variants for token in re.findall(r"[A-Za-z0-9]+", variant)
         if len(token) <= 4
     }
     for attempt in range(2):
         try:
             response = client.responses.create(
-                model=os.getenv("AI_PRODUCT_MODEL", "gpt-5.6-terra"),
-                input=prompt,
-                reasoning={"effort": "low"},
-                max_output_tokens=400,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "product_search_queries",
-                        "strict": True,
-                        "schema": schema,
-                    }
-                },
+                model=os.getenv("AI_PRODUCT_MODEL", "gpt-5.6-terra"), input=prompt,
+                reasoning={"effort": "low"}, max_output_tokens=400,
+                text={"format": {"type": "json_schema", "name": "product_search_queries", "strict": True, "schema": schema}},
             )
             payload = json.loads((response.output_text or "").strip())
-            queries = tuple(
-                dict.fromkeys(
-                    query.strip()
-                    for query in payload.get("queries", ())
-                    if isinstance(query, str)
-                    and query.strip()
-                    and not (forbidden & set(re.findall(r"[a-z0-9]+", query.lower())))
-                )
-            )[:3]
+            queries = tuple(dict.fromkeys(
+                query.strip() for query in payload.get("queries", ())
+                if isinstance(query, str) and query.strip()
+                and not (forbidden & set(re.findall(r"[a-z0-9]+", query.lower())))
+            ))[:3]
             if queries or attempt:
                 return queries
-            prompt += (
-                "\nYour previous proposals retained receipt abbreviations. Try again and fully "
-                "expand the likely brand and product words; return an empty list if you cannot."
-            )
+            prompt += "\nYour previous proposals retained receipt abbreviations. Try again and fully expand the likely brand and product words; return an empty list if you cannot."
         except Exception:
             return ()
     return ()
@@ -208,31 +178,14 @@ def brave_search(api_key: str, query: str, item_name: str, domain: str) -> Optio
     return max(candidates, key=lambda result: result.score, default=None)
 
 
-def run(
-    *,
-    dsn: str,
-    api_key: str,
-    limit: int,
-    threshold: float,
-    write_db: bool,
-    item_ids: tuple[int, ...] = (),
-) -> dict[str, int]:
+def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool, item_ids: tuple[int, ...] = ()) -> dict[str, int]:
     import psycopg
     from psycopg.rows import dict_row
 
-    stats = {
-        "considered": 0,
-        "searched": 0,
-        "ai_queries": 0,
-        "ai_expanded": 0,
-        "accepted": 0,
-        "review": 0,
-        "unsupported": 0,
-    }
+    stats = {"considered": 0, "db_hits": 0, "searched": 0, "ai_queries": 0, "ai_expanded": 0, "accepted": 0, "review": 0, "unsupported": 0}
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         result_filter = "" if item_ids else """AND NOT EXISTS (
-                   SELECT 1 FROM budget.product_enrichment_results r
-                    WHERE r.expense_item_id=i.id
+                   SELECT 1 FROM budget.product_enrichment_results r WHERE r.expense_item_id=i.id
                )"""
         item_filter = "AND i.id = ANY(%s)" if item_ids else ""
         missing_filter = "TRUE" if item_ids else "(i.product_description IS NULL OR i.product_url IS NULL)"
@@ -243,62 +196,70 @@ def run(
         rows = conn.execute(f"""
             SELECT i.id, i.item_name, e.store_name
               FROM budget.expense_items i JOIN budget.expenses e ON e.id=i.expense_pk
-             WHERE {missing_filter}
-               {result_filter}
-               AND (e.store_name ILIKE ANY(%s))
-               {item_filter}
+             WHERE {missing_filter} {result_filter}
+               AND (e.store_name ILIKE ANY(%s)) {item_filter}
              ORDER BY i.id LIMIT %s
         """, params).fetchall()
         cache: dict[str, Optional[SearchResult]] = {}
         expansion_cache: dict[tuple[str, str], tuple[str, ...]] = {}
         for row in rows:
             stats["considered"] += 1
-            query = product_query(row["item_name"], row["store_name"] or "")
-            domain = retailer_domain(row["store_name"] or "")
+            original_item_name = row["item_name"]
+            merchant = row["store_name"] or ""
+            domain = retailer_domain(merchant)
+            query = product_query(original_item_name, merchant)
             if not query or not domain:
                 stats["unsupported"] += 1
                 continue
-            if query not in cache:
-                previous = conn.execute("""
-                    SELECT candidate_title, candidate_url, confidence
-                      FROM budget.product_enrichment_results
-                     WHERE provider='brave' AND search_query=%s
-                       AND candidate_url IS NOT NULL
-                     ORDER BY searched_at DESC LIMIT 1
-                """, (query,)).fetchone()
-                if previous:
-                    cache[query] = SearchResult(
-                        previous["candidate_title"] or "",
-                        previous["candidate_url"], "", float(previous["confidence"]),
-                    )
-                else:
-                    cache[query] = brave_search(api_key, query, row["item_name"], domain)
-                    stats["searched"] += 1
-            result = cache[query]
-            selected_query = query
-            provider = "brave"
-            if not result or result.score < threshold:
-                expansion_key = (row["item_name"], row["store_name"] or "")
-                if expansion_key not in expansion_cache:
-                    expansion_cache[expansion_key] = ai_product_queries(*expansion_key)
-                    stats["ai_queries"] += len(expansion_cache[expansion_key])
-                for expansion in expansion_cache[expansion_key]:
-                    expanded_query = f"site:{domain} {expansion}"
-                    if expanded_query not in cache:
-                        cache[expanded_query] = brave_search(
-                            api_key,
-                            expanded_query,
-                            expansion,
-                            domain,
-                        )
+
+            item_key = normalized_cache_item_name(original_item_name)
+            previous = conn.execute("""
+                SELECT provider, search_query, candidate_title, candidate_url, confidence
+                  FROM budget.product_enrichment_cache
+                 WHERE merchant_key=%s AND item_name_norm=%s
+                   AND status='accepted' AND confidence >= %s
+                 ORDER BY confidence DESC, verified_at DESC LIMIT 1
+            """, (domain, item_key, threshold)).fetchone()
+
+            if previous:
+                result = SearchResult(previous["candidate_title"], previous["candidate_url"], "", float(previous["confidence"]))
+                selected_query = previous["search_query"]
+                provider = "db-cache"
+                stats["db_hits"] += 1
+            else:
+                if query not in cache:
+                    old_search = conn.execute("""
+                        SELECT candidate_title, candidate_url, confidence
+                          FROM budget.product_enrichment_results
+                         WHERE provider='brave' AND search_query=%s AND candidate_url IS NOT NULL
+                         ORDER BY searched_at DESC LIMIT 1
+                    """, (query,)).fetchone()
+                    if old_search:
+                        cache[query] = SearchResult(old_search["candidate_title"] or "", old_search["candidate_url"], "", float(old_search["confidence"]))
+                    else:
+                        cache[query] = brave_search(api_key, query, original_item_name, domain)
                         stats["searched"] += 1
-                    expanded_result = cache[expanded_query]
-                    if expanded_result and (not result or expanded_result.score > result.score):
-                        result = expanded_result
-                        selected_query = expanded_query
-                        provider = "brave+ai"
-                if provider == "brave+ai":
-                    stats["ai_expanded"] += 1
+                result = cache[query]
+                selected_query = query
+                provider = "brave"
+                if not result or result.score < threshold:
+                    expansion_key = (original_item_name, merchant)
+                    if expansion_key not in expansion_cache:
+                        expansion_cache[expansion_key] = ai_product_queries(*expansion_key)
+                        stats["ai_queries"] += len(expansion_cache[expansion_key])
+                    for expansion in expansion_cache[expansion_key]:
+                        expanded_query = f"site:{domain} {expansion}"
+                        if expanded_query not in cache:
+                            cache[expanded_query] = brave_search(api_key, expanded_query, expansion, domain)
+                            stats["searched"] += 1
+                        expanded_result = cache[expanded_query]
+                        if expanded_result and (not result or expanded_result.score > result.score):
+                            result = expanded_result
+                            selected_query = expanded_query
+                            provider = "brave+ai"
+                    if provider == "brave+ai":
+                        stats["ai_expanded"] += 1
+
             status = "accepted" if result and result.score >= threshold else "review"
             stats[status] += 1
             if write_db:
@@ -308,23 +269,25 @@ def run(
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (expense_item_id) DO UPDATE SET
                         provider=EXCLUDED.provider, search_query=EXCLUDED.search_query,
-                        candidate_title=EXCLUDED.candidate_title,
-                        candidate_url=EXCLUDED.candidate_url, confidence=EXCLUDED.confidence,
-                        status=EXCLUDED.status, searched_at=NOW()
+                        candidate_title=EXCLUDED.candidate_title, candidate_url=EXCLUDED.candidate_url,
+                        confidence=EXCLUDED.confidence, status=EXCLUDED.status, searched_at=NOW()
                 """, (row["id"], provider, selected_query, result.title if result else None, result.url if result else None, result.score if result else 0, status))
                 if status == "accepted":
-                    normalized_name = normalized_item_name_from_verified_product(
-                        row["item_name"],
-                        result.title,
-                        result.score,
-                    )
-                    conn.execute(
-                        """UPDATE budget.expense_items
-                              SET item_name=COALESCE(%s, item_name),
-                                  product_description=%s, product_url=%s, updated_at=NOW()
-                            WHERE id=%s""",
-                        (normalized_name, result.title, result.url, row["id"]),
-                    )
+                    if provider != "db-cache":
+                        conn.execute("""
+                            INSERT INTO budget.product_enrichment_cache
+                                (merchant_key, item_name_norm, provider, search_query, candidate_title, candidate_url, confidence, status)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, 'accepted')
+                            ON CONFLICT (merchant_key, item_name_norm) DO UPDATE SET
+                                provider=EXCLUDED.provider, search_query=EXCLUDED.search_query,
+                                candidate_title=EXCLUDED.candidate_title, candidate_url=EXCLUDED.candidate_url,
+                                confidence=EXCLUDED.confidence, status='accepted', verified_at=NOW()
+                        """, (domain, item_key, provider, selected_query, result.title, result.url, result.score))
+                    normalized_name = normalized_item_name_from_verified_product(original_item_name, result.title, result.score)
+                    conn.execute("""UPDATE budget.expense_items
+                                      SET item_name=COALESCE(%s, item_name), product_description=%s,
+                                          product_url=%s, updated_at=NOW() WHERE id=%s""",
+                                 (normalized_name, result.title, result.url, row["id"]))
                     conn.execute("""
                         INSERT INTO budget.expense_item_description_audit
                             (expense_item_id, actor_user, actor_email, old_description, new_description, old_url, new_url)
@@ -346,12 +309,5 @@ def main() -> int:
     api_key = os.environ.get("BRAVE_SEARCH_API_KEY", "")
     if not dsn or not api_key:
         raise RuntimeError("DATABASE_URL and BRAVE_SEARCH_API_KEY are required")
-    print(json.dumps(run(
-        dsn=dsn,
-        api_key=api_key,
-        limit=args.limit,
-        threshold=args.threshold,
-        write_db=args.write_db,
-        item_ids=tuple(args.item_id),
-    ), sort_keys=True))
+    print(json.dumps(run(dsn=dsn, api_key=api_key, limit=args.limit, threshold=args.threshold, write_db=args.write_db, item_ids=tuple(args.item_id)), sort_keys=True))
     return 0
