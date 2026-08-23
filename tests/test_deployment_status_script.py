@@ -20,8 +20,9 @@ def test_deployment_status_covers_ci_argocd_jobs_and_pods():
     assert "Health Status: %s" in text
     assert 'LEDGER_DEPLOYMENT:-ledger-web' in text
     assert 'crane digest' in text
-    assert '--username "$registry_username"' in text
-    assert '--password "$registry_password"' in text
+    assert 'DOCKER_CONFIG="$crane_config_dir" crane digest "$configured_image"' in text
+    assert '-o jsonpath=\'{.data.\\.dockerconfigjson}\'' in text
+    assert 'base64 --decode > "$crane_config_dir/config.json"' in text
     assert 'application_commit="${application_commit:0:7}"' in text
     assert "GHCR digest:        %.7s" in text
     assert "Pod digest:         %.7s" in text
