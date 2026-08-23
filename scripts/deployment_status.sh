@@ -82,29 +82,12 @@ else
         if ! command -v crane >/dev/null 2>&1; then
             printf 'Warning: crane is not installed; GHCR digest lookup unavailable\n'
         else
-            registry_json=$(kubectl -n "$kube_namespace" get secret "$registry_secret" \
-                -o jsonpath='{.data.\.dockerconfigjson}' | base64 --decode 2>/dev/null)
-            registry_status=$?
-            if [ "$registry_status" -eq 0 ] && [ -n "$registry_json" ]; then
-                registry_auth=$(printf '%s' "$registry_json" | jq -r '.auths["ghcr.io"].auth // empty')
-                if [ -n "$registry_auth" ]; then
-                    registry_credentials=$(printf '%s' "$registry_auth" | base64 --decode 2>/dev/null)
-                    registry_username="${registry_credentials%%:*}"
-                    registry_password="${registry_credentials#*:}"
-                else
-                    registry_username=$(printf '%s' "$registry_json" | jq -r '.auths["ghcr.io"].username // empty')
-                    registry_password=$(printf '%s' "$registry_json" | jq -r '.auths["ghcr.io"].password // empty')
-                fi
-
-                if [ -n "$registry_username" ] && [ -n "$registry_password" ]; then
-                    ghcr_digest=$(crane digest \
-                        --username "$registry_username" \
-                        --password "$registry_password" \
-                        "$configured_image" 2>/dev/null)
-                    ghcr_status=$?
-                else
-                    ghcr_status=1
-                fi
+            crane_config_dir=$(mktemp -d)
+            trap 'rm -rf "$crane_config_dir"' EXIT
+            if kubectl -n "$kube_namespace" get secret "$registry_secret" \
+                -o jsonpath='{.data.\.dockerconfigjson}' | base64 --decode > "$crane_config_dir/config.json"; then
+                ghcr_digest=$(DOCKER_CONFIG="$crane_config_dir" crane digest "$configured_image" 2>/dev/null)
+                ghcr_status=$?
             else
                 ghcr_status=1
             fi
@@ -120,7 +103,6 @@ else
             fi
         fi
 
-        unset registry_password registry_credentials registry_auth registry_json
         application_commit="${application_commit:0:7}"
         ghcr_digest_short="${ghcr_digest#sha256:}"
         pod_digest_short="${pod_digest#sha256:}"
