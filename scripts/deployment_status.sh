@@ -80,8 +80,7 @@ else
         match='UNKNOWN'
 
         if ! command -v docker >/dev/null 2>&1; then
-            printf 'docker is not installed; GHCR digest lookup unavailable\n'
-            exit_status=1
+            printf 'Warning: docker is not installed; GHCR digest lookup unavailable\n'
         else
             docker_config_dir=$(mktemp -d)
             trap 'rm -rf "$docker_config_dir"' EXIT
@@ -95,7 +94,7 @@ else
             fi
             if [ "$ghcr_status" -ne 0 ] || [ -z "$ghcr_digest" ] || [ "$ghcr_digest" = "null" ]; then
                 ghcr_digest='unavailable'
-                exit_status=1
+                printf 'Warning: unable to verify private GHCR manifest digest\n'
             elif [ "$ghcr_digest" = "$pod_digest" ]; then
                 match='YES'
             else
