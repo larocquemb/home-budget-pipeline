@@ -3,7 +3,7 @@ import pytest
 from home_budget_pipeline.receipt_enrichment import receipt_patterns
 
 
-def test_numeric_receipt_selector_uses_zero_padded_scanned_filename():
+def test_numeric_receipt_selector_keeps_filename_fallback_patterns():
     assert receipt_patterns("1") == ("%receipt_0001.pdf%", "%receipt_1.pdf%")
 
 
