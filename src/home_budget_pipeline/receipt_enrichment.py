@@ -11,18 +11,17 @@ from .product_enrichment import run
 
 
 def receipt_patterns(receipt: str) -> tuple[str, ...]:
-    """Return source-reference patterns for a receipt selector.
+    """Return source-reference patterns for a non-numeric receipt selector.
 
-    A numeric selector can fall back to the scanned receipt convention
-    ``receipt_0001.pdf`` when there is no matching database receipt/expense id.
-    A filename/path selector is matched by basename.
+    Numeric selectors are authoritative database receipt/expense ids and are
+    intentionally not translated to scanner filenames. Filename/path selectors
+    are matched by basename.
     """
     value = receipt.strip()
     if not value:
         raise ValueError("receipt selector is required")
     if value.isdigit():
-        number = int(value)
-        return (f"%receipt_{number:04d}.pdf%", f"%receipt_{number}.pdf%")
+        return ()
     name = Path(value).name
     return (f"%{name}%",)
 
@@ -41,27 +40,24 @@ def resolve_item_ids(dsn: str, receipt: str, merchant: str = "") -> tuple[int, .
     if not value:
         raise ValueError("receipt selector is required")
 
-    merchant_sql, merchant_params = _merchant_clause(merchant)
     with psycopg.connect(dsn) as conn:
-        # Numeric selectors mean the database receipt/expense id first. This is
-        # what a user means by RECEIPT=1 in an operational command. Only when
-        # that id does not exist do we fall back to the scanner filename
-        # convention (receipt_0001.pdf).
+        # Numeric selectors are the database receipt/expense id. They are
+        # already unique, so merchant is deliberately ignored.
         if value.isdigit():
             rows = conn.execute(
-                f"""
+                """
                 SELECT i.id
                   FROM budget.expense_items i
                   JOIN budget.expenses e ON e.id=i.expense_pk
-                 WHERE e.id=%s{merchant_sql}
+                 WHERE e.id=%s
                  ORDER BY i.id
                 """,
-                (int(value), *merchant_params),
+                (int(value),),
             ).fetchall()
-            if rows:
-                return tuple(int(row[0]) for row in rows)
+            return tuple(int(row[0]) for row in rows)
 
         patterns = receipt_patterns(value)
+        merchant_sql, merchant_params = _merchant_clause(merchant)
         clauses: list[str] = []
         params: list[object] = []
         for pattern in patterns:
@@ -107,7 +103,11 @@ def main() -> int:
 
     item_ids = resolve_item_ids(dsn, args.receipt, args.merchant)
     if not item_ids:
-        merchant_text = f" for merchant {args.merchant!r}" if args.merchant else ""
+        merchant_text = (
+            f" for merchant {args.merchant!r}"
+            if args.merchant and not args.receipt.strip().isdigit()
+            else ""
+        )
         raise RuntimeError(f"No line items found for receipt {args.receipt!r}{merchant_text}")
 
     result = run(
@@ -120,7 +120,7 @@ def main() -> int:
     )
     payload = {
         "receipt": args.receipt,
-        "merchant": args.merchant or None,
+        "merchant": None if args.receipt.strip().isdigit() else (args.merchant or None),
         "item_ids": list(item_ids),
         **result,
     }
