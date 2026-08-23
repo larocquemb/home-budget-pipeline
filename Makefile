@@ -43,6 +43,9 @@ dev-cert-install:
 enrich-products:
 	@set -eu; \
 	if [ -n "$(ITEM_ID)" ] && [ -n "$(RECEIPT)" ]; then echo "Set ITEM_ID or RECEIPT, not both"; exit 2; fi; \
+	if [ -n "$(RECEIPT)" ] && printf '%s' "$(RECEIPT)" | grep -Eq '^[0-9]+$$' && [ -n "$(MERCHANT)" ]; then \
+		echo "MERCHANT is not needed for numeric RECEIPT ids; use: make enrich-products RECEIPT=$(RECEIPT)"; exit 2; \
+	fi; \
 	for secret in postgres-secret brave-search-api openai-api ghcr-secret; do \
 		kubectl -n "$(KUBE_NAMESPACE)" get secret "$$secret" >/dev/null || { echo "Missing Kubernetes secret: $$secret"; exit 2; }; \
 	done; \
