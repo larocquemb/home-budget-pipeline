@@ -8,6 +8,8 @@ ENRICH_JOB ?= product-enrichment-manual
 ENRICH_LIMIT ?= 100
 ENRICH_THRESHOLD ?= 0.85
 ITEM_ID ?=
+RECEIPT ?=
+MERCHANT ?=
 
 .PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products
 
@@ -40,56 +42,66 @@ dev-cert-install:
 
 enrich-products:
 	@set -eu; \
+	if [ -n "$(ITEM_ID)" ] && [ -n "$(RECEIPT)" ]; then echo "Set ITEM_ID or RECEIPT, not both"; exit 2; fi; \
 	for secret in postgres-secret brave-search-api openai-api ghcr-secret; do \
 		kubectl -n "$(KUBE_NAMESPACE)" get secret "$$secret" >/dev/null || { echo "Missing Kubernetes secret: $$secret"; exit 2; }; \
 	done; \
 	IMAGE=$$(kubectl -n "$(KUBE_NAMESPACE)" get deployment ledger-web -o jsonpath='{.spec.template.spec.containers[0].image}'); \
 	test -n "$$IMAGE" || { echo "Could not determine ledger-web image"; exit 2; }; \
 	kubectl -n "$(KUBE_NAMESPACE)" delete job "$(ENRICH_JOB)" --ignore-not-found >/dev/null; \
-	ITEM_ARG=""; \
-	if [ -n "$(ITEM_ID)" ]; then ITEM_ARG='            - --item-id\n            - "$(ITEM_ID)"'; fi; \
-	printf '%s\n' \
-	'apiVersion: batch/v1' \
-	'kind: Job' \
-	'metadata:' \
-	'  name: $(ENRICH_JOB)' \
-	'spec:' \
-	'  backoffLimit: 0' \
-	'  template:' \
-	'    spec:' \
-	'      restartPolicy: Never' \
-	'      imagePullSecrets:' \
-	'        - name: ghcr-secret' \
-	'      containers:' \
-	'        - name: enrich' \
-	"          image: $$IMAGE" \
-	'          command:' \
-	'            - home-budget-enrich-products' \
-	'          args:' \
-	'            - --limit' \
-	'            - "$(ENRICH_LIMIT)"' \
-	'            - --threshold' \
-	'            - "$(ENRICH_THRESHOLD)"' \
-	'            - --write-db' \
-	"$$ITEM_ARG" \
-	'          env:' \
-	'            - name: DATABASE_URL' \
-	'              valueFrom:' \
-	'                secretKeyRef:' \
-	'                  name: postgres-secret' \
-	'                  key: DATABASE_URL' \
-	'            - name: BRAVE_SEARCH_API_KEY' \
-	'              valueFrom:' \
-	'                secretKeyRef:' \
-	'                  name: brave-search-api' \
-	'                  key: BRAVE_SEARCH_API_KEY' \
-	'            - name: OPENAI_API_KEY' \
-	'              valueFrom:' \
-	'                secretKeyRef:' \
-	'                  name: openai-api' \
-	'                  key: OPENAI_API_KEY' | \
-	kubectl -n "$(KUBE_NAMESPACE)" apply -f - >/dev/null; \
+	{ \
+		echo 'apiVersion: batch/v1'; \
+		echo 'kind: Job'; \
+		echo 'metadata:'; \
+		echo '  name: $(ENRICH_JOB)'; \
+		echo 'spec:'; \
+		echo '  backoffLimit: 0'; \
+		echo '  template:'; \
+		echo '    spec:'; \
+		echo '      restartPolicy: Never'; \
+		echo '      imagePullSecrets:'; \
+		echo '        - name: ghcr-secret'; \
+		echo '      containers:'; \
+		echo '        - name: enrich'; \
+		echo "          image: $$IMAGE"; \
+		echo '          command:'; \
+		if [ -n "$(RECEIPT)" ]; then \
+			echo '            - python'; \
+			echo '          args:'; \
+			echo '            - -m'; \
+			echo '            - home_budget_pipeline.receipt_enrichment'; \
+			echo '            - --receipt'; \
+			echo '            - "$(RECEIPT)"'; \
+			if [ -n "$(MERCHANT)" ]; then echo '            - --merchant'; echo '            - "$(MERCHANT)"'; fi; \
+		else \
+			echo '            - home-budget-enrich-products'; \
+			echo '          args:'; \
+			if [ -n "$(ITEM_ID)" ]; then echo '            - --item-id'; echo '            - "$(ITEM_ID)"'; fi; \
+		fi; \
+		echo '            - --limit'; \
+		echo '            - "$(ENRICH_LIMIT)"'; \
+		echo '            - --threshold'; \
+		echo '            - "$(ENRICH_THRESHOLD)"'; \
+		echo '            - --write-db'; \
+		echo '          env:'; \
+		echo '            - name: DATABASE_URL'; \
+		echo '              valueFrom:'; \
+		echo '                secretKeyRef:'; \
+		echo '                  name: postgres-secret'; \
+		echo '                  key: DATABASE_URL'; \
+		echo '            - name: BRAVE_SEARCH_API_KEY'; \
+		echo '              valueFrom:'; \
+		echo '                secretKeyRef:'; \
+		echo '                  name: brave-search-api'; \
+		echo '                  key: BRAVE_SEARCH_API_KEY'; \
+		echo '            - name: OPENAI_API_KEY'; \
+		echo '              valueFrom:'; \
+		echo '                secretKeyRef:'; \
+		echo '                  name: openai-api'; \
+		echo '                  key: OPENAI_API_KEY'; \
+	} | kubectl -n "$(KUBE_NAMESPACE)" apply -f - >/dev/null; \
 	echo "Started $(ENRICH_JOB) using $$IMAGE"; \
+	if [ -n "$(RECEIPT)" ]; then echo "Scope: receipt $(RECEIPT)$${MERCHANT:+, merchant $(MERCHANT)}"; elif [ -n "$(ITEM_ID)" ]; then echo "Scope: item $(ITEM_ID)"; else echo "Scope: pending backlog (limit $(ENRICH_LIMIT))"; fi; \
 	kubectl -n "$(KUBE_NAMESPACE)" wait --for=condition=Ready pod -l job-name="$(ENRICH_JOB)" --timeout=120s >/dev/null 2>&1 || true; \
 	kubectl -n "$(KUBE_NAMESPACE)" logs -f job/"$(ENRICH_JOB)"
 
