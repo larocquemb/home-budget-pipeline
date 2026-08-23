@@ -9,7 +9,6 @@ ENRICH_LIMIT ?= 100
 ENRICH_THRESHOLD ?= 0.85
 ITEM_ID ?=
 RECEIPT ?=
-MERCHANT ?=
 
 .PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products
 
@@ -43,9 +42,6 @@ dev-cert-install:
 enrich-products:
 	@set -eu; \
 	if [ -n "$(ITEM_ID)" ] && [ -n "$(RECEIPT)" ]; then echo "Set ITEM_ID or RECEIPT, not both"; exit 2; fi; \
-	if [ -n "$(RECEIPT)" ] && printf '%s' "$(RECEIPT)" | grep -Eq '^[0-9]+$$' && [ -n "$(MERCHANT)" ]; then \
-		echo "MERCHANT is not needed for numeric RECEIPT ids; use: make enrich-products RECEIPT=$(RECEIPT)"; exit 2; \
-	fi; \
 	for secret in postgres-secret brave-search-api openai-api ghcr-secret; do \
 		kubectl -n "$(KUBE_NAMESPACE)" get secret "$$secret" >/dev/null || { echo "Missing Kubernetes secret: $$secret"; exit 2; }; \
 	done; \
@@ -75,7 +71,6 @@ enrich-products:
 			echo '            - home_budget_pipeline.receipt_enrichment'; \
 			echo '            - --receipt'; \
 			echo '            - "$(RECEIPT)"'; \
-			if [ -n "$(MERCHANT)" ]; then echo '            - --merchant'; echo '            - "$(MERCHANT)"'; fi; \
 		else \
 			echo '            - home-budget-enrich-products'; \
 			echo '          args:'; \
@@ -104,7 +99,7 @@ enrich-products:
 		echo '                  key: OPENAI_API_KEY'; \
 	} | kubectl -n "$(KUBE_NAMESPACE)" apply -f - >/dev/null; \
 	echo "Started $(ENRICH_JOB) using $$IMAGE"; \
-	if [ -n "$(RECEIPT)" ]; then echo "Scope: receipt $(RECEIPT)$${MERCHANT:+, merchant $(MERCHANT)}"; elif [ -n "$(ITEM_ID)" ]; then echo "Scope: item $(ITEM_ID)"; else echo "Scope: pending backlog (limit $(ENRICH_LIMIT))"; fi; \
+	if [ -n "$(RECEIPT)" ]; then echo "Scope: receipt $(RECEIPT)"; elif [ -n "$(ITEM_ID)" ]; then echo "Scope: item $(ITEM_ID)"; else echo "Scope: pending backlog (limit $(ENRICH_LIMIT))"; fi; \
 	kubectl -n "$(KUBE_NAMESPACE)" wait --for=condition=Ready pod -l job-name="$(ENRICH_JOB)" --timeout=120s >/dev/null 2>&1 || true; \
 	kubectl -n "$(KUBE_NAMESPACE)" logs -f job/"$(ENRICH_JOB)"
 
