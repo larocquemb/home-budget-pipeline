@@ -3,9 +3,12 @@
 set -uo pipefail
 
 run_limit="${RUN_LIMIT:-3}"
+github_repo="${GITHUB_REPO:-larocquemb/home-budget-pipeline}"
 argo_app="${ARGO_APP:-ledger}"
 kube_namespace="${KUBE_NAMESPACE:-home-budget}"
 ledger_deployment="${LEDGER_DEPLOYMENT:-ledger-web}"
+registry_secret="${REGISTRY_SECRET:-ghcr-secret}"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config-brownrook}"
 exit_status=0
 configured_image=''
 
@@ -18,7 +21,7 @@ if ! command -v gh >/dev/null 2>&1; then
     printf 'gh is not installed\n'
     exit_status=1
 else
-    if ! gh run list --branch main --limit "$run_limit" \
+    if ! gh run list --repo "$github_repo" --branch main --limit "$run_limit" \
         --json conclusion,status,displayTitle,headBranch,headSha,databaseId,createdAt \
         --jq '(["STATUS", "TITLE", "BRANCH", "COMMIT", "RUN ID", "AGE"] | @tsv), (.[] | (now - (.createdAt | fromdateiso8601) | floor) as $age | [(if .conclusion == "" then .status else .conclusion end), .displayTitle, .headBranch, .headSha[0:7], .databaseId, (if $age < 3600 then "\($age / 60 | floor)m\($age % 60)s" elif $age < 86400 then "\($age / 3600 | floor)h\(($age % 3600) / 60 | floor)m" else "\($age / 86400 | floor)d\(($age % 86400) / 3600 | floor)h" end)] | @tsv)' \
         | column -t -s $'\t'; then
@@ -31,7 +34,7 @@ if ! command -v argocd >/dev/null 2>&1; then
     printf 'argocd is not installed\n'
     exit_status=1
 else
-    argo_details=$(argocd app get "$argo_app" --grpc-web -o json | jq -r \
+    argo_details=$(argocd app get "$argo_app" --core -o json | jq -r \
         '[.spec.source.targetRevision, .status.sync.revision[0:7], .status.sync.status, .status.health.status] | @tsv')
     argo_status=$?
     if [ "$argo_status" -ne 0 ]; then
@@ -80,9 +83,16 @@ else
             printf 'docker is not installed; GHCR digest lookup unavailable\n'
             exit_status=1
         else
-            ghcr_digest=$(docker buildx imagetools inspect "$configured_image" \
-                --format '{{json .Manifest}}' | jq -r '.digest')
-            ghcr_status=$?
+            docker_config_dir=$(mktemp -d)
+            trap 'rm -rf "$docker_config_dir"' EXIT
+            if kubectl -n "$kube_namespace" get secret "$registry_secret" \
+                -o jsonpath='{.data.\.dockerconfigjson}' | base64 --decode > "$docker_config_dir/config.json"; then
+                ghcr_digest=$(DOCKER_CONFIG="$docker_config_dir" docker buildx imagetools inspect "$configured_image" \
+                    --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest')
+                ghcr_status=$?
+            else
+                ghcr_status=1
+            fi
             if [ "$ghcr_status" -ne 0 ] || [ -z "$ghcr_digest" ] || [ "$ghcr_digest" = "null" ]; then
                 ghcr_digest='unavailable'
                 exit_status=1
