@@ -79,23 +79,29 @@ else
         ghcr_digest='unavailable'
         match='UNKNOWN'
 
-        if ! command -v docker >/dev/null 2>&1; then
-            printf 'Warning: docker is not installed; GHCR digest lookup unavailable\n'
+        if ! command -v crane >/dev/null 2>&1; then
+            printf 'Warning: crane is not installed; GHCR digest lookup unavailable\n'
         else
-            docker_config_dir=$(mktemp -d)
-            trap 'rm -rf "$docker_config_dir"' EXIT
-            if [ -d "$HOME/.docker/cli-plugins" ]; then
-                ln -s "$HOME/.docker/cli-plugins" "$docker_config_dir/cli-plugins"
-            fi
-            if kubectl -n "$kube_namespace" get secret "$registry_secret" \
-                -o jsonpath='{.data.\.dockerconfigjson}' | base64 --decode > "$docker_config_dir/config.json"; then
-                ghcr_digest=$(DOCKER_CONFIG="$docker_config_dir" docker buildx imagetools inspect "$configured_image" \
-                    --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest')
-                ghcr_status=$?
+            registry_json=$(kubectl -n "$kube_namespace" get secret "$registry_secret" \
+                -o jsonpath='{.data.\.dockerconfigjson}' | base64 --decode 2>/dev/null)
+            registry_status=$?
+            if [ "$registry_status" -eq 0 ] && [ -n "$registry_json" ]; then
+                registry_username=$(printf '%s' "$registry_json" | jq -r '.auths["ghcr.io"].username // empty')
+                registry_password=$(printf '%s' "$registry_json" | jq -r '.auths["ghcr.io"].password // empty')
+                if [ -n "$registry_username" ] && [ -n "$registry_password" ]; then
+                    ghcr_digest=$(crane digest \
+                        --username "$registry_username" \
+                        --password "$registry_password" \
+                        "$configured_image" 2>/dev/null)
+                    ghcr_status=$?
+                else
+                    ghcr_status=1
+                fi
             else
                 ghcr_status=1
             fi
-            if [ "$ghcr_status" -ne 0 ] || [ -z "$ghcr_digest" ] || [ "$ghcr_digest" = "null" ]; then
+
+            if [ "$ghcr_status" -ne 0 ] || [ -z "$ghcr_digest" ]; then
                 ghcr_digest='unavailable'
                 printf 'Warning: unable to verify private GHCR manifest digest\n'
             elif [ "$ghcr_digest" = "$pod_digest" ]; then
@@ -106,6 +112,7 @@ else
             fi
         fi
 
+        unset registry_password registry_json
         application_commit="${application_commit:0:7}"
         ghcr_digest_short="${ghcr_digest#sha256:}"
         pod_digest_short="${pod_digest#sha256:}"
