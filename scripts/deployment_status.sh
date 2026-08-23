@@ -84,6 +84,9 @@ else
         else
             docker_config_dir=$(mktemp -d)
             trap 'rm -rf "$docker_config_dir"' EXIT
+            if [ -d "$HOME/.docker/cli-plugins" ]; then
+                ln -s "$HOME/.docker/cli-plugins" "$docker_config_dir/cli-plugins"
+            fi
             if kubectl -n "$kube_namespace" get secret "$registry_secret" \
                 -o jsonpath='{.data.\.dockerconfigjson}' | base64 --decode > "$docker_config_dir/config.json"; then
                 ghcr_digest=$(DOCKER_CONFIG="$docker_config_dir" docker buildx imagetools inspect "$configured_image" \
