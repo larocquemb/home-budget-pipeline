@@ -214,16 +214,16 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
 
             item_key = normalized_cache_item_name(original_item_name)
             previous = conn.execute("""
-                SELECT provider, search_query, candidate_title, candidate_url, confidence
-                  FROM budget.product_enrichment_cache
-                 WHERE merchant_key=%s AND item_name_norm=%s
+                SELECT provider, search_query, product_description, product_url, confidence
+                  FROM enrichment.product_cache
+                 WHERE merchant_key=%s AND receipt_text_norm=%s
                    AND status='accepted' AND confidence >= %s
-                 ORDER BY confidence DESC, verified_at DESC LIMIT 1
+                 ORDER BY confidence DESC, last_used_at DESC LIMIT 1
             """, (domain, item_key, threshold)).fetchone()
 
             if previous:
-                result = SearchResult(previous["candidate_title"], previous["candidate_url"], "", float(previous["confidence"]))
-                selected_query = previous["search_query"]
+                result = SearchResult(previous["product_description"], previous["product_url"], "", float(previous["confidence"]))
+                selected_query = previous["search_query"] or query
                 provider = "db-cache"
                 stats["db_hits"] += 1
             else:
@@ -273,16 +273,28 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                         confidence=EXCLUDED.confidence, status=EXCLUDED.status, searched_at=NOW()
                 """, (row["id"], provider, selected_query, result.title if result else None, result.url if result else None, result.score if result else 0, status))
                 if status == "accepted":
-                    if provider != "db-cache":
+                    if provider == "db-cache":
                         conn.execute("""
-                            INSERT INTO budget.product_enrichment_cache
-                                (merchant_key, item_name_norm, provider, search_query, candidate_title, candidate_url, confidence, status)
+                            UPDATE enrichment.product_cache
+                               SET last_used_at=NOW(), use_count=use_count + 1
+                             WHERE merchant_key=%s AND receipt_text_norm=%s
+                        """, (domain, item_key))
+                    else:
+                        conn.execute("""
+                            INSERT INTO enrichment.product_cache
+                                (merchant_key, receipt_text_norm, product_description, product_url,
+                                 provider, search_query, confidence, status)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, 'accepted')
-                            ON CONFLICT (merchant_key, item_name_norm) DO UPDATE SET
-                                provider=EXCLUDED.provider, search_query=EXCLUDED.search_query,
-                                candidate_title=EXCLUDED.candidate_title, candidate_url=EXCLUDED.candidate_url,
-                                confidence=EXCLUDED.confidence, status='accepted', verified_at=NOW()
-                        """, (domain, item_key, provider, selected_query, result.title, result.url, result.score))
+                            ON CONFLICT (merchant_key, receipt_text_norm) DO UPDATE SET
+                                product_description=EXCLUDED.product_description,
+                                product_url=EXCLUDED.product_url,
+                                provider=EXCLUDED.provider,
+                                search_query=EXCLUDED.search_query,
+                                confidence=EXCLUDED.confidence,
+                                status='accepted',
+                                last_used_at=NOW(),
+                                use_count=enrichment.product_cache.use_count + 1
+                        """, (domain, item_key, result.title, result.url, provider, selected_query, result.score))
                     normalized_name = normalized_item_name_from_verified_product(original_item_name, result.title, result.score)
                     conn.execute("""UPDATE budget.expense_items
                                       SET item_name=COALESCE(%s, item_name), product_description=%s,
