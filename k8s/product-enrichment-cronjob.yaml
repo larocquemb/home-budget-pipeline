@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: product-enrichment
+  namespace: home-budget
+spec:
+  # This CronJob is a GitOps-managed template for on-demand enrichment jobs.
+  # Keep it suspended until a recurring enrichment cadence is intentionally chosen.
+  schedule: "0 0 1 1 *"
+  suspend: true
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-secret
+          containers:
+            - name: enrich
+              image: ghcr.io/larocquemb/home-budget-pipeline
+              imagePullPolicy: IfNotPresent
+              command:
+                - home-budget-enrich-products
+              args:
+                - --limit
+                - "100"
+                - --threshold
+                - "0.85"
+                - --write-db
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-secret
+                      key: DATABASE_URL
+                - name: BRAVE_SEARCH_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: brave-search-api
+                      key: BRAVE_SEARCH_API_KEY
+                - name: OPENAI_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: openai-api
+                      key: OPENAI_API_KEY
