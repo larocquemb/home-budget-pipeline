@@ -10,7 +10,7 @@ ENRICH_THRESHOLD ?= 0.85
 ITEM_ID ?=
 RECEIPT ?=
 
-.PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset k3s-db-reset enrich-products
+.PHONY: test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products
 
 status:
 	@./scripts/deployment_status.sh
@@ -31,9 +31,6 @@ dev-web:
 
 dev-db-reset:
 	@./scripts/rebuild_local_database.sh .env.dev
-
-k3s-db-reset:
-	@KUBE_NAMESPACE="$(KUBE_NAMESPACE)" ./scripts/rebuild_k3s_database.sh
 
 dev-cert-install:
 	@mkdir -p .dev-certs
@@ -117,7 +114,6 @@ test-db-setup:
 	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/schema_phase1.sql >/dev/null
 	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/schema_constraints.sql >/dev/null
 	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/receipt_processing.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/migrations/product_enrichment_cache.sql >/dev/null
 
 test-db: test-db-setup
 	@echo "Running PostgreSQL integration tests..."
@@ -129,7 +125,6 @@ test-db-verbose:
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/schema_phase1.sql
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/schema_constraints.sql
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/receipt_processing.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/migrations/product_enrichment_cache.sql
 	TEST_DATABASE_URL=$(TEST_DATABASE_URL) pytest -q -m integration
 
 test-all: test
