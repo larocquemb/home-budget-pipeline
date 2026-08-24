@@ -4,7 +4,8 @@ from pathlib import Path
 def test_shared_bootstrap_stages_product_enrichment_cache():
     script = Path("scripts/stage_db_bootstrap.sh").read_text()
     assert "009-product-enrichment-cache.sql" in script
-    assert "sql/migrations/product_enrichment_cache.sql" in script
+    assert "sql/product_enrichment_cache.sql" in script
+    assert "migrations" not in script
 
 
 def test_k3s_reset_is_guarded_and_uses_shared_bootstrap():
