@@ -187,6 +187,31 @@ home-budget-enrich-products \
   --write-db
 ```
 
+To enrich every line item belonging to one receipt, use the receipt-scoped
+module. A numeric selector is the canonical `budget.expenses.id` (not
+`budget.receipt_evidence.id`); a filename or path selector is also accepted:
+
+```bash
+python -m home_budget_pipeline.receipt_enrichment --receipt 1
+```
+
+The command is a dry run unless `--write-db` is supplied. A dry run performs
+the searches and prints a JSON summary, but the Ledger UI will continue to show
+the items as `Not enriched`. Confirm that `item_ids` contains the expected line
+items, then persist accepted matches with:
+
+```bash
+python -m home_budget_pipeline.receipt_enrichment \
+  --receipt 1 \
+  --write-db
+```
+
+The JSON summary reports how many items were considered, searched, satisfied
+from the database cache, expanded into AI-generated search queries, accepted,
+or left for review. `review` is a count of matches below the automatic
+confidence threshold; it does not start an interactive prompt. Those items
+remain unenriched for manual review in the Ledger UI.
+
 The product-query fallback defaults to `gpt-5.6-terra` and can be changed with
 `AI_PRODUCT_MODEL`. Product enrichment currently runs as an explicit command;
 receipt import does not automatically invoke external AI or Brave search.

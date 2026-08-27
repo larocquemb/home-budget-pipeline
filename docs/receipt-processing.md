@@ -15,6 +15,35 @@ Configuration can be supplied with `DATABASE_URL`, `RECEIPT_SOURCE_ROOT`, and `H
 Pass `--refresh-ocr-cache` to bypass cached OCR and reprocess every discovered
 receipt, including receipts already marked succeeded or review-required.
 
+## Receipt-scoped product enrichment
+
+After import, product enrichment can be limited to all line items belonging to
+one receipt. A numeric `--receipt` selector is the canonical
+`budget.expenses.id`, not `budget.receipt_evidence.id`. The command requires
+`DATABASE_URL` and `BRAVE_SEARCH_API_KEY`; `OPENAI_API_KEY` enables the AI query
+expansion fallback.
+
+Run a dry run first:
+
+```bash
+python -m home_budget_pipeline.receipt_enrichment --receipt 1
+```
+
+The dry run performs searches and prints a JSON summary without saving results,
+so the Ledger UI continues to show `Not enriched`. Check that the reported
+`item_ids` belong to the intended expense, then persist accepted matches:
+
+```bash
+python -m home_budget_pipeline.receipt_enrichment \
+  --receipt 1 \
+  --write-db
+```
+
+The summary includes `considered`, `searched`, `db_hits`, `ai_queries`,
+`ai_expanded`, `accepted`, `review`, and `unsupported`. `review` is the number
+of matches below the automatic confidence threshold; it does not open an
+interactive prompt. Those items remain unenriched for manual review in Ledger.
+
 ## Kubernetes
 
 `k8s/receipt-processor-cronjob.yaml` runs every 15 minutes. `concurrencyPolicy: Forbid` prevents Kubernetes from starting a second scheduled job while the previous job is still running, and the PostgreSQL advisory lock provides an additional guard against manual or accidental concurrent runs.
