@@ -102,7 +102,6 @@ celerybeat.pid
 .env.dev
 .envrc
 .venv
-.venv-paddle312/
 env/
 venv/
 ENV/
