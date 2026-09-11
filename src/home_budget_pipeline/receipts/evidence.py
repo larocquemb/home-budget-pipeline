@@ -202,8 +202,144 @@ def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = 
              json.dumps(receipt.page_text), json.dumps(payload)),
         )
         evidence_id = int(cur.fetchone()[0])
+    persist_ocr_lines(conn, evidence_id, getattr(receipt, "ocr_layout", []), schema)
+    persist_ocr_run(conn, evidence_id, receipt, schema)
     persist_auto_annotations(conn, evidence_id, receipt.text, schema)
     return evidence_id
+
+
+def persist_ocr_run(conn, evidence_id: int, receipt, schema: str = "budget") -> int:
+    """Persist one immutable OCR run and its pass-level telemetry."""
+    schema = _safe_schema(schema)
+    run = getattr(receipt, "ocr_run", None) or {}
+    run_uuid = run.get("run_uuid")
+    passes = run.get("ocr_passes")
+    if not run_uuid or not isinstance(passes, list):
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.receipt_ocr_runs (
+                run_uuid, evidence_id, source_sha256, source_reference, cache_version,
+                processed_at, processing_seconds, worker_host, worker_pid,
+                merchant, extraction_status, extraction_confidence, timings
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (run_uuid) DO NOTHING
+            """,
+            (
+                run_uuid, evidence_id, receipt.source_sha256,
+                getattr(receipt, "source_reference", ""),
+                run.get("cache_version"),
+                run.get("processed_at"), run.get("processing_seconds"),
+                getattr(receipt, "worker_host", None), getattr(receipt, "worker_pid", None),
+                receipt.merchant, receipt.extraction_status, receipt.extraction_confidence,
+                json.dumps(run.get("timings") or {}),
+            ),
+        )
+        for metric in passes:
+            cur.execute(
+                f"""
+                INSERT INTO {schema}.receipt_ocr_passes (
+                    run_uuid, pass_id, page_number, engine, engine_type, dpi, psm,
+                    variant, seconds, status, error_type, line_count, character_count,
+                    structural_score, summary_score, valid_timestamp, selected_base,
+                    consensus_line_coverage, consensus_coverage_ratio, extracted_text,
+                    quality, engine_options, usage, provenance
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (run_uuid, pass_id) DO NOTHING
+                """,
+                (
+                    run_uuid, metric.get("pass_id"), metric.get("page_number"),
+                    metric.get("engine"), metric.get("engine_type"), metric.get("dpi"),
+                    metric.get("psm"), metric.get("variant"), metric.get("seconds"),
+                    metric.get("status"), metric.get("error_type"), metric.get("line_count"),
+                    metric.get("character_count"), metric.get("structural_score"),
+                    metric.get("summary_score"), metric.get("valid_timestamp"),
+                    bool(metric.get("selected_base")), metric.get("consensus_line_coverage"),
+                    metric.get("consensus_coverage_ratio"), metric.get("text"),
+                    json.dumps(metric.get("quality") or {}),
+                    json.dumps(metric.get("engine_options") or {}),
+                    json.dumps(metric.get("usage") or {}),
+                    json.dumps(metric.get("provenance") or {}),
+                ),
+            )
+    return len(passes)
+
+
+def record_ocr_feedback(
+    conn,
+    evidence_id: int,
+    outcome: str,
+    corrected_fields: Optional[dict] = None,
+    notes: Optional[str] = None,
+    verified_by: Optional[str] = None,
+    schema: str = "budget",
+) -> None:
+    """Record verified ground truth for evaluating OCR configurations."""
+    schema = _safe_schema(schema)
+    if outcome not in {"confirmed", "corrected", "rejected"}:
+        raise ValueError("outcome must be confirmed, corrected, or rejected")
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.receipt_ocr_feedback (
+                evidence_id, outcome, corrected_fields, notes, verified_by
+            ) VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (evidence_id) DO UPDATE SET
+                outcome = EXCLUDED.outcome,
+                corrected_fields = EXCLUDED.corrected_fields,
+                notes = EXCLUDED.notes,
+                verified_by = EXCLUDED.verified_by,
+                verified_at = NOW(),
+                updated_at = NOW()
+            """,
+            (evidence_id, outcome, json.dumps(corrected_fields or {}), notes, verified_by),
+        )
+
+
+def persist_ocr_lines(conn, evidence_id: int, pages: list[dict], schema: str = "budget") -> int:
+    """Replace structured OCR lines belonging to one receipt evidence record."""
+    schema = _safe_schema(schema)
+    inserted = 0
+    with conn.cursor() as cur:
+        cur.execute(f"DELETE FROM {schema}.receipt_ocr_lines WHERE evidence_id = %s", (evidence_id,))
+        def walk(lines, parent=None):
+            for line in lines:
+                yield line, parent
+                yield from walk(line.get("children", []), line)
+
+        for page in pages:
+            page_number = page.get("page_number")
+            for line, parent in walk(page.get("lines", [])):
+                layout = line.get("layout") or {}
+                bounds = layout.get("bounds") or line.get("bounds") or {}
+                page_layout = layout.get("page") or {}
+                indent = layout.get("indent") or {}
+                applies_to = line.get("applies_to") or {}
+                if parent and line.get("line_type") in {"discount", "points", "price_detail", "fee"}:
+                    applies_to = {"page_number": page_number, "line_number": parent.get("line_number")}
+                confidence = line.get("confidence")
+                cur.execute(
+                    f"""
+                    INSERT INTO {schema}.receipt_ocr_lines (
+                        evidence_id, page_number, line_number, text, confidence,
+                        x, y, width, height, page_left, page_width,
+                        indent_pixels, indent_ratio, indent_level,
+                        line_type, department, applies_to_page, applies_to_line
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        evidence_id, page_number, line.get("line_number"), line.get("text"),
+                        confidence / 100 if confidence is not None else None,
+                        bounds.get("x"), bounds.get("y"), bounds.get("width"), bounds.get("height"),
+                        page_layout.get("left"), page_layout.get("width"), indent.get("pixels"),
+                        indent.get("ratio"), indent.get("level"), line.get("line_type"),
+                        line.get("department"), applies_to.get("page_number"), applies_to.get("line_number"),
+                    ),
+                )
+                inserted += 1
+    return inserted
 
 
 def attach_evidence(conn, evidence_id: int, expense_pk: int, schema: str = "budget") -> None:

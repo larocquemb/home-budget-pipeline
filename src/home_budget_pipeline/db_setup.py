@@ -16,6 +16,8 @@ ENRICHMENT_SCHEMA = SQL_DIR / "product_enrichment.sql"
 CATEGORY_MAPPING_AUDIT_MIGRATION = SQL_DIR / "migrations" / "category_mapping_audit.sql"
 ITEM_DESCRIPTIONS_MIGRATION = SQL_DIR / "migrations" / "expense_item_descriptions.sql"
 MERCHANT_ALIASES_MIGRATION = SQL_DIR / "migrations" / "merchant_aliases.sql"
+RECEIPT_OCR_LINES_MIGRATION = SQL_DIR / "migrations" / "receipt_ocr_lines.sql"
+RECEIPT_OCR_LEARNING_MIGRATION = SQL_DIR / "migrations" / "receipt_ocr_learning.sql"
 MERCHANT_ALIASES_DATA = SQL_DIR / "merchant_aliases.sql"
 
 
@@ -35,12 +37,17 @@ def ensure_database_schema(conn) -> dict[str, bool]:
         _execute_sql_file(conn, BASE_SCHEMA)
         base_created = True
 
+    receipt_ocr_lines_created = not _relation_exists(conn, "budget.receipt_ocr_lines")
+    receipt_ocr_learning_created = not _relation_exists(conn, "budget.receipt_ocr_runs")
+
     # Constraint policy and additive shared schemas must be applied to existing
     # databases too. Receipt ingest remains independently managed blue/green.
     _execute_sql_file(conn, CONSTRAINTS_SCHEMA)
     _execute_sql_file(conn, CATEGORY_MAPPING_AUDIT_MIGRATION)
     _execute_sql_file(conn, ITEM_DESCRIPTIONS_MIGRATION)
     _execute_sql_file(conn, MERCHANT_ALIASES_MIGRATION)
+    _execute_sql_file(conn, RECEIPT_OCR_LINES_MIGRATION)
+    _execute_sql_file(conn, RECEIPT_OCR_LEARNING_MIGRATION)
     _execute_sql_file(conn, MERCHANT_ALIASES_DATA)
 
     enrichment_created = not _relation_exists(conn, "enrichment.product_cache")
@@ -50,6 +57,8 @@ def ensure_database_schema(conn) -> dict[str, bool]:
     return {
         "base_created": base_created,
         "enrichment_schema_created": enrichment_created,
+        "receipt_ocr_lines_created": receipt_ocr_lines_created,
+        "receipt_ocr_learning_created": receipt_ocr_learning_created,
         "receipt_schema_changed": receipt_changed,
     }
 
@@ -73,6 +82,16 @@ def main() -> int:
         print("product enrichment schema initialized")
     else:
         print("product enrichment schema already current")
+
+    if result["receipt_ocr_lines_created"]:
+        print("receipt OCR lines schema initialized")
+    else:
+        print("receipt OCR lines schema already current")
+
+    if result["receipt_ocr_learning_created"]:
+        print("receipt OCR learning schema initialized")
+    else:
+        print("receipt OCR learning schema already current")
 
     if result["receipt_schema_changed"]:
         print("receipt ingest schema upgraded")

@@ -228,6 +228,25 @@ def test_process_backlog_records_review_required_separately(monkeypatch):
     assert summary["failed"] == 0
 
 
+def test_process_backlog_verbose_reports_progress_to_stderr(monkeypatch, capsys):
+    conn = FakeConn(lock=True)
+    candidate = _candidate("good.pdf", "aaa")
+    plan = backlog_ingest.DiscoveryPlan((candidate,), (candidate,), ())
+    receipt = SimpleNamespace(extraction_status="complete", merchant="Sobeys", total=12.34)
+    monkeypatch.setattr(backlog_ingest, "plan_unprocessed_receipts", lambda *args, **kwargs: plan)
+    monkeypatch.setattr(backlog_ingest, "parse_scans_parallel", lambda *args, **kwargs: [receipt])
+    monkeypatch.setattr(backlog_ingest, "persist_evidence_first", lambda *args, **kwargs: None)
+
+    backlog_ingest.process_backlog(conn, Path("/receipts"), Path("/cache"), verbose=True)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "[1/1] Running OCR and parsing good.pdf" in captured.err
+    assert "worker=unknown:unknown" in captured.err
+    assert "status=complete, merchant='Sobeys', total=12.34" in captured.err
+    assert "[1/1] Finished good.pdf: succeeded" in captured.err
+
+
 def test_failed_status_preserves_retryable_hash_and_error():
     conn = FakeConn()
     candidate = _candidate("bad.pdf", "abc123")

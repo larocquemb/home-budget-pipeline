@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -78,7 +79,7 @@ def release_backlog_lock(conn) -> None:
 
 def _source_reference(candidate: ReceiptCandidate, root: Path) -> str:
     try:
-        return str(candidate.path.relative_to(root))
+        return candidate.path.relative_to(root).as_posix()
     except ValueError:
         return candidate.path.name
 
@@ -168,6 +169,7 @@ def process_backlog(
     ingest_schema: str = "ingest",
     budget_schema: str = "budget",
     refresh_ocr_cache: bool = False,
+    verbose: bool = False,
 ) -> dict[str, int]:
     """Process pending receipts independently so one failure does not stop the backlog."""
     if not acquire_backlog_lock(conn):
@@ -181,17 +183,29 @@ def process_backlog(
         "review_required": 0,
     }
 
+    def progress(message: str) -> None:
+        if verbose:
+            print(message, file=sys.stderr, flush=True)
+
     try:
+        progress(f"Discovering receipts under {root}")
         plan = plan_unprocessed_receipts(conn, root, ingest_schema=ingest_schema)
         pending = plan.discovered if refresh_ocr_cache else plan.pending
         summary["discovered"] = len(plan.discovered)
         summary["skipped"] = 0 if refresh_ocr_cache else len(plan.skipped)
+        progress(
+            f"Discovered {len(plan.discovered)} receipt(s); "
+            f"processing {len(pending)}, skipping {summary['skipped']}"
+        )
 
-        for candidate in pending:
+        for index, candidate in enumerate(pending, start=1):
+            reference = _source_reference(candidate, root)
             try:
+                progress(f"[{index}/{len(pending)}] Starting {reference}")
                 _mark_processing(conn, candidate, root, ingest_schema)
                 conn.commit()
 
+                progress(f"[{index}/{len(pending)}] Running OCR and parsing {reference}")
                 receipts = parse_scans_parallel(
                     [candidate.path],
                     root,
@@ -203,6 +217,16 @@ def process_backlog(
                     raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
 
                 receipt = receipts[0]
+                worker_host = getattr(receipt, "worker_host", "unknown")
+                worker_pid = getattr(receipt, "worker_pid", "unknown")
+                progress(
+                    f"[{index}/{len(pending)}] OCR complete: "
+                    f"worker={worker_host}:{worker_pid}, "
+                    f"status={receipt.extraction_status}, "
+                    f"merchant={getattr(receipt, 'merchant', None)!r}, "
+                    f"total={getattr(receipt, 'total', None)}"
+                )
+                progress(f"[{index}/{len(pending)}] Persisting {reference}")
                 persist_evidence_first(
                     conn,
                     [receipt],
@@ -217,12 +241,15 @@ def process_backlog(
                     summary["review_required"] += 1
                 else:
                     summary["succeeded"] += 1
+                progress(f"[{index}/{len(pending)}] Finished {reference}: {status}")
             except Exception as exc:
                 conn.rollback()
                 _mark_failed(conn, candidate, root, ingest_schema, exc)
                 conn.commit()
                 summary["failed"] += 1
+                progress(f"[{index}/{len(pending)}] Failed {reference}: {type(exc).__name__}: {exc}")
 
+        progress("Receipt processing complete")
         return summary
     finally:
         release_backlog_lock(conn)
@@ -262,6 +289,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ingest-schema", default="ingest")
     parser.add_argument("--budget-schema", default="budget")
     parser.add_argument("--refresh-ocr-cache", action="store_true")
+    parser.add_argument("--verbose", action="store_true", help="Print per-receipt progress to stderr.")
     return parser.parse_args(argv)
 
 
@@ -279,6 +307,7 @@ def main() -> int:
             ingest_schema=args.ingest_schema,
             budget_schema=args.budget_schema,
             refresh_ocr_cache=args.refresh_ocr_cache,
+            verbose=args.verbose,
         )
     finally:
         conn.close()
