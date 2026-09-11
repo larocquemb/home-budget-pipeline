@@ -49,6 +49,18 @@ TOTAL 11.48
         self.assertEqual(total, 11.48)
         self.assertEqual([(x.item_name, x.line_total) for x in scan.extract_items(text)], [("Milk", 5.94), ("Bread", 4.99)])
 
+    def test_instant_savings_is_not_extracted_as_a_product(self):
+        text = """Baguette White $3.99 C
+INSTANT SAVINGS $0.50
+YOU SAVED $1.30
+POINTS EARNED 200 PTS
+1.275 kg @ $3.13 / kg
++EHC $0.12"""
+        self.assertEqual(
+            [(item.item_name, item.line_total) for item in scan.extract_items(text)],
+            [("Baguette White", 3.99)],
+        )
+
     def test_item_amount_wrapped_to_next_ocr_line_is_preserved(self):
         text = """079594233699 5PK YARD BAG <A>
 203. 44 6.88
@@ -105,6 +117,16 @@ CRCT IO PUFF 12x1 93573447143 1 @ .01-"""
         self.assertFalse(scan._has_literal_valid_timestamp("SALE 6/31,'26 10:07"))
         self.assertTrue(scan._has_literal_valid_timestamp("SALE 5/31/26 10:07"))
 
+    def test_embedded_pdf_text_rejects_flattened_tesseract_tsv(self):
+        flattened_tsv = (
+            "5 1 3 1 1 1 581 173 174 67 39.970039 Center "
+            "5 1 3 1 1 2 779 170 128 42 92.893394 Roast "
+            "5 1 3 1 1 3 932 168 130 43 28.784584 Bniss"
+        )
+        self.assertTrue(scan._looks_like_tesseract_tsv(flattened_tsv))
+        self.assertEqual(scan._usable_embedded_text(flattened_tsv), "")
+        self.assertEqual(scan._usable_embedded_text("Center Roast $11.00"), "Center Roast $11.00")
+
     def test_ocr_candidate_scoring_prefers_recognizable_receipt_fields(self):
         sparse_noise = "STORE 123 random text"
         receipt = "TRANSACTION 123\n5/31/26 10:07\nSUBTOTAL 10.00\nGST 0.50\nTOTAL 10.50"
@@ -159,6 +181,36 @@ CRCT IO PUFF 12x1 93573447143 1 @ .01-"""
                 "Pretzel Cracker Ranc $5.49 BC",
             ],
         )
+
+    def test_ocr_pass_metric_uses_common_versioned_schema(self):
+        candidate = scan.OCRCandidate(
+            "TOTAL $12.34",
+            (scan.OCRLine("TOTAL $12.34", 98.0),),
+            200,
+            "paddle",
+            "paddle",
+        )
+
+        metric = scan._ocr_pass_metric(candidate, page=1, variant="raw", seconds=1.25)
+        self.assertEqual(metric["schema_version"], 1)
+        self.assertEqual(metric["engine"], "paddle")
+        self.assertEqual(metric["engine_type"], "traditional_ocr")
+        self.assertEqual(metric["status"], "success")
+        self.assertEqual(metric["quality"]["line_count"], 1)
+        self.assertEqual(metric["quality"]["summary_score"], metric["summary_score"])
+        self.assertEqual(metric["engine_options"]["recognition_model"], "PP-OCRv6_medium_rec")
+        self.assertEqual(metric["usage"], {})
+        self.assertEqual(metric["provenance"], {})
+
+    def test_failed_ocr_pass_records_failure_status(self):
+        candidate = scan.OCRCandidate(
+            "", (), 200, "paddle", "paddle", "failed", "RuntimeError"
+        )
+
+        metric = scan._ocr_pass_metric(candidate, page=1, variant="raw", seconds=0.5)
+
+        self.assertEqual(metric["status"], "failed")
+        self.assertEqual(metric["error_type"], "RuntimeError")
 
     def test_alternate_ocr_supplements_only_missing_summary_fields(self):
         primary = "MICHAELS\n5/31/26 10:07\nITEM 37.98-\nSUBTOTAL 37.98-"

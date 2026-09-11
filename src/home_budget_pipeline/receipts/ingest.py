@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,9 @@ MONEY_RE = re.compile(r"-?\$?\s*(\d{1,6}(?:,\d{3})*\.\d{2})-?")
 OCR_MONEY_RE = re.compile(
     r"(?P<lead>-)?\$?\s*(?P<whole>\d{1,6})(?:\s*[,.:]\s*\.?\s*|\s+\.\s*)(?P<cents>\d{2})(?P<trail>-)?"
 )
+TESSERACT_TSV_ROW_RE = re.compile(
+    r"(?:^|\s)[1-5](?:\s+\d+){9}\s+-?\d+(?:\.\d+)?(?:\s|$)"
+)
 DATE_PATTERNS = (
     re.compile(r"\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b"),
     re.compile(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})\b"),
@@ -60,7 +64,10 @@ ID_PATTERNS = (
     re.compile(r"\b(?:receipt|transaction|trans|order|invoice)\s*(?:#|no\.?|number|id)?\s*[:#-]?\s*([A-Z0-9-]{4,})\b", re.I),
 )
 TOTAL_WORDS = re.compile(r"\b(total|subtotal|tax|gst|pst|hst|balance|tender|change|amount\s+due)\b", re.I)
-NON_ITEM_WORDS = re.compile(r"\b(thank|visa|mastercard|debit|credit|approved|cashier|store|points?)\b", re.I)
+NON_ITEM_WORDS = re.compile(
+    r"\b(thank|visa|mastercard|debit|credit|approved|cashier|store|points?|savings?|saved|discount|coupon|EHC|deposit)\b",
+    re.I,
+)
 TENDER_LINE_RE = re.compile(
     r"(?:\bacct\s*:.*cad\$?|\bcad\$|\bvisa(?:\s+credit(?:\s+card)?)?|\bmastercard|\bmaster\s*card|"
     r"\bdebit|\binterac|\bamex|\btender|\btrans\s+type\s*:\s*purchase|^\s*(?:a?mount|mount)\b)",
@@ -104,6 +111,7 @@ class ScannedReceipt:
     payer: Optional[str] = None
     items: List[ScannedItem] = field(default_factory=list)
     page_text: List[str] = field(default_factory=list)
+    ocr_layout: List[dict] = field(default_factory=list)
     text: str = ""
     extraction_confidence: float = 0.0
     extraction_status: str = "review"
@@ -118,6 +126,10 @@ class ScannedReceipt:
 class OCRLine:
     text: str
     confidence: float
+    x: Optional[int] = None
+    y: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +139,8 @@ class OCRCandidate:
     dpi: int
     psm: str
     engine: str = "tesseract"
+    status: str = "success"
+    error_type: Optional[str] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -168,7 +182,7 @@ def _run_tesseract_candidate(path: Path, *, dpi: int, psm: str) -> OCRCandidate:
     """Run Tesseract once and retain reconstructed lines and word confidence."""
     binary = shutil.which("tesseract")
     if not binary:
-        return OCRCandidate("", (), dpi, psm)
+        return OCRCandidate("", (), dpi, psm, status="unavailable", error_type="executable_not_found")
     proc = subprocess.run(
         [binary, str(path), "stdout", "--psm", psm, "tsv"],
         capture_output=True,
@@ -176,8 +190,8 @@ def _run_tesseract_candidate(path: Path, *, dpi: int, psm: str) -> OCRCandidate:
         check=False,
     )
     if proc.returncode != 0:
-        return OCRCandidate("", (), dpi, psm)
-    grouped: dict[Tuple[str, str, str, str], list[Tuple[str, float]]] = {}
+        return OCRCandidate("", (), dpi, psm, status="failed", error_type="nonzero_exit")
+    grouped: dict[Tuple[str, str, str, str], list[Tuple[str, float, int, int, int, int]]] = {}
     for row in csv.DictReader(io.StringIO(proc.stdout), delimiter="\t"):
         word = (row.get("text") or "").strip()
         if row.get("level") != "5" or not word:
@@ -187,13 +201,21 @@ def _run_tesseract_candidate(path: Path, *, dpi: int, psm: str) -> OCRCandidate:
             confidence = max(0.0, float(row.get("conf", "-1")))
         except ValueError:
             confidence = 0.0
-        grouped.setdefault(key, []).append((word, confidence))
+        try:
+            box = tuple(int(row.get(field, "0")) for field in ("left", "top", "width", "height"))
+        except ValueError:
+            box = (0, 0, 0, 0)
+        grouped.setdefault(key, []).append((word, confidence, *box))
     lines: list[OCRLine] = []
     for words in grouped.values():
-        text = normalize_line(" ".join(word for word, _ in words))
-        weight = sum(len(word) for word, _ in words)
-        confidence = sum(len(word) * value for word, value in words) / weight if weight else 0.0
-        lines.append(OCRLine(text, confidence))
+        text = normalize_line(" ".join(word for word, *_ in words))
+        weight = sum(len(word) for word, *_ in words)
+        confidence = sum(len(word) * value for word, value, *_ in words) / weight if weight else 0.0
+        x = min(word[2] for word in words)
+        y = min(word[3] for word in words)
+        right = max(word[2] + word[4] for word in words)
+        bottom = max(word[3] + word[5] for word in words)
+        lines.append(OCRLine(text, confidence, x, y, right - x, bottom - y))
     return OCRCandidate("\n".join(line.text for line in lines), tuple(lines), dpi, psm)
 
 
@@ -208,7 +230,7 @@ def _run_paddle_candidate(image, *, dpi: int) -> OCRCandidate:
     """Run the optional Paddle engine and retain its line confidence."""
     global _PADDLE_OCR
     if not _paddle_ocr_enabled():
-        return OCRCandidate("", (), dpi, "paddle", "paddle")
+        return OCRCandidate("", (), dpi, "paddle", "paddle", "disabled")
     try:
         if _PADDLE_OCR is None:
             from paddleocr import PaddleOCR  # type: ignore
@@ -233,8 +255,8 @@ def _run_paddle_candidate(image, *, dpi: int) -> OCRCandidate:
             if normalize_line(str(text))
         )
         return OCRCandidate("\n".join(line.text for line in lines), lines, dpi, "paddle", "paddle")
-    except Exception:
-        return OCRCandidate("", (), dpi, "paddle", "paddle")
+    except Exception as exc:
+        return OCRCandidate("", (), dpi, "paddle", "paddle", "failed", type(exc).__name__)
 
 
 def _prepare_ocr_image(image):
@@ -289,6 +311,18 @@ def _has_literal_valid_timestamp(text: str) -> bool:
         except ValueError:
             continue
     return False
+
+
+def _looks_like_tesseract_tsv(text: str) -> bool:
+    """Detect a flattened Tesseract TSV layer masquerading as receipt text."""
+    if "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num" in text:
+        return True
+    return len(TESSERACT_TSV_ROW_RE.findall(text)) >= 3
+
+
+def _usable_embedded_text(text: str) -> str:
+    """Reject PDF text layers containing OCR engine metadata rather than prose."""
+    return "" if _looks_like_tesseract_tsv(text) else text
 
 
 def _ocr_candidate_score(text: str) -> int:
@@ -425,7 +459,58 @@ def _line_consensus_text(candidates: Sequence[OCRCandidate]) -> str:
     return "\n".join(_reconcile_duplicate_ocr_lines(chosen))
 
 
-def _ocr_pdf_pages(path: Path) -> List[str]:
+def _ocr_pass_metric(candidate: OCRCandidate, *, page: int, variant: str, seconds: float) -> dict:
+    structural_score = _ocr_candidate_score(candidate.text)
+    summary_score = _ocr_supplement_score(candidate.text)
+    valid_timestamp = _has_literal_valid_timestamp(candidate.text)
+    line_count = len(candidate.lines)
+    character_count = len(candidate.text)
+    engine_options = (
+        {
+            "detection_model": os.getenv("HOME_BUDGET_PADDLE_DET_MODEL", "PP-OCRv6_medium_det"),
+            "recognition_model": os.getenv("HOME_BUDGET_PADDLE_REC_MODEL", "PP-OCRv6_medium_rec"),
+        }
+        if candidate.engine == "paddle"
+        else {"psm": candidate.psm}
+    )
+    engine_type = "vision_ai" if candidate.engine in {"openai", "anthropic", "gemini"} else "traditional_ocr"
+    status = candidate.status if candidate.status != "success" or candidate.lines else "no_text"
+    return {
+        "schema_version": 1,
+        "page_number": page,
+        "engine": candidate.engine,
+        "engine_type": engine_type,
+        "dpi": candidate.dpi,
+        "psm": candidate.psm,
+        "variant": variant,
+        "seconds": round(seconds, 3),
+        "status": status,
+        "error_type": candidate.error_type,
+        "line_count": line_count,
+        "character_count": character_count,
+        "text": candidate.text,
+        "structural_score": structural_score,
+        "summary_score": summary_score,
+        "valid_timestamp": valid_timestamp,
+        "selected_base": False,
+        "consensus_line_coverage": 0,
+        "consensus_coverage_ratio": 0.0,
+        "quality": {
+            "line_count": line_count,
+            "character_count": character_count,
+            "structural_score": structural_score,
+            "summary_score": summary_score,
+            "valid_timestamp": valid_timestamp,
+            "consensus_line_coverage": 0,
+            "consensus_coverage_ratio": 0.0,
+        },
+        "engine_options": engine_options,
+        "usage": {},
+        "provenance": {},
+    }
+
+
+def _ocr_pdf_pages(path: Path, pass_metrics: Optional[List[dict]] = None) -> List[str]:
     try:
         import pypdfium2 as pdfium  # type: ignore
     except Exception:
@@ -442,19 +527,31 @@ def _ocr_pdf_pages(path: Path) -> List[str]:
                 raw_image = doc[idx].render(scale=dpi / 72).to_pil()
                 # Raw rendering preserves separation in heavy/bold glyphs;
                 # enhancement recovers faint thermal printing.
-                for image in (raw_image, _prepare_ocr_image(raw_image)):
+                for variant, image in (("raw", raw_image), ("enhanced", _prepare_ocr_image(raw_image))):
                     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                         tmp_path = Path(tmp.name)
                     try:
                         image.save(tmp_path)
-                        candidates.extend(
-                            _run_tesseract_candidate(tmp_path, dpi=dpi, psm=psm)
-                            for psm in OCR_PAGE_SEGMENTATION_MODES
-                        )
+                        for psm in OCR_PAGE_SEGMENTATION_MODES:
+                            started = time.perf_counter()
+                            candidate = _run_tesseract_candidate(tmp_path, dpi=dpi, psm=psm)
+                            candidates.append(candidate)
+                            if pass_metrics is not None:
+                                pass_metrics.append(_ocr_pass_metric(
+                                    candidate, page=idx + 1, variant=variant,
+                                    seconds=time.perf_counter() - started,
+                                ))
                     finally:
                         tmp_path.unlink(missing_ok=True)
                 if dpi == 200 and _paddle_ocr_enabled():
-                    candidates.append(_run_paddle_candidate(raw_image, dpi=dpi))
+                    started = time.perf_counter()
+                    candidate = _run_paddle_candidate(raw_image, dpi=dpi)
+                    candidates.append(candidate)
+                    if pass_metrics is not None:
+                        pass_metrics.append(_ocr_pass_metric(
+                            candidate, page=idx + 1, variant="raw",
+                            seconds=time.perf_counter() - started,
+                        ))
             # A single high-resolution structured pass recovers small final
             # glyphs (for example, a trailing "c") without multiplying every
             # expensive DPI/layout/preprocessing combination.
@@ -463,18 +560,36 @@ def _ocr_pdf_pages(path: Path) -> List[str]:
                 tmp_path = Path(tmp.name)
             try:
                 high_detail_image.save(tmp_path)
-                candidates.append(
-                    _run_tesseract_candidate(
-                        tmp_path,
-                        dpi=OCR_HIGH_DETAIL_DPI,
-                        psm=OCR_HIGH_DETAIL_PSM,
-                    )
+                started = time.perf_counter()
+                candidate = _run_tesseract_candidate(
+                    tmp_path, dpi=OCR_HIGH_DETAIL_DPI, psm=OCR_HIGH_DETAIL_PSM,
                 )
+                candidates.append(candidate)
+                if pass_metrics is not None:
+                    pass_metrics.append(_ocr_pass_metric(
+                        candidate, page=idx + 1, variant="high_detail",
+                        seconds=time.perf_counter() - started,
+                    ))
             finally:
                 tmp_path.unlink(missing_ok=True)
             best_text = _line_consensus_text(candidates)
             for candidate in sorted(candidates, key=lambda item: _ocr_supplement_score(item.text), reverse=True):
                 best_text = _supplement_missing_receipt_summary(best_text, candidate.text)
+            if pass_metrics is not None:
+                page_metrics = pass_metrics[-len(candidates):]
+                base = _select_ocr_candidate(candidates)
+                consensus_lines = [line for line in best_text.splitlines() if line]
+                for candidate, metric in zip(candidates, page_metrics):
+                    metric["selected_base"] = candidate is base
+                    coverage = sum(
+                        any(_ocr_lines_match(line, candidate_line.text) for candidate_line in candidate.lines)
+                        for line in consensus_lines
+                    )
+                    ratio = round(coverage / len(consensus_lines), 4) if consensus_lines else 0.0
+                    metric["consensus_line_coverage"] = coverage
+                    metric["consensus_coverage_ratio"] = ratio
+                    metric["quality"]["consensus_line_coverage"] = coverage
+                    metric["quality"]["consensus_coverage_ratio"] = ratio
             pages.append(best_text)
     finally:
         doc.close()
@@ -510,19 +625,19 @@ def _supplement_missing_receipt_summary(primary: str, alternative: str) -> str:
     return primary + (("\n" + "\n".join(additions)) if additions else "")
 
 
-def extract_page_text(path: Path) -> List[str]:
+def extract_page_text(path: Path, pass_metrics: Optional[List[dict]] = None) -> List[str]:
     if path.suffix.lower() == ".pdf":
         embedded_pages: List[str] = []
         image_based = False
         try:
             import pdfplumber  # type: ignore
             with pdfplumber.open(str(path)) as pdf:
-                embedded_pages = [(page.extract_text() or "") for page in pdf.pages]
+                embedded_pages = [_usable_embedded_text(page.extract_text() or "") for page in pdf.pages]
                 image_based = any(page.images for page in pdf.pages)
         except Exception:
             pass
         if image_based or not any(page.strip() for page in embedded_pages):
-            ocr_pages = _ocr_pdf_pages(path)
+            ocr_pages = _ocr_pdf_pages(path, pass_metrics)
             if ocr_pages:
                 selected: List[str] = []
                 for idx in range(max(len(embedded_pages), len(ocr_pages))):
@@ -549,6 +664,67 @@ def extract_page_text(path: Path) -> List[str]:
                 tmp_path.unlink(missing_ok=True)
     except Exception:
         return [_run_tesseract(path)]
+
+
+def _align_page_layout(text: str, detected: Sequence[OCRLine]) -> List[OCRLine]:
+    """Attach geometry from a layout pass to the final consensus text."""
+    aligned: List[OCRLine] = []
+    unused = list(detected)
+    for raw_line in text.splitlines():
+        line = normalize_line(raw_line)
+        if not line or _looks_like_tesseract_tsv(line):
+            continue
+        matches = [candidate for candidate in unused if _ocr_lines_match(line, candidate.text)]
+        if matches:
+            match = max(matches, key=lambda candidate: SequenceMatcher(None, _line_key(line), _line_key(candidate.text)).ratio())
+            unused.remove(match)
+            aligned.append(OCRLine(line, match.confidence, match.x, match.y, match.width, match.height))
+        else:
+            aligned.append(OCRLine(line, 0.0))
+    return aligned
+
+
+def extract_page_layout(path: Path, pages: Sequence[str]) -> List[List[OCRLine]]:
+    """Run one geometry pass and align it with already-selected page text."""
+    detected_pages: List[Tuple[OCRLine, ...]] = []
+    if path.suffix.lower() == ".pdf":
+        try:
+            import pypdfium2 as pdfium  # type: ignore
+
+            doc = pdfium.PdfDocument(str(path))
+            try:
+                for index in range(len(doc)):
+                    image = doc[index].render(scale=300 / 72).to_pil()
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                        tmp_path = Path(tmp.name)
+                    try:
+                        image.save(tmp_path)
+                        detected_pages.append(_run_tesseract_candidate(tmp_path, dpi=300, psm="6").lines)
+                    finally:
+                        tmp_path.unlink(missing_ok=True)
+            finally:
+                doc.close()
+        except Exception:
+            detected_pages = []
+    else:
+        try:
+            from PIL import Image
+
+            with Image.open(path) as image:
+                prepared = _prepare_ocr_image(image)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    tmp_path = Path(tmp.name)
+                try:
+                    prepared.save(tmp_path)
+                    detected_pages.append(_run_tesseract_candidate(tmp_path, dpi=0, psm="6").lines)
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+        except Exception:
+            detected_pages = []
+    return [
+        _align_page_layout(page, detected_pages[index] if index < len(detected_pages) else ())
+        for index, page in enumerate(pages)
+    ]
 
 
 def normalize_line(line: str) -> str:
@@ -777,6 +953,8 @@ def extract_items(text: str) -> List[ScannedItem]:
         line = normalize_leading_decimal_money(normalize_line(raw))
         if not line or TOTAL_WORDS.search(line) or NON_ITEM_WORDS.search(line):
             continue
+        if re.search(r"^\s*(?:\d+(?:\.\d+)?\s*(?:kg|lb)\s*@|\d+\s*@\s*\d+\s*/)", line, re.I):
+            continue
         matches = list(MONEY_RE.finditer(line))
         if not matches:
             # Some OCR splits a barcode/item line from its amount column.
@@ -890,7 +1068,7 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
     filename_date, filename_merchant, filename_total = receipt_info_from_filename(path)
     payment = extract_payment_provenance(text)
     try:
-        reference = str(path.relative_to(source_root)) if source_root and source_root.is_dir() else path.name
+        reference = path.relative_to(source_root).as_posix() if source_root and source_root.is_dir() else path.name
     except ValueError:
         reference = path.name
     receipt = ScannedReceipt(

@@ -128,8 +128,45 @@ uses a high-resolution Tesseract pass for small or damaged glyphs.
 After consensus, the parser extracts receipt fields and line items. Missing
 merchant, date, and total values can be recovered from a structured filename
 such as `20260214_sobeys_363_95.pdf`. The final consensus OCR and parsed receipt
-are cached by source hash and persisted as receipt evidence. Individual engine
-candidates are not currently persisted.
+are cached by source hash and persisted as receipt evidence. Individual OCR
+passes and their quality metrics are retained for later effectiveness analysis.
+
+The unified BrownRook CLI can rebuild only the local OCR cache, without a
+database connection or database writes:
+
+```bash
+brownrook ocr-cache rebuild
+```
+
+It uses `RECEIPT_SOURCE_ROOT` and `HOME_BUDGET_OCR_CACHE` when explicit paths
+are omitted. The equivalent form that does not require an activated virtual
+environment is `.venv/bin/python -m home_budget_pipeline ocr-cache rebuild`.
+Cache version 13 keeps schema, source, processing, timing, and OCR-pass details
+inside a top-level `metadata` object. It groups final lines by source page and
+records OCR confidence, bounding boxes, line type, and derived department
+context. Each OCR pass uses a versioned, engine-neutral metrics envelope
+containing status, text, normalized quality measures, engine-specific options,
+usage, and provenance. Readers remain compatible with legacy flat cache
+formats. This keeps raw layout evidence available for receipt comparison and
+later item recognition.
+
+```json
+{
+  "metadata": {
+    "schema_version": 1,
+    "cache_version": 13,
+    "run_uuid": "eb49d924-9a70-4ef5-b10f-21864b4ae531",
+    "source_reference": "2026-02-14/20260214_sobeys_363_95.pdf",
+    "source_sha256": "...",
+    "processed_at": "2026-09-11T09:00:00+00:00",
+    "processing_seconds": 12.4,
+    "timings": {},
+    "ocr_passes": []
+  },
+  "plain_text": "SOBEYS\\nTOTAL 363.95",
+  "pages": []
+}
+```
 
 `--refresh-ocr-cache` performs a complete refresh: it bypasses cached OCR,
 reprocesses receipts already marked complete, and replaces their canonical
@@ -139,6 +176,7 @@ extraction and line items. For example:
 HOME_BUDGET_PADDLE_OCR=true \
 home-budget-process-receipts /path/to/receipt/inbox \
   --workers 1 \
+  --verbose \
   --refresh-ocr-cache \
   --db-dsn "$DATABASE_URL"
 ```
@@ -480,6 +518,26 @@ Credit cards, prepaid accounts, and bank accounts therefore remain payment sourc
 ## 9. PostgreSQL Bootstrap
 
 `sql/schema_phase1.sql` is the canonical bootstrap DDL for a fresh Ledger database.
+
+Initialize a new database or apply all additive schema upgrades to an existing one with:
+
+```bash
+brownrook database setup
+```
+
+Receipt OCR runs and their individual passes are retained in
+`budget.receipt_ocr_runs` and `budget.receipt_ocr_passes`. Record verified
+ground truth after reviewing a receipt with:
+
+```bash
+brownrook receipts feedback 123 --outcome confirmed
+brownrook receipts feedback 123 --outcome corrected \
+  --corrected-fields '{"merchant":"Sobeys","total":"42.17"}'
+```
+
+Use `budget.receipt_ocr_effectiveness` to compare selection frequency, runtime,
+consensus coverage, and verified outcomes by merchant, file type, page, and OCR
+configuration.
 
 The `/sql` directory intentionally separates schema from reporting queries.
 
