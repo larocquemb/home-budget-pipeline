@@ -8,7 +8,9 @@ argo_app="${ARGO_APP:-ledger}"
 kube_namespace="${KUBE_NAMESPACE:-home-budget}"
 ledger_deployment="${LEDGER_DEPLOYMENT:-ledger-web}"
 registry_secret="${REGISTRY_SECRET:-ghcr-secret}"
-export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config-brownrook}"
+if [ -z "${KUBECONFIG:-}" ] && [ -f "$HOME/.kube/config-brownrook" ]; then
+    export KUBECONFIG="$HOME/.kube/config-brownrook"
+fi
 exit_status=0
 configured_image=''
 
@@ -30,14 +32,21 @@ else
 fi
 
 section "Argo CD (${argo_app})"
-if ! command -v argocd >/dev/null 2>&1; then
-    printf 'argocd is not installed\n'
+argo_json=''
+if command -v argocd >/dev/null 2>&1; then
+    argo_json=$(argocd app get "$argo_app" --core -o json 2>/dev/null) || argo_json=''
+fi
+if [ -z "$argo_json" ] && command -v kubectl >/dev/null 2>&1; then
+    argo_json=$(kubectl -n argocd get application "$argo_app" -o json 2>/dev/null) || argo_json=''
+fi
+if [ -z "$argo_json" ]; then
+    printf 'Unable to read the Argo CD Application via CLI or Kubernetes API\n'
     exit_status=1
 else
-    argo_details=$(argocd app get "$argo_app" --core -o json | jq -r \
-        '[.spec.source.targetRevision, .status.sync.revision[0:7], .status.sync.status, .status.health.status] | @tsv')
-    argo_status=$?
-    if [ "$argo_status" -ne 0 ]; then
+    argo_details=$(jq -r \
+        '[.spec.source.targetRevision, .status.sync.revision[0:7], .status.sync.status, .status.health.status] | @tsv' \
+        <<< "$argo_json")
+    if [ -z "$argo_details" ]; then
         exit_status=1
     else
         IFS=$'\t' read -r argo_target argo_revision sync_status health_status <<< "$argo_details"
