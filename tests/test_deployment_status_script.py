@@ -40,7 +40,9 @@ def test_deployment_status_has_safe_configurable_defaults():
     assert 'GITHUB_REPO:-larocquemb/home-budget-pipeline' in text
     assert 'ARGO_APP:-ledger' in text
     assert 'KUBE_NAMESPACE:-home-budget' in text
-    assert 'KUBECONFIG:-$HOME/.kube/config-brownrook' in text
+    assert '[ -z "${KUBECONFIG:-}" ]' in text
+    assert '[ -f "$HOME/.kube/config-brownrook" ]' in text
+    assert 'export KUBECONFIG="$HOME/.kube/config-brownrook"' in text
     assert 'docker buildx' not in text
     assert "delete" not in text
     assert "apply" not in text
