@@ -7,7 +7,8 @@ LABEL org.opencontainers.image.source="https://github.com/larocquemb/home-budget
 ENV HOME_BUDGET_DATA_ROOT=/data \
     HOME_BUDGET_SQL_DIR=/opt/app-root/src/sql \
     PADDLE_PDX_CACHE_HOME=/opt/paddlex-cache \
-    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
+    PYTHONWARNINGS="ignore:No ccache found.*:UserWarning"
 
 USER 0
 
