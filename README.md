@@ -221,6 +221,17 @@ Paddle medium models have a substantial memory footprint, so the Kubernetes
 receipt processor uses one worker. Workers parallelize separate receipt files;
 they do not parallelize stages within one receipt.
 
+To refresh just one receipt, including one already completed, use its exact path
+relative to `RECEIPT_SOURCE_ROOT`:
+
+```bash
+ledger receipts reprocess '2026-08-14/receipts_20260814_0001.pdf' --verbose
+```
+
+This refreshes its OCR cache and replaces its canonical extraction and line
+items. It uses the configured database and cache directory. See
+[receipt processing](docs/receipt-processing.md) for overrides and the K3s command.
+
 ### AI-grounded product enrichment
 
 Product enrichment is a separate post-import stage. It does not alter the raw

@@ -56,6 +56,55 @@ Provision this ConfigMap before deploying these manifests for the first time.
 Pass `--refresh-ocr-cache` to bypass cached OCR and reprocess every discovered
 receipt, including receipts already marked succeeded or review-required.
 
+To reprocess exactly one receipt, use its full path relative to the configured
+receipt source root:
+
+```bash
+ledger receipts reprocess '2026-08-14/receipts_20260814_0001.pdf' --verbose
+```
+
+This runs immediately with one OCR worker, refreshes that receipt's OCR cache,
+and replaces its canonical extraction and line items, even if it already
+succeeded. It preserves the date-relative source reference and takes the same
+per-receipt PostgreSQL lock as the queue consumer. It does not publish RabbitMQ
+messages. The JSON result reports `succeeded` or `review_required`; failures
+return a nonzero exit code.
+
+A successful run ends with:
+
+```json
+{
+  "source_reference": "2026-08-14/receipts_20260814_0001.pdf",
+  "status": "succeeded"
+}
+```
+
+This confirms that processing and persistence completed for that receipt.
+`review_required` means processing completed but the extraction needs review.
+
+Defaults come from `RECEIPT_SOURCE_ROOT`, `HOME_BUDGET_OCR_CACHE`, and
+`DATABASE_URL` (or `HOME_BUDGET_PG_DSN`). Override them with `--receipt-root`,
+`--ocr-cache`, and `--db-dsn`; custom schemas use `--ingest-schema` and
+`--budget-schema`.
+
+In K3s, after deploying an image containing this command through Argo CD:
+
+```bash
+kubectl --context brownrook-k3s1 -n home-budget \
+  exec deployment/receipt-worker -- \
+  ledger receipts reprocess '2026-08-14/receipts_20260814_0001.pdf' --verbose
+```
+
+Run this when the worker is idle so the extra OCR process has memory available.
+Use `receipts retry` for failed or interrupted work that should become eligible
+for normal publishing again.
+
+| Command | Scope | Result |
+| --- | --- | --- |
+| `receipts retry SOURCE_REFERENCE` | One failed or interrupted receipt | Resets its attempt budget for the next publish or process run; refuses completed receipts. |
+| `receipts reprocess SOURCE_REFERENCE` | One receipt, including completed receipts | Immediately refreshes OCR and replaces its extraction results. |
+| `receipts process --refresh-ocr-cache` | Every receipt under the supplied root | Immediately refreshes OCR and replaces extraction results for the whole selection. |
+
 ## Receipt-scoped product enrichment
 
 After import, product enrichment can be limited to all line items belonging to
