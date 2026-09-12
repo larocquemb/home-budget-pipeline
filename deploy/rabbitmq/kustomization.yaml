@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../k8s
+  - rabbitmq.yaml
+  - receipt-worker.yaml
+patches:
+  - path: publisher-patch.yaml
+# Follow the immutable application image selected by the existing CI pipeline.
+replacements:
+  - source:
+      kind: CronJob
+      name: receipt-processor
+      fieldPath: spec.jobTemplate.spec.template.spec.containers.[name=receipt-processor].image
+    targets:
+      - select:
+          kind: Deployment
+          name: receipt-worker
+        fieldPaths:
+          - spec.template.spec.containers.[name=receipt-worker].image

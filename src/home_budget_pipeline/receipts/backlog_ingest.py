@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -14,6 +16,32 @@ from . import ingest as scan
 from .parallel_ingest import parse_scans_parallel, persist_evidence_first
 
 LOCK_NAME = "home-budget-receipt-backlog"
+
+
+class RetryExhausted(RuntimeError):
+    """The persisted attempt budget has been consumed."""
+
+
+def validate_schema(schema: str) -> str:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
+        raise ValueError("invalid database schema")
+    return schema
+
+
+@contextmanager
+def receipt_lock(conn, source_sha256: str):
+    """Serialize one source across hosts, including commits made during OCR."""
+    key = f"home-budget-receipt:{source_sha256}"
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key,))
+    conn.commit()
+    try:
+        yield
+    finally:
+        conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (key,))
+        conn.commit()
 
 
 @dataclass(frozen=True)
@@ -55,6 +83,7 @@ def plan_unprocessed_receipts(
     hasher: Callable[[Path], str] = scan.sha256_file,
 ) -> DiscoveryPlan:
     """Hash files and partition them using rebuildable ingest processing state."""
+    validate_schema(ingest_schema)
     candidates = tuple(ReceiptCandidate(path, hasher(path)) for path in discover(root))
     completed = _completed_hashes(conn, (candidate.source_sha256 for candidate in candidates), ingest_schema)
     pending = tuple(candidate for candidate in candidates if candidate.source_sha256 not in completed)
@@ -75,6 +104,63 @@ def release_backlog_lock(conn) -> None:
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (LOCK_NAME,))
     conn.commit()
+
+
+def reset_receipt_for_retry(conn, source_reference: str, *, ingest_schema: str = "ingest") -> dict:
+    """Reset one unfinished receipt while excluding active receipt processors.
+
+    The transaction advisory lock uses the same key as receipt_lock. Read the
+    status after taking it so a just-completed receipt cannot be reset by a race.
+    """
+    validate_schema(ingest_schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT source_sha256 FROM {ingest_schema}.receipts WHERE source_reference = %s",
+                (source_reference,),
+            )
+            matches = cur.fetchall()
+            if not matches:
+                raise ValueError("no receipt found for that source reference")
+            if len(matches) != 1:
+                raise ValueError("source reference matches multiple receipt hashes; cannot safely select one")
+            source_sha256 = matches[0][0]
+            cur.execute(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"home-budget-receipt:{source_sha256}",),
+            )
+            if not cur.fetchone()[0]:
+                raise RuntimeError("receipt is currently being processed; retry after that processor finishes")
+            cur.execute(
+                f"SELECT status, attempts FROM {ingest_schema}.receipt_processing_status "
+                "WHERE source_sha256 = %s FOR UPDATE",
+                (source_sha256,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("receipt has no processing attempts to reset; run receipts publish")
+            status, attempts = row
+            if status not in ("failed", "processing"):
+                raise ValueError(f"receipt is already completed ({status}); retry would discard its completion state")
+            cur.execute(
+                f"UPDATE {ingest_schema}.receipt_processing_status "
+                "SET status = 'failed', attempts = 0, first_attempted_at = NULL, "
+                "last_attempted_at = NULL, last_error = NULL, completed_at = NULL "
+                "WHERE source_sha256 = %s",
+                (source_sha256,),
+            )
+        conn.commit()
+        return {
+            "source_reference": source_reference,
+            "source_sha256": source_sha256,
+            "previous_status": status,
+            "previous_attempts": attempts,
+            "attempts": 0,
+            "retry_ready": True,
+        }
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _source_reference(candidate: ReceiptCandidate, root: Path) -> str:
@@ -160,6 +246,80 @@ def _mark_failed(conn, candidate: ReceiptCandidate, root: Path, ingest_schema: s
         )
 
 
+def process_candidate(
+    conn,
+    candidate: ReceiptCandidate,
+    root: Path,
+    cache_dir: Path,
+    *,
+    workers: int = 1,
+    ingest_schema: str = "ingest",
+    budget_schema: str = "budget",
+    refresh_ocr_cache: bool = False,
+    max_attempts: int | None = None,
+    verify_source: bool = False,
+    progress: Callable[[str], None] = lambda message: None,
+) -> str:
+    """Commit one receipt atomically; recheck completion after taking its lock."""
+    validate_schema(ingest_schema)
+    validate_schema(budget_schema)
+    reference = _source_reference(candidate, root)
+    with receipt_lock(conn, candidate.source_sha256):
+        if not refresh_ocr_cache and candidate.source_sha256 in _completed_hashes(
+            conn, [candidate.source_sha256], ingest_schema
+        ):
+            conn.commit()
+            return "skipped"
+        if max_attempts is not None:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT attempts FROM {ingest_schema}.receipt_processing_status WHERE source_sha256 = %s",
+                    (candidate.source_sha256,),
+                )
+                row = cur.fetchone()
+            if row and row[0] >= max_attempts:
+                error = RetryExhausted("receipt attempt limit reached")
+                _mark_failed(conn, candidate, root, ingest_schema, error)
+                conn.commit()
+                raise error
+        try:
+            _mark_processing(conn, candidate, root, ingest_schema)
+            conn.commit()
+            if verify_source and scan.sha256_file(candidate.path) != candidate.source_sha256:
+                from .message import InvalidReceiptMessage
+                raise InvalidReceiptMessage("source contents changed since publication")
+            progress(f"Running OCR and parsing {reference}")
+            receipts = parse_scans_parallel(
+                [candidate.path], root, max(1, workers), cache_dir, refresh_ocr_cache,
+            )
+            if len(receipts) != 1:
+                raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
+            receipt = receipts[0]
+            if verify_source and (
+                receipt.source_sha256 != candidate.source_sha256
+                or scan.sha256_file(candidate.path) != candidate.source_sha256
+            ):
+                from .message import InvalidReceiptMessage
+                raise InvalidReceiptMessage("source contents changed during processing")
+            progress(
+                f"OCR complete: worker={getattr(receipt, 'worker_host', 'unknown')}:"
+                f"{getattr(receipt, 'worker_pid', 'unknown')}, "
+                f"status={receipt.extraction_status}, merchant={getattr(receipt, 'merchant', None)!r}, "
+                f"total={getattr(receipt, 'total', None)}"
+            )
+            progress(f"Persisting {reference}")
+            persist_evidence_first(conn, [receipt], budget_schema, replace_existing=refresh_ocr_cache)
+            status = "review_required" if receipt.extraction_status != "complete" else "succeeded"
+            _mark_completed(conn, candidate, root, ingest_schema, status)
+            conn.commit()
+            return status
+        except Exception as exc:
+            conn.rollback()
+            _mark_failed(conn, candidate, root, ingest_schema, exc)
+            conn.commit()
+            raise
+
+
 def process_backlog(
     conn,
     root: Path,
@@ -202,50 +362,17 @@ def process_backlog(
             reference = _source_reference(candidate, root)
             try:
                 progress(f"[{index}/{len(pending)}] Starting {reference}")
-                _mark_processing(conn, candidate, root, ingest_schema)
-                conn.commit()
-
-                progress(f"[{index}/{len(pending)}] Running OCR and parsing {reference}")
-                receipts = parse_scans_parallel(
-                    [candidate.path],
-                    root,
-                    max(1, workers),
-                    cache_dir,
-                    refresh_ocr_cache,
+                status = process_candidate(
+                    conn, candidate, root, cache_dir,
+                    workers=workers,
+                    ingest_schema=ingest_schema,
+                    budget_schema=budget_schema,
+                    refresh_ocr_cache=refresh_ocr_cache,
+                    progress=lambda message: progress(f"[{index}/{len(pending)}] {message}"),
                 )
-                if len(receipts) != 1:
-                    raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
-
-                receipt = receipts[0]
-                worker_host = getattr(receipt, "worker_host", "unknown")
-                worker_pid = getattr(receipt, "worker_pid", "unknown")
-                progress(
-                    f"[{index}/{len(pending)}] OCR complete: "
-                    f"worker={worker_host}:{worker_pid}, "
-                    f"status={receipt.extraction_status}, "
-                    f"merchant={getattr(receipt, 'merchant', None)!r}, "
-                    f"total={getattr(receipt, 'total', None)}"
-                )
-                progress(f"[{index}/{len(pending)}] Persisting {reference}")
-                persist_evidence_first(
-                    conn,
-                    [receipt],
-                    budget_schema,
-                    replace_existing=refresh_ocr_cache,
-                )
-                status = "review_required" if receipt.extraction_status != "complete" else "succeeded"
-                _mark_completed(conn, candidate, root, ingest_schema, status)
-                conn.commit()
-
-                if status == "review_required":
-                    summary["review_required"] += 1
-                else:
-                    summary["succeeded"] += 1
+                summary[status] += 1
                 progress(f"[{index}/{len(pending)}] Finished {reference}: {status}")
             except Exception as exc:
-                conn.rollback()
-                _mark_failed(conn, candidate, root, ingest_schema, exc)
-                conn.commit()
                 summary["failed"] += 1
                 progress(f"[{index}/{len(pending)}] Failed {reference}: {type(exc).__name__}: {exc}")
 

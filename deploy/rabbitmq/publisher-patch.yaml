@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: receipt-processor
+  namespace: home-budget
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: receipt-processor
+              command: [home-budget-receipt-queue]
+              args: [publish, /data/receipts/raw/scanned/inbox]
+              env:
+                - name: RABBITMQ_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: rabbitmq-secret
+                      key: RABBITMQ_URL
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+              volumeMounts:
+                - name: receipt-data
+                  mountPath: /data
+                  readOnly: true
