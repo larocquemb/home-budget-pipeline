@@ -2,18 +2,26 @@ TEST_DB ?= home_budget_test
 TEST_DATABASE_URL ?= postgresql://localhost/$(TEST_DB)
 PYTHON ?= .venv/bin/python
 BROWNROOK ?= .venv/bin/brownrook
+MKDOCS ?= .venv/bin/mkdocs
 RECEIPT_TEST_ROOT ?= .receipt-test
 RECEIPT_TEST_WORKERS ?= 6
 RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 KUBE_NAMESPACE ?= home-budget
 ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 
-.PHONY: help test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products
+.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
+	@echo "Documentation: docs-build docs-serve"
 	@echo "Tests:       test test-db-setup test-db test-db-verbose test-all test-receipts"
 	@echo "Operations:  status enrich-products"
+
+docs-build:
+	$(MKDOCS) build --strict
+
+docs-serve:
+	$(MKDOCS) serve
 
 status:
 	@./scripts/deployment_status.sh

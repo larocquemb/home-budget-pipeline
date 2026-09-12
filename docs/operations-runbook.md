@@ -12,8 +12,9 @@ source .venv/bin/activate
 python -m pip install -e '.[dev,db]'
 ```
 
-Application commands use `DATABASE_URL`, then `HOME_BUDGET_PG_DSN` where the
-command supports that fallback. Tests use the isolated `home_budget_test`
+Application commands accept `DATABASE_URL` and, where documented by `--help`,
+`HOME_BUDGET_PG_DSN`; use `DATABASE_URL` consistently in shared environments.
+Tests use the isolated `home_budget_test`
 database and must not point at the normal `home_budget` database because test
 setup drops and rebuilds schemas.
 
@@ -29,7 +30,14 @@ Run database integration tests:
 make test-db
 ```
 
-Validate database setup locally:
+RabbitMQ integration tests skip when `TEST_RABBITMQ_URL` is unset. With a test
+broker available, include them with:
+
+```bash
+TEST_RABBITMQ_URL="$RABBITMQ_URL" make test-db
+```
+
+Initialize or upgrade the runtime database locally:
 
 ```bash
 brownrook database setup
@@ -48,6 +56,8 @@ Run `make help` for a compact list. The repository provides these targets:
 
 | Target | Purpose |
 | --- | --- |
+| `make docs-build` | Build the online manual locally and fail on documentation warnings. |
+| `make docs-serve` | Serve the online manual locally with live reload. |
 | `make test` | Run unit tests without external-service integration tests. |
 | `make test-db-setup` | Create the disposable test database if needed, then rebuild its schemas. |
 | `make test-db` | Rebuild the disposable test schemas and run integration tests. |
@@ -66,20 +76,28 @@ The `test-db*` targets destroy and recreate schemas only in `TEST_DB`, which
 defaults to `home_budget_test`. `make test-receipts` also recreates
 `RECEIPT_TEST_ROOT`, which defaults to `.receipt-test`.
 
-## Commit and push
+Install the documentation dependencies with
+`python -m pip install -e '.[docs]'`. Pull requests build the manual with strict
+validation. Merges to `main` publish it to GitHub Pages at
+`https://larocquemb.github.io/home-budget-pipeline/`.
+
+## Commit and pull request
 
 ```bash
 git status
+git switch -c <short-branch-name>
 git add <changed-files>
 git commit -m "Describe the change"
-git pull --rebase origin main
-git push origin main
+git push -u origin HEAD
+gh pr create --base main
+gh pr checks --watch
+gh pr merge --squash --delete-branch
 ```
 
-CI writes a deployment commit back to `main` after publishing an immutable
-image tag. A push can therefore be rejected if that deployment commit arrived
-first. Use `git pull --rebase origin main` and push again. Never force-push
-`main` to resolve this race.
+After a merge, CI writes a deployment commit to `main` after publishing an
+immutable image tag. Start each branch from an updated `main`; if the deployment
+commit arrives first, update the branch from `origin/main` before merging.
+Never force-push `main` to resolve this race.
 
 ## GitHub Actions and GHCR
 
@@ -126,7 +144,9 @@ RUN_LIMIT=10 ARGO_APP=ledger KUBE_NAMESPACE=home-budget make status
 
 The `ledger` application tracks `main` with automated sync, pruning, and
 self-healing. A PreSync hook runs `home-budget-db-setup` before workloads are
-updated. The hook applies current constraint policy and receipt-schema updates.
+updated. The hook applies current constraints, audit and description fields,
+merchant aliases, OCR learning, product enrichment, and blue/green receipt
+processing state.
 If it fails, Argo correctly leaves application workloads OutOfSync.
 
 Check status:
@@ -207,11 +227,13 @@ an infrastructure failure; inspect those receipts in the web review reports.
 
 After rollout, use the dashboard in this order:
 
-1. Extraction audit
-2. Review queue
-3. Expenses and evidence
-4. Receipt processing
-5. Duplicates
-6. Category spend and transactions
+1. Receipts
+2. Extraction audit
+3. Review queue
+4. Expenses and evidence
+5. Category rules
+6. Receipt processing
+7. Duplicates
+8. Category spend and transactions
 
 The detailed workflow and status definitions are in [the user guide](user-guide.md).

@@ -1,6 +1,9 @@
 # Receipt backlog processing
 
-KAN-82 adds an idempotent receipt backlog processor that discovers receipt files, skips source hashes already represented in receipt evidence, processes pending receipts through the existing OCR/parser/persistence path, and records per-receipt status for retries and operations.
+The idempotent receipt backlog processor discovers receipt files, skips source
+hashes already represented in receipt evidence, processes pending receipts
+through the shared OCR/parser/persistence path, and records per-receipt status
+for retries and operations.
 
 ## Manual run
 
@@ -46,11 +49,20 @@ interactive prompt. Those items remain unenriched for manual review in Ledger.
 
 ## Kubernetes
 
-`k8s/receipt-processor-cronjob.yaml` runs every 15 minutes. `concurrencyPolicy: Forbid` prevents Kubernetes from starting a second scheduled job while the previous job is still running, and the PostgreSQL advisory lock provides an additional guard against manual or accidental concurrent runs.
+In the base `k8s` deployment, `k8s/receipt-processor-cronjob.yaml` runs local
+backlog processing every 15 minutes. `concurrencyPolicy: Forbid` prevents
+Kubernetes from starting a second scheduled job while the previous job is still
+running, and the PostgreSQL advisory lock provides an additional guard against
+manual or accidental concurrent runs.
 
 The job uses one Python worker so the medium PaddleOCR models are loaded only once. PaddleOCR contributes high-confidence line candidates to the Tesseract DPI/layout consensus and falls back cleanly when unavailable. The pod requests 2 CPUs and 4Gi memory and is limited to 4 CPUs and 8Gi memory. The K3s node must have enough capacity for the measured Paddle peak plus PostgreSQL, Ledger, and system workloads.
 
 The shared `home-budget-data` PVC is mounted at `/data`, so raw receipts and the OCR cache are available to the processor. Database credentials come from `postgres-secret`.
+
+The optional `deploy/rabbitmq` overlay keeps the same schedule but changes the
+CronJob to publish work and adds the long-running `receipt-worker` Deployment.
+See the [RabbitMQ runbook](rabbitmq-receipts.md) for rollout, monitoring, and
+recovery.
 
 Useful commands:
 
@@ -63,6 +75,10 @@ kubectl -n home-budget get jobs
 
 ## Ledger visibility
 
-Open `/ledger/receipt-processing` to view the latest status for each receipt source hash, including attempt count, last attempt time, completion time, and last error. Failed receipts remain retryable; successful receipts are skipped on subsequent discovery runs.
+Open `/ledger/receipt-processing` to view the latest status for each receipt
+source hash, including attempt count, last attempt time, completion time, and
+last error. Failed receipts retry until their attempt budget is exhausted; an
+operator can then reset them with `brownrook receipts retry` after fixing the
+cause. Successful receipts are skipped on subsequent discovery runs.
 
 Receipt processing status is operational metadata only. Canonical expenses, evidence, duplicate review, and reconciliation remain available through their existing Ledger pages.

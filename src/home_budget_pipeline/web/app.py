@@ -1,4 +1,4 @@
-"""BrownRook Ledger read-only web/API application served behind oauth2-proxy."""
+"""BrownRook Ledger web/API application served behind oauth2-proxy."""
 
 from __future__ import annotations
 
@@ -394,15 +394,15 @@ def _receipt_preview_html(evidence_id: int, evidence: dict[str, object]) -> str:
 @app.get(f"{BASE_PATH}/", response_class=HTMLResponse)
 def ledger_home(identity: dict[str, str] = Depends(authenticated_identity)) -> str:
     body = f"""
-<p>Read-only access to canonical expenses, SQL analytics views, receipt evidence, and review workflows.</p>
+<p>Inspect canonical expenses, SQL analytics, receipt evidence, and review workflows; manage audited item and category corrections.</p>
 <div class="grid">
 <div class="card"><h2><a href="{BASE_PATH}/expenses">Expenses</a></h2><p>Browse and filter canonical expenses, then drill into line items and receipts.</p></div>
-<div class="card"><h2><a href="{BASE_PATH}/category-spend">Category spend</a></h2><p>Inspect the KAN-71 category-spend analytics view.</p></div>
+<div class="card"><h2><a href="{BASE_PATH}/category-spend">Category spend</a></h2><p>Review spending totals by date, category group, and category.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/review-queue">Review queue</a></h2><p>See canonical expenses requiring extraction, reconciliation, or quality review.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/extraction-audit">Extraction audit</a></h2><p>Find receipts with suspiciously few canonical line items.</p></div>
-<div class="card"><h2><a href="{BASE_PATH}/duplicates">Duplicates</a></h2><p>Inspect unresolved KAN-77 receipt duplicate candidates.</p></div>
-<div class="card"><h2><a href="{BASE_PATH}/transactions">Transactions</a></h2><p>Inspect KAN-78 matched, ambiguous, and unmatched financial transactions.</p></div>
-<div class="card"><h2><a href="{BASE_PATH}/receipt-processing">Receipt processing</a></h2><p>See KAN-82 processing attempts, failures, and receipts requiring review.</p></div>
+<div class="card"><h2><a href="{BASE_PATH}/duplicates">Duplicates</a></h2><p>Inspect unresolved receipt duplicate candidates.</p></div>
+<div class="card"><h2><a href="{BASE_PATH}/transactions">Transactions</a></h2><p>Inspect matched, ambiguous, and unmatched financial transactions.</p></div>
+<div class="card"><h2><a href="{BASE_PATH}/receipt-processing">Receipt processing</a></h2><p>See processing attempts, failures, and receipts requiring review.</p></div>
 </div>"""
     return page("Dashboard", body, base_path=BASE_PATH, identity=identity)
 

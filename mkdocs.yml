@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://squidfunk.github.io/mkdocs-material/schema.json
+site_name: BrownRook Ledger
+site_description: User, architecture, operations, and recovery documentation for BrownRook Ledger
+site_url: https://larocquemb.github.io/home-budget-pipeline/
+repo_url: https://github.com/larocquemb/home-budget-pipeline
+repo_name: larocquemb/home-budget-pipeline
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.action.edit
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - User guide: user-guide.md
+  - Solution architecture: solution-architecture.md
+  - Receipt processing:
+      - Backlog processing: receipt-processing.md
+      - RabbitMQ design: rabbitmq-receipt-design.md
+      - RabbitMQ operations: rabbitmq-receipts.md
+  - Operations:
+      - Build and deployment: operations-runbook.md
+      - Troubleshooting: troubleshooting.md
+      - Kubernetes authentication: kubernetes-auth.md

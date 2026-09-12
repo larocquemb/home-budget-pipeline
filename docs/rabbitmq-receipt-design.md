@@ -46,7 +46,7 @@ at the same relative paths.
 ## Message contract
 
 Messages use the versioned JSON contract defined in
-[`message.py`](../src/home_budget_pipeline/receipts/message.py). A v1 JSON body
+[`message.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/receipts/message.py). A v1 JSON body
 contains:
 
 | Field | Meaning |
@@ -223,7 +223,9 @@ The receipt filesystem needs its own durable storage and backup policy.
 
 ## Kubernetes deployment
 
-The optional Kustomize overlay in [`deploy/rabbitmq`](../deploy/rabbitmq) adds:
+The optional Kustomize overlay in
+[`deploy/rabbitmq`](https://github.com/larocquemb/home-budget-pipeline/tree/main/deploy/rabbitmq)
+adds:
 
 - a RabbitMQ StatefulSet and persistent volume claim;
 - a publisher patch for the scheduled backlog job;
@@ -256,11 +258,11 @@ duplicates for the same receipt.
 
 | Concern | Implementation | Verification |
 | --- | --- | --- |
-| Contract and path validation | [`message.py`](../src/home_budget_pipeline/receipts/message.py) | `tests/test_receipt_queue.py` |
-| Publisher, topology, ACK, retry, and DLQ | [`queue_ingest.py`](../src/home_budget_pipeline/receipts/queue_ingest.py) | `tests/test_receipt_queue.py`, `tests/test_receipt_queue_rabbitmq.py` |
-| Processing transaction and advisory lock | [`backlog_ingest.py`](../src/home_budget_pipeline/receipts/backlog_ingest.py) | `tests/test_receipt_queue_postgres.py` |
-| CLI commands | [`cli.py`](../src/home_budget_pipeline/cli.py) | `tests/test_receipt_retry_cli.py` |
-| Kubernetes overlay | [`deploy/rabbitmq`](../deploy/rabbitmq) | `tests/test_receipt_queue_deployment.py` |
+| Contract and path validation | [`message.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/receipts/message.py) | `tests/test_receipt_queue.py` |
+| Publisher, topology, ACK, retry, and DLQ | [`queue_ingest.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/receipts/queue_ingest.py) | `tests/test_receipt_queue.py`, `tests/test_receipt_queue_rabbitmq.py` |
+| Processing transaction and advisory lock | [`backlog_ingest.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/receipts/backlog_ingest.py) | `tests/test_receipt_queue_postgres.py` |
+| CLI commands | [`cli.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/cli.py) | `tests/test_receipt_retry_cli.py` |
+| Kubernetes overlay | [`deploy/rabbitmq`](https://github.com/larocquemb/home-budget-pipeline/tree/main/deploy/rabbitmq) | `tests/test_receipt_queue_deployment.py` |
 
 The PostgreSQL integration tests exercise competing workers and verify that a
 receipt is processed once. The RabbitMQ integration tests exercise confirmed

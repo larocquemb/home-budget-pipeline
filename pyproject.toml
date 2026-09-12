@@ -35,6 +35,9 @@ home-budget-enrich-products = "home_budget_pipeline.product_enrichment_runtime:m
 dev = [
     "pytest>=8",
 ]
+docs = [
+    "mkdocs-material>=9.6,<10",
+]
 db = [
     "psycopg[binary]>=3.2",
 ]

@@ -2,7 +2,10 @@
 
 External URL: `https://idc.brownrook.com/ledger`
 
-The existing BrownRook NGINX proxy terminates TLS for `idc.brownrook.com` and forwards requests to the K3s ingress endpoint. The Kubernetes ingress routes only `/ledger` to `ledger-oauth2-proxy`. PostgreSQL remains ClusterIP-only and is never exposed publicly.
+The existing BrownRook NGINX proxy terminates TLS for `idc.brownrook.com` and
+forwards requests to the K3s ingress endpoint. The Kubernetes HTTP ingress
+routes only `/ledger` to `ledger-oauth2-proxy`, which authenticates the request
+before proxying it to `ledger-web`.
 
 ## Entra ID application
 
@@ -34,18 +37,21 @@ The in-cluster database host is:
 
 `postgres.home-budget.svc.cluster.local:5432`
 
-PostgreSQL is intentionally exposed only through a ClusterIP Service.
+The PostgreSQL Service is ClusterIP. `postgres-ingressroutetcp.yaml` also binds
+it to Traefik's dedicated `postgres` TCP entry point for private administrative
+access; that entry point must not be published to the public internet.
 
 ## Apply
 
+Create the populated `postgres-secret`, `ledger-oauth2-proxy-secret`,
+`pve-smb-credentials`, and `ghcr-secret` resources outside Git. Then apply the
+Git-managed resources:
+
 ```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/postgres-secret.yaml
-kubectl apply -f k8s/postgres.yaml
-kubectl apply -f k8s/oauth2-proxy-secret.yaml
-kubectl apply -f k8s/ledger-web-service.yaml
-kubectl apply -f k8s/oauth2-proxy.yaml
-kubectl apply -f k8s/ledger-ingress.yaml
+kubectl apply -k k8s
 ```
 
-`ledger-web` is currently the service contract for the future Ledger HTTP/API workload on port 8080. Until a pod with label `app: ledger-web` exists, authentication can complete but the authenticated upstream will return an unavailable response.
+`ledger-web` serves the receipt-first application on port 8080. OAuth2 Proxy
+passes the authenticated Entra identity headers to Ledger. Kubernetes calls
+`/ledger/health` and `/ledger/ready` directly for probes. Public `/ledger`
+requests still pass through OAuth2 Proxy.

@@ -4,8 +4,8 @@ This page covers setup, commands, recovery, and deployment. See
 [RabbitMQ receipt processing design](rabbitmq-receipt-design.md) for the message
 lifecycle, reliability boundaries, idempotency model, and failure behavior.
 
-The first queue slice reuses backlog discovery, OCR, evidence persistence, and
-`ingest.receipt_processing_status`. The existing local commands and default
+The queued processing mode reuses backlog discovery, OCR, evidence persistence,
+and `ingest.receipt_processing_status`. The existing local commands and default
 `k8s` deployment still work. No database migration, Celery service, or new work
 table is required.
 
@@ -103,7 +103,8 @@ or switching the ingest schema; its completion state is the idempotency record.
 
 ## Run and validate
 
-Install the project with its database dependencies (`pip install -e '.[db,dev]'`).
+Install the project with its database dependencies
+(`python -m pip install -e '.[db,dev]'`).
 Set `DATABASE_URL`, `RABBITMQ_URL`, and optionally `RECEIPT_SOURCE_ROOT` and
 `HOME_BUDGET_OCR_CACHE`. If these are stored in `.env.dev`, export the assignments
 so Python can read them (plain `source` does not export new shell variables):
@@ -132,6 +133,17 @@ TEST_RABBITMQ_URL='amqp://test:test@localhost:5673/%2F' \
   make test-db
 docker compose -f compose.queue-test.yaml down -v
 ```
+
+The disposable broker's management UI is available at
+`http://localhost:15673` with the test username and password from
+`compose.queue-test.yaml`. For the Kubernetes overlay, use:
+
+```sh
+kubectl -n home-budget port-forward svc/rabbitmq 15672:15672
+```
+
+Then open `http://localhost:15672` and sign in with the credentials stored in
+`rabbitmq-secret`.
 
 The repository's test hook bootstraps the local `home_budget_test` database.
 When overriding `TEST_DATABASE_URL`, provision the disposable database and load
