@@ -12,6 +12,11 @@ source .venv/bin/activate
 python -m pip install -e '.[dev,db]'
 ```
 
+The install creates the primary `ledger` command. The former `brownrook`
+command remains a compatibility alias. Re-run the editable install after
+pulling a CLI-entry-point change so the virtual environment creates the new
+executable.
+
 Application commands accept `DATABASE_URL` and, where documented by `--help`,
 `HOME_BUDGET_PG_DSN`; use `DATABASE_URL` consistently in shared environments.
 Tests use the isolated `home_budget_test`
@@ -30,17 +35,26 @@ Run database integration tests:
 make test-db
 ```
 
-RabbitMQ integration tests skip when `TEST_RABBITMQ_URL` is unset. With a test
-broker available, include them with:
+The Make integration targets use `TEST_RABBITMQ_URL` when explicitly set and
+otherwise fall back to `RABBITMQ_URL`. RabbitMQ integration tests skip when
+neither variable is exported. With the local development environment loaded,
+include them with:
 
 ```bash
-TEST_RABBITMQ_URL="$RABBITMQ_URL" make test-db
+set -a
+source .env.dev
+set +a
+make test-db
 ```
+
+The tests use unique `test.<uuid>` queues and delete them afterward. Set an
+explicit `TEST_RABBITMQ_URL` when the test broker differs from the development
+broker.
 
 Initialize or upgrade the runtime database locally:
 
 ```bash
-brownrook database setup
+ledger database setup
 ```
 
 The container sets `HOME_BUDGET_SQL_DIR=/opt/app-root/src/sql`; local execution
@@ -60,9 +74,10 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make docs-serve` | Serve the online manual locally with live reload. |
 | `make test` | Run unit tests without external-service integration tests. |
 | `make test-db-setup` | Create the disposable test database if needed, then rebuild its schemas. |
-| `make test-db` | Rebuild the disposable test schemas and run integration tests. |
+| `make test-db` | Rebuild the disposable test schemas and run integration tests, including RabbitMQ when a broker URL is exported. |
 | `make test-db-verbose` | Run database setup and integration tests with full PostgreSQL output. |
-| `make test-all` | Run unit tests followed by integration tests. |
+| `make test-rabbit` | Rebuild the disposable test schemas, then run the five RabbitMQ integration tests with their names displayed. |
+| `make test-all` | Run unit tests followed by PostgreSQL and available RabbitMQ integration tests; the integration summary displays their names. |
 | `make test-receipts` | Copy real receipt inputs into an isolated workspace and process them against the disposable test database. |
 | `make dev-up` | Start the local supporting services from `compose.dev.yaml`. |
 | `make dev-down` | Stop the local supporting services. |
@@ -80,6 +95,11 @@ Install the documentation dependencies with
 `python -m pip install -e '.[docs]'`. Pull requests build the manual with strict
 validation. Merges to `main` publish it to GitHub Pages at
 `https://larocquemb.github.io/home-budget-pipeline/`.
+
+For private-LAN deployments, select either `deploy/private-lan` or
+`deploy/rabbitmq-private` after satisfying the DNS, TLS, Entra callback,
+Traefik, and firewall prerequisites in the
+[network access guide](private-networking.md).
 
 ## Commit and pull request
 

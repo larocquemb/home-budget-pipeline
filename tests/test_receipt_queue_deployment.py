@@ -17,9 +17,9 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     publisher = resources["CronJob", "receipt-processor"]["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
     worker_spec = resources["Deployment", "receipt-worker"]["spec"]["template"]["spec"]
     worker = worker_spec["containers"][0]
-    assert publisher["command"] == worker["command"] == ["home-budget-receipt-queue"]
-    assert publisher["args"] == ["publish", "/data/receipts/raw/scanned/inbox"]
-    assert worker["args"] == ["consume", "/data/receipts/raw/scanned/inbox"]
+    assert publisher["command"] == worker["command"] == ["ledger"]
+    assert publisher["args"] == ["receipts", "publish", "/data/receipts/raw/scanned/inbox"]
+    assert worker["args"] == ["receipts", "consume", "/data/receipts/raw/scanned/inbox"]
     assert publisher["image"] == worker["image"]
     assert "latest" not in worker["image"]
     assert worker_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "home-budget-data"

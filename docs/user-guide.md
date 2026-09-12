@@ -94,7 +94,7 @@ financial transactions.
 - `succeeded`: backlog processing completed without an application error.
 - `review_required`: processing completed, but the receipt needs review.
 - `failed`: processing raised an error; it retries until its attempt budget is
-  exhausted, after which an operator can reset it with `brownrook receipts retry`
+  exhausted, after which an operator can reset it with `ledger receipts retry`
   once the underlying problem is fixed.
 
 Write controls are limited to category overrides, category-rule management, and

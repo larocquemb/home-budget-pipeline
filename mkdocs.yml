@@ -58,4 +58,5 @@ nav:
   - Operations:
       - Build and deployment: operations-runbook.md
       - Troubleshooting: troubleshooting.md
+      - Network access: private-networking.md
       - Kubernetes authentication: kubernetes-auth.md

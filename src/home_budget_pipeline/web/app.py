@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import html
 import io
 import mimetypes
@@ -102,7 +103,18 @@ def authenticated_identity(
     x_forwarded_email: Optional[str] = Header(default=None),
     x_auth_request_user: Optional[str] = Header(default=None),
     x_auth_request_email: Optional[str] = Header(default=None),
+    x_ledger_proxy_secret: Optional[str] = Header(default=None),
 ) -> dict[str, str]:
+    expected_proxy_secret = os.getenv("LEDGER_PROXY_SECRET", "")
+    provided_proxy_secret = _header_text(x_ledger_proxy_secret) or ""
+    if expected_proxy_secret and not hmac.compare_digest(
+        expected_proxy_secret,
+        provided_proxy_secret,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="trusted proxy header missing",
+        )
     forwarded_user = _header_text(x_forwarded_user)
     forwarded_email = _header_text(x_forwarded_email)
     auth_user = _header_text(x_auth_request_user)
@@ -146,8 +158,15 @@ def me(
     x_forwarded_email: Optional[str] = Header(default=None),
     x_auth_request_user: Optional[str] = Header(default=None),
     x_auth_request_email: Optional[str] = Header(default=None),
+    x_ledger_proxy_secret: Optional[str] = Header(default=None),
 ) -> dict[str, str]:
-    return authenticated_identity(x_forwarded_user, x_forwarded_email, x_auth_request_user, x_auth_request_email)
+    return authenticated_identity(
+        x_forwarded_user,
+        x_forwarded_email,
+        x_auth_request_user,
+        x_auth_request_email,
+        x_ledger_proxy_secret,
+    )
 
 
 @app.get(f"{BASE_PATH}/api/analytics/expenses")

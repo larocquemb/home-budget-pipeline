@@ -10,8 +10,8 @@ spec:
         spec:
           containers:
             - name: receipt-processor
-              command: [home-budget-receipt-queue]
-              args: [publish, /data/receipts/raw/scanned/inbox]
+              command: [ledger]
+              args: [receipts, publish, /data/receipts/raw/scanned/inbox]
               env:
                 - name: RABBITMQ_URL
                   valueFrom:

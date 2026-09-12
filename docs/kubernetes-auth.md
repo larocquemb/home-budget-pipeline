@@ -1,4 +1,4 @@
-# Ledger public authentication
+# Ledger public and private authentication
 
 External URL: `https://idc.brownrook.com/ledger`
 
@@ -55,3 +55,21 @@ kubectl apply -k k8s
 passes the authenticated Entra identity headers to Ledger. Kubernetes calls
 `/ledger/health` and `/ledger/ready` directly for probes. Public `/ledger`
 requests still pass through OAuth2 Proxy.
+
+## Private corporate route
+
+The optional private overlays add `https://ledger.brownrook.net/ledger` on the
+existing Traefik `websecure` entry point at `192.168.2.240`. They run a separate
+OAuth2 Proxy so the private hostname has its own callback URL and secure cookie
+while retaining the same Entra tenant and access policy.
+
+Add this Web redirect URI to the Entra application:
+
+`https://ledger.brownrook.net/ledger/oauth2/callback`
+
+The private hostname must resolve only through corporate DNS. The public reverse
+proxy must forward only explicitly configured public hosts and must not forward
+the private `.net` hostname. Create the `ledger-brownrook-net-tls` secret outside
+Git before using `deploy/private-lan` or `deploy/rabbitmq-private`. See the
+[network access guide](private-networking.md) for the required DNS, TLS, and
+firewall boundaries.

@@ -9,12 +9,15 @@ on shared storage; RabbitMQ carries work references only.
 
 ```mermaid
 flowchart LR
-    user[Ledger user]
+    publicUser[Public Ledger user]
+    privateUser[Corporate LAN user]
     entra[Microsoft Entra ID]
-    proxy[NGINX and Traefik]
+    publicEdge[Public NGINX and Traefik]
+    privateEdge[Private Traefik entry point]
 
     subgraph cluster[K3s home-budget namespace]
-        oauth[OAuth2 Proxy]
+        publicOauth[Public OAuth2 Proxy]
+        privateOauth[Private OAuth2 Proxy]
         web[Ledger web application]
         cron[Receipt processor CronJob]
         publisher[Receipt publisher]
@@ -27,9 +30,12 @@ flowchart LR
 
     sources[Scans, PDFs, and electronic receipt sources] --> files
 
-    user -->|HTTPS /ledger| proxy --> oauth
-    oauth <-->|sign in| entra
-    oauth -->|authenticated identity| web
+    publicUser -->|idc.brownrook.com/ledger| publicEdge --> publicOauth
+    privateUser -->|ledger.brownrook.net/ledger| privateEdge --> privateOauth
+    publicOauth <-->|sign in| entra
+    privateOauth <-->|sign in| entra
+    publicOauth -->|authenticated identity| web
+    privateOauth -->|authenticated identity| web
     web -->|read reports and audited corrections| db
     web -->|receipt preview| files
 
@@ -51,6 +57,10 @@ The base Kubernetes deployment runs receipt discovery and processing in one
 CronJob every 15 minutes. The optional `deploy/rabbitmq` overlay changes that
 CronJob into a publisher and adds RabbitMQ plus a long-running worker. Both
 modes call the same processing code and use the same PostgreSQL status tables.
+The private-LAN overlays add a second authenticated Ledger route; the RabbitMQ
+private variant also exposes only the broker management UI through private
+HTTPS. PostgreSQL and AMQP application traffic remain internal. See the
+[network access guide](private-networking.md) for these boundaries.
 
 The main processing path is:
 

@@ -26,6 +26,26 @@ def test_authenticated_identity_accepts_oauth2_proxy_email():
     assert identity["email"] == "paul@example.ca"
 
 
+def test_authenticated_identity_requires_configured_proxy_secret(monkeypatch):
+    monkeypatch.setenv("LEDGER_PROXY_SECRET", "expected-secret")
+
+    with pytest.raises(HTTPException) as exc:
+        web_app.authenticated_identity(x_auth_request_email="paul@example.ca")
+
+    assert exc.value.status_code == 401
+
+
+def test_authenticated_identity_accepts_configured_proxy_secret(monkeypatch):
+    monkeypatch.setenv("LEDGER_PROXY_SECRET", "expected-secret")
+
+    identity = web_app.authenticated_identity(
+        x_auth_request_email="paul@example.ca",
+        x_ledger_proxy_secret="expected-secret",
+    )
+
+    assert identity["email"] == "paul@example.ca"
+
+
 def test_receipt_document_path_must_stay_inside_configured_root(tmp_path, monkeypatch):
     root = tmp_path / "receipts"
     root.mkdir()
