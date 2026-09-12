@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from . import db_setup
+from . import db_setup, receipt_enrichment
 from .receipts import backlog_ingest
 from .receipts.evidence import record_ocr_feedback
 from .receipts import ingest as scan
@@ -71,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
     retry.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))
     retry.add_argument("--ingest-schema", default="ingest")
     retry.set_defaults(handler=_retry_receipt)
+
+    enrich = receipt_commands.add_parser(
+        "enrich", help="Enrich all line items belonging to one receipt.",
+    )
+    receipt_enrichment.add_arguments(enrich)
+    enrich.set_defaults(handler=receipt_enrichment.run_command)
 
     feedback = receipt_commands.add_parser("feedback", help="Record verified OCR quality feedback.")
     feedback.add_argument("evidence_id", type=int)

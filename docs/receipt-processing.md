@@ -7,7 +7,7 @@ KAN-82 adds an idempotent receipt backlog processor that discovers receipt files
 With the database and receipt storage reachable:
 
 ```bash
-home-budget-process-receipts /data/receipts/raw/scanned/inbox --workers 2
+brownrook receipts process /data/receipts/raw/scanned/inbox --workers 2
 ```
 
 Configuration can be supplied with `DATABASE_URL`, `RECEIPT_SOURCE_ROOT`, and `HOME_BUDGET_OCR_CACHE`. The process reports discovered, skipped, succeeded, failed, and review-required counts. A PostgreSQL advisory lock prevents overlapping backlog runs.
@@ -26,7 +26,7 @@ expansion fallback.
 Run a dry run first:
 
 ```bash
-python -m home_budget_pipeline.receipt_enrichment --receipt 1
+brownrook receipts enrich --receipt 1
 ```
 
 The dry run performs searches and prints a JSON summary without saving results,
@@ -34,7 +34,7 @@ so the Ledger UI continues to show `Not enriched`. Check that the reported
 `item_ids` belong to the intended expense, then persist accepted matches:
 
 ```bash
-python -m home_budget_pipeline.receipt_enrichment \
+brownrook receipts enrich \
   --receipt 1 \
   --write-db
 ```

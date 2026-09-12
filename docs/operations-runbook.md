@@ -32,7 +32,7 @@ make test-db
 Validate database setup locally:
 
 ```bash
-home-budget-db-setup
+brownrook database setup
 ```
 
 The container sets `HOME_BUDGET_SQL_DIR=/opt/app-root/src/sql`; local execution
@@ -41,6 +41,30 @@ uses the repository `sql/` directory.
 The Dockerfile installs third-party dependencies before application source is
 copied. Source-only builds therefore reuse the dependency layer; changes to
 `pyproject.toml` intentionally invalidate it.
+
+## Make targets
+
+Run `make help` for a compact list. The repository provides these targets:
+
+| Target | Purpose |
+| --- | --- |
+| `make test` | Run unit tests without external-service integration tests. |
+| `make test-db-setup` | Create the disposable test database if needed, then rebuild its schemas. |
+| `make test-db` | Rebuild the disposable test schemas and run integration tests. |
+| `make test-db-verbose` | Run database setup and integration tests with full PostgreSQL output. |
+| `make test-all` | Run unit tests followed by integration tests. |
+| `make test-receipts` | Copy real receipt inputs into an isolated workspace and process them against the disposable test database. |
+| `make dev-up` | Start the local supporting services from `compose.dev.yaml`. |
+| `make dev-down` | Stop the local supporting services. |
+| `make dev-web` | Run the Ledger web application against the local services. |
+| `make dev-cert-install` | Install the local Caddy certificate authority in the macOS system keychain. |
+| `make dev-db-reset` | Rebuild the local development database configured in `.env.dev`. |
+| `make status` | Report deployment and recent workflow status. |
+| `make enrich-products` | Start and follow a one-off Kubernetes product-enrichment job. |
+
+The `test-db*` targets destroy and recreate schemas only in `TEST_DB`, which
+defaults to `home_budget_test`. `make test-receipts` also recreates
+`RECEIPT_TEST_ROOT`, which defaults to `.receipt-test`.
 
 ## Commit and push
 
