@@ -213,6 +213,11 @@ resume. Set the Argo CD application's source path to `deploy/rabbitmq` and run
 `make deploy-k3s`. Change `receipt-worker` replicas in Git for additional workers.
 No cluster resources are changed by rendering the overlay.
 
+Worker updates use `maxSurge: 0` and `maxUnavailable: 1`, allowing an old worker
+to release its CPU reservation before its replacement starts. With one replica,
+consumption pauses during replacement; the existing shutdown grace period lets
+an active receipt finish and queued work remains in RabbitMQ.
+
 This broker is persistent but single-node, not highly available. Local storage
 loss can lose queued work; inbox rediscovery recovers unfinished sources within
 their attempt budget. A replicated broker is a separate operational slice.

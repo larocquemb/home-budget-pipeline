@@ -5,6 +5,12 @@ metadata:
   namespace: home-budget
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Release the old worker's CPU reservation before scheduling its replacement.
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: receipt-worker
