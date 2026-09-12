@@ -97,6 +97,7 @@ test-db-setup:
 	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/receipt_processing.sql >/dev/null
 	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/schema_constraints.sql >/dev/null
 	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/product_enrichment.sql >/dev/null
+	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/receipt_reprocess_requests.sql >/dev/null
 
 test-db: test-db-setup
 	@if test -n "$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}"; then \
@@ -115,6 +116,7 @@ test-db-verbose:
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/receipt_processing.sql
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/schema_constraints.sql
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/product_enrichment.sql
+	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/receipt_reprocess_requests.sql
 	TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
 		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
 		$(PYTHON) -m pytest -q -m integration

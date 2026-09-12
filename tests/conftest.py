@@ -54,5 +54,6 @@ def pytest_sessionstart(session) -> None:
         "sql/schema_phase1.sql",
         "sql/receipt_processing.sql",
         "sql/schema_constraints.sql",
+        "sql/receipt_reprocess_requests.sql",
     ):
         _run_psql(dsn, "-f", str(root / relative_path))

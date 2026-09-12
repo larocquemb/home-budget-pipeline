@@ -95,6 +95,9 @@ jobs:
           psql -h localhost -U test -d home_budget \
             -v ON_ERROR_STOP=1 \
             -f sql/product_enrichment.sql
+          psql -h localhost -U test -d home_budget \
+            -v ON_ERROR_STOP=1 \
+            -f sql/receipt_reprocess_requests.sql
 
       - name: Run PostgreSQL and RabbitMQ integration tests
         env:

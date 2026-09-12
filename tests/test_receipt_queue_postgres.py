@@ -174,6 +174,91 @@ def test_lost_database_session_releases_source_lock(source):
             pass
 
 
+def test_reprocess_requests_refresh_once_each_with_independent_attempt_budgets(source, monkeypatch):
+    import psycopg
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from home_budget_pipeline.receipts.queue_ingest import process_message
+
+    receipt = receipt_for(source)
+    calls = []
+    def parse(paths, root, workers, cache, refresh):
+        assert paths == [source]
+        calls.append(refresh)
+        return [receipt]
+    monkeypatch.setattr(backlog, "parse_scans_parallel", parse)
+    args = SimpleNamespace(
+        receipt_root=str(source.parent), db_dsn=os.environ["TEST_DATABASE_URL"],
+        ocr_cache=str(source.parent / "cache"), ingest_schema="ingest", budget_schema="budget",
+    )
+    normal = ReceiptMessage(receipt.source_sha256, source.name)
+    assert process_message(normal, args) == "succeeded"
+    requests = [replace(normal, version=2, request_id=str(uuid.uuid4())) for _ in range(4)]
+    for request in requests:
+        assert process_message(request, args) == "succeeded"
+        assert process_message(request, args) == "skipped"
+    # Delayed duplicate of an earlier refresh must not overwrite a newer refresh.
+    assert process_message(requests[0], args) == "skipped"
+    assert process_message(normal, args) == "skipped"
+    assert calls == [False, True, True, True, True]
+    with psycopg.connect(args.db_dsn) as conn:
+        assert conn.execute(
+            "SELECT attempts, completed_at IS NOT NULL FROM budget.receipt_reprocess_requests "
+            "WHERE source_sha256 = %s", (receipt.source_sha256,),
+        ).fetchall() == [(1, True)] * 4
+
+
+def test_reprocess_completion_marker_is_atomic_with_results_and_attempts_survive_redelivery(source, monkeypatch):
+    import psycopg
+
+    receipt = receipt_for(source)
+    candidate = backlog.ReceiptCandidate(source, receipt.source_sha256)
+    request_id = str(uuid.uuid4())
+    monkeypatch.setattr(backlog, "parse_scans_parallel", lambda *a, **kw: [receipt])
+    original = backlog._mark_completed
+    def fail_completion(*a):
+        raise RuntimeError("failed before completion commit")
+    monkeypatch.setattr(backlog, "_mark_completed", fail_completion)
+    kwargs = dict(refresh_ocr_cache=True, reprocess_request_id=request_id, max_attempts=3, verify_source=True)
+    with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as conn:
+        for _ in range(3):
+            with pytest.raises(RuntimeError, match="failed before completion"):
+                backlog.process_candidate(conn, candidate, source.parent, source.parent / "cache", **kwargs)
+        assert conn.execute(
+            "SELECT attempts, completed_at FROM budget.receipt_reprocess_requests "
+            "WHERE source_sha256 = %s AND request_id = %s", (receipt.source_sha256, request_id),
+        ).fetchone() == (3, None)
+        assert conn.execute(
+            "SELECT count(*) FROM budget.receipt_evidence WHERE source_sha256 = %s", (receipt.source_sha256,),
+        ).fetchone() == (0,)
+        conn.commit()
+        monkeypatch.setattr(backlog, "_mark_completed", original)
+        # Replaying the attempt-1 body after crashes cannot reset the DB budget.
+        with pytest.raises(backlog.RetryExhausted):
+            backlog.process_candidate(conn, candidate, source.parent, source.parent / "cache", **kwargs)
+        kwargs["reprocess_request_id"] = str(uuid.uuid4())
+        assert backlog.process_candidate(conn, candidate, source.parent, source.parent / "cache", **kwargs) == "succeeded"
+
+
+def test_reprocess_rejects_changed_source_without_replacing_completed_evidence(source, monkeypatch):
+    import psycopg
+
+    receipt = receipt_for(source)
+    candidate = backlog.ReceiptCandidate(source, receipt.source_sha256)
+    monkeypatch.setattr(backlog, "parse_scans_parallel", lambda *a, **kw: [receipt])
+    with psycopg.connect(os.environ["TEST_DATABASE_URL"]) as conn:
+        assert backlog.process_candidate(conn, candidate, source.parent, source.parent / "cache") == "succeeded"
+        source.write_bytes(b"changed after publication")
+        with pytest.raises(InvalidReceiptMessage, match="changed since publication"):
+            backlog.process_candidate(
+                conn, candidate, source.parent, source.parent / "cache",
+                refresh_ocr_cache=True, reprocess_request_id=str(uuid.uuid4()), verify_source=True, max_attempts=3,
+            )
+        assert conn.execute(
+            "SELECT count(*) FROM budget.receipt_evidence WHERE source_sha256 = %s", (receipt.source_sha256,),
+        ).fetchone() == (1,)
+
+
 @pytest.mark.parametrize("status", ["processing", "failed", "succeeded", "review_required"])
 def test_retry_reset_respects_real_worker_lock_and_completion(source, status):
     import psycopg

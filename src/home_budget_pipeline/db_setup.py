@@ -18,6 +18,7 @@ ITEM_DESCRIPTIONS_MIGRATION = SQL_DIR / "migrations" / "expense_item_description
 MERCHANT_ALIASES_MIGRATION = SQL_DIR / "migrations" / "merchant_aliases.sql"
 RECEIPT_OCR_LINES_MIGRATION = SQL_DIR / "migrations" / "receipt_ocr_lines.sql"
 RECEIPT_OCR_LEARNING_MIGRATION = SQL_DIR / "migrations" / "receipt_ocr_learning.sql"
+RECEIPT_REPROCESS_SCHEMA = SQL_DIR / "receipt_reprocess_requests.sql"
 MERCHANT_ALIASES_DATA = SQL_DIR / "merchant_aliases.sql"
 
 
@@ -48,6 +49,7 @@ def ensure_database_schema(conn) -> dict[str, bool]:
     _execute_sql_file(conn, MERCHANT_ALIASES_MIGRATION)
     _execute_sql_file(conn, RECEIPT_OCR_LINES_MIGRATION)
     _execute_sql_file(conn, RECEIPT_OCR_LEARNING_MIGRATION)
+    _execute_sql_file(conn, RECEIPT_REPROCESS_SCHEMA)
     _execute_sql_file(conn, MERCHANT_ALIASES_DATA)
 
     enrichment_created = not _relation_exists(conn, "enrichment.product_cache")

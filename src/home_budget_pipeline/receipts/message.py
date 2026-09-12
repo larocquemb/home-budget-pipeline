@@ -1,4 +1,4 @@
-"""Version 1 receipt work contract; paths are relative to the shared receipt root."""
+"""Normal (v1) and explicit reprocess (v2) receipt work contracts."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
+from uuid import UUID
 
 MAX_ATTEMPTS = 3
 
@@ -20,10 +21,19 @@ class ReceiptMessage:
     source_reference: str
     attempt: int = 1
     version: int = 1
+    request_id: str | None = None
 
     def __post_init__(self) -> None:
-        if type(self.version) is not int or self.version != 1:
+        if type(self.version) is not int or self.version not in (1, 2):
             raise InvalidReceiptMessage("unsupported receipt message version")
+        if self.version == 1 and self.request_id is not None:
+            raise InvalidReceiptMessage("normal receipt work cannot have a request_id")
+        if self.version == 2:
+            try:
+                if not isinstance(self.request_id, str) or str(UUID(self.request_id)) != self.request_id:
+                    raise ValueError("noncanonical UUID")
+            except ValueError as exc:
+                raise InvalidReceiptMessage("reprocess request_id must be a canonical UUID") from exc
         if not isinstance(self.source_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", self.source_sha256):
             raise InvalidReceiptMessage("source_sha256 must be a lowercase SHA-256 digest")
         ref = self.source_reference
@@ -37,10 +47,19 @@ class ReceiptMessage:
 
     @property
     def message_id(self) -> str:
+        if self.request_id:
+            return f"receipt.reprocess.v2:{self.source_sha256}:{self.request_id}"
         return f"receipt.v1:{self.source_sha256}"
 
+    @property
+    def message_type(self) -> str:
+        return "receipt.reprocess.v2" if self.request_id else "receipt.process.v1"
+
     def to_bytes(self) -> bytes:
-        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        payload = asdict(self)
+        if self.version == 1:
+            del payload["request_id"]
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     @classmethod
     def from_bytes(cls, body: bytes) -> ReceiptMessage:
@@ -48,7 +67,10 @@ class ReceiptMessage:
             if len(body) > 8192:
                 raise ValueError("message exceeds 8192 bytes")
             value = json.loads(body)
-            if not isinstance(value, dict) or set(value) != {"version", "source_sha256", "source_reference", "attempt"}:
+            fields = {"version", "source_sha256", "source_reference", "attempt"}
+            if isinstance(value, dict) and value.get("version") == 2:
+                fields.add("request_id")
+            if not isinstance(value, dict) or set(value) != fields:
                 raise ValueError("unexpected message fields")
             return cls(**value)
         except (ValueError, TypeError, UnicodeError) as exc:

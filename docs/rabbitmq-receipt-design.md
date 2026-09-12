@@ -64,13 +64,34 @@ contains:
 
 | Field | Meaning |
 | --- | --- |
-| `version` | Contract version, currently `1`. |
+| `version` | `1` for normal discovery work. |
 | `source_sha256` | Content hash and durable receipt identity. |
 | `source_reference` | Relative path below the configured source directory. |
 | `attempt` | Delivery attempt, starting at `1` and capped at `3`. |
 
 The AMQP `message_id` property is `receipt.v1:<source_sha256>` and remains
 stable across retries.
+
+Explicit reprocessing uses v2 with the same fields plus `request_id`, a canonical
+UUID. Its AMQP type is `receipt.reprocess.v2` and its message ID is
+`receipt.reprocess.v2:<source_sha256>:<request_id>`. Normal v1 bodies remain
+unchanged. Both versions use the existing `receipts.v1` queues. Consumers must
+be upgraded before v2 requests are published.
+
+`ledger receipts reprocess SOURCE_REFERENCE` hashes one source file and publishes
+a confirmed v2 request without changing database state. The consumer forces OCR
+refresh and extraction replacement. Under the receipt lock, it tracks attempts
+and completion in `budget.receipt_reprocess_requests`. The completion marker
+commits in the same transaction as the evidence, canonical extraction, and
+processing status. An already-completed request is skipped on redelivery, even
+after a newer request has processed the same receipt. Each request has its own
+three-attempt database budget, including attempts interrupted by worker crashes.
+The request table survives disposable ingest schema rebuilds.
+
+The CLI returns `queued` after broker confirmation. Each invocation generates a
+new UUID unless `--request-id` is supplied; reuse that UUID when the publication
+outcome is uncertain. Publisher confirmation and database completion remain
+separate events, so worker logs provide the extraction outcome.
 
 `source_reference` is a locator rather than an identity. Before processing, the
 consumer rejects absolute paths and paths that escape the configured source
