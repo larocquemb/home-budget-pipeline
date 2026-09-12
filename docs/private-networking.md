@@ -81,9 +81,12 @@ Create these records in private DNS:
 | `rabbitmq.brownrook.net` | `192.168.2.240` | Authenticated RabbitMQ management UI |
 | `postgres.brownrook.net` | `192.168.2.240` | Optional private PostgreSQL administrative endpoint |
 
-Create valid TLS secrets named `ledger-brownrook-net-tls` and
-`rabbitmq-brownrook-net-tls` in the `home-budget` namespace. Keep certificates,
-private keys, and populated Kubernetes secrets outside Git.
+Both private browser routes use the `k3ingress-tls` TLS secret in the
+`home-budget` namespace. Its certificate must cover `ledger.brownrook.net` and
+`rabbitmq.brownrook.net` (the current certificate includes `*.brownrook.net`).
+Clients must trust the issuing Brown Rook CA. Provision and renew the secret
+outside Git; keep certificates, private keys, and populated Kubernetes secrets
+outside Git.
 
 The private Ledger route uses a second OAuth2 Proxy deployment because its
 callback host and secure cookie differ from the public `.com` route. Add this

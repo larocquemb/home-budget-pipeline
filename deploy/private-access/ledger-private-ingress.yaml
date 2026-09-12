@@ -11,7 +11,7 @@ spec:
   tls:
     - hosts:
         - ledger.brownrook.net
-      secretName: ledger-brownrook-net-tls
+      secretName: k3ingress-tls
   rules:
     - host: ledger.brownrook.net
       http:
