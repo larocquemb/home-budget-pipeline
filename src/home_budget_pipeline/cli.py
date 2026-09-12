@@ -6,7 +6,6 @@ import argparse
 import json
 import os
 import re
-import socket
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -15,7 +14,6 @@ from . import db_setup, receipt_enrichment
 from .receipts import backlog_ingest
 from .receipts.evidence import record_ocr_feedback
 from .receipts import ingest as scan
-from .receipts.parallel_ingest import parse_scans_parallel
 
 
 def _receipt_root_default() -> str:
@@ -53,16 +51,18 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
 
     receipts = commands.add_parser("receipts", help="Process receipt evidence.")
     receipt_commands = receipts.add_subparsers(dest="receipt_command", required=True)
-    process = receipt_commands.add_parser("process", help="Process the receipt backlog into PostgreSQL.")
+    process = receipt_commands.add_parser("process", help="Queue the receipt backlog through RabbitMQ.")
     process.add_argument("receipt_root", nargs="?", default=_receipt_root_default())
-    process.add_argument("--workers", type=int, default=2)
+    process.add_argument("--workers", type=int, help="Deprecated; concurrency is controlled by RabbitMQ consumers.")
+    process.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))
+    process.add_argument("--request-id", help="Reuse a batch UUID when retrying an uncertain refresh publication.")
     process.add_argument("--ocr-cache", default=_ocr_cache_default())
     process.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))
     process.add_argument("--ingest-schema", default="ingest")
     process.add_argument("--budget-schema", default="budget")
     process.add_argument("--refresh-ocr-cache", action="store_true")
     process.add_argument("--verbose", action="store_true", help="Print per-receipt progress to stderr.")
-    process.set_defaults(handler=_process_receipts)
+    process.set_defaults(handler=_process_receipts, queue_mode="publish")
 
     from .receipts.queue_ingest import add_arguments
     for mode in ("publish", "consume"):
@@ -104,13 +104,15 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     feedback.add_argument("--budget-schema", default="budget")
     feedback.set_defaults(handler=_record_receipt_feedback)
 
-    ocr_cache = commands.add_parser("ocr-cache", help="Manage local OCR cache files.")
+    ocr_cache = commands.add_parser("ocr-cache", help="Manage OCR cache files through RabbitMQ workers.")
     cache_commands = ocr_cache.add_subparsers(dest="cache_command", required=True)
-    rebuild = cache_commands.add_parser("rebuild", help="Rebuild OCR cache files without writing to PostgreSQL.")
+    rebuild = cache_commands.add_parser("rebuild", help="Queue cache rebuilds without replacing saved extraction results.")
     rebuild.add_argument("receipt_root", nargs="?", default=_receipt_root_default())
-    rebuild.add_argument("--ocr-cache", default=_ocr_cache_default())
-    rebuild.add_argument("--workers", type=int, default=2)
-    rebuild.add_argument("--verbose", action="store_true", help="Print receipt filenames and completed/total progress to stderr.")
+    rebuild.add_argument("--ocr-cache", default=_ocr_cache_default(), help="Legacy option; the consumer selects its cache directory.")
+    rebuild.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))
+    rebuild.add_argument("--request-id", help="Reuse a batch UUID when retrying an uncertain publication.")
+    rebuild.add_argument("--workers", type=int, help="Deprecated; concurrency is controlled by RabbitMQ consumers.")
+    rebuild.add_argument("--verbose", action="store_true", help="Print confirmed publication progress to stderr; OCR progress is in worker logs.")
     rebuild.set_defaults(handler=_rebuild_ocr_cache)
 
     database = commands.add_parser("database", help="Manage the PostgreSQL database.")
@@ -148,57 +150,27 @@ def _retry_receipt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _queue_concurrency_notice(args: argparse.Namespace) -> None:
+    if args.workers is not None:
+        print("--workers no longer starts local processes; concurrency is controlled by RabbitMQ consumers.", file=sys.stderr)
+
+
 def _process_receipts(args: argparse.Namespace) -> int:
-    root = Path(args.receipt_root).expanduser().resolve()
-    cache_dir = Path(args.ocr_cache).expanduser().resolve()
-    workers = max(1, args.workers)
-    if args.verbose:
-        print("Effective receipt processing settings:", file=sys.stderr)
-        print(f"  Receipt root: {root}", file=sys.stderr)
-        print(f"  OCR cache: {cache_dir}", file=sys.stderr)
-        print(f"  Workers: {workers} local process(es)", file=sys.stderr)
-        print(f"  Worker host: {socket.gethostname()}", file=sys.stderr)
-        print(f"  Database: {_display_database_dsn(args.db_dsn)}", file=sys.stderr)
-        print(f"  Ingest schema: {args.ingest_schema}", file=sys.stderr)
-        print(f"  Budget schema: {args.budget_schema}", file=sys.stderr)
-        print(f"  Refresh OCR cache: {'yes' if args.refresh_ocr_cache else 'no'}", file=sys.stderr)
-    conn = scan._db_connect(args.db_dsn)
-    try:
-        summary = backlog_ingest.process_backlog(
-            conn,
-            root,
-            cache_dir,
-            workers=workers,
-            ingest_schema=args.ingest_schema,
-            budget_schema=args.budget_schema,
-            refresh_ocr_cache=args.refresh_ocr_cache,
-            verbose=args.verbose,
-        )
-    finally:
-        conn.close()
-    print(json.dumps(summary, indent=2))
-    return 1 if summary["failed"] else 0
+    from .receipts import queue_ingest
+
+    _queue_concurrency_notice(args)
+    if args.refresh_ocr_cache:
+        return queue_ingest.publish_batch(args)
+    if args.request_id:
+        raise ValueError("--request-id requires --refresh-ocr-cache")
+    return queue_ingest.run(args)
 
 
 def _rebuild_ocr_cache(args: argparse.Namespace) -> int:
-    root = Path(args.receipt_root).expanduser().resolve()
-    cache_dir = Path(args.ocr_cache).expanduser().resolve()
-    paths = scan.discover_scans(root)
-    options = {}
-    if args.verbose:
-        def progress(message: str) -> None:
-            print(message, file=sys.stderr, flush=True)
-        progress(f"Rebuilding OCR cache: {len(paths)} receipt(s), {max(1, args.workers)} worker(s)")
-        progress(f"Receipt root: {root}")
-        progress(f"OCR cache: {cache_dir}")
-        options["progress"] = progress
-    parse_scans_parallel(paths, root, max(1, args.workers), cache_dir, refresh=True, **options)
-    print(json.dumps({
-        "discovered": len(paths),
-        "cache_rebuilt": len(paths),
-        "ocr_cache": str(cache_dir),
-    }, indent=2))
-    return 0 if paths else 2
+    from .receipts.queue_ingest import publish_batch
+
+    _queue_concurrency_notice(args)
+    return publish_batch(args, cache_only=True)
 
 
 def _record_receipt_feedback(args: argparse.Namespace) -> int:

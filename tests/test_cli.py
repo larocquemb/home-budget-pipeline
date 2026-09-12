@@ -71,58 +71,6 @@ class BrownRookCliTests(unittest.TestCase):
         db_connect.assert_called_once_with("postgresql://environment/budget")
         connection.close.assert_called_once_with()
 
-    def test_ocr_cache_rebuild_uses_environment_paths_without_database(self):
-        output = io.StringIO()
-        with (
-            patch.dict(os.environ, {
-                "RECEIPT_SOURCE_ROOT": "/receipts",
-                "HOME_BUDGET_OCR_CACHE": "/cache",
-            }),
-            patch.object(cli.scan, "discover_scans", return_value=[Path("/receipts/one.pdf")]),
-            patch.object(cli, "parse_scans_parallel") as parse_scans,
-            patch.object(cli.scan, "_db_connect") as db_connect,
-            redirect_stdout(output),
-        ):
-            result = cli.main(["ocr-cache", "rebuild", "--workers", "3"])
-
-        self.assertEqual(result, 0)
-        parse_scans.assert_called_once_with(
-            [Path("/receipts/one.pdf")],
-            Path("/receipts"),
-            3,
-            Path("/cache"),
-            refresh=True,
-        )
-        db_connect.assert_not_called()
-        self.assertIn('"cache_rebuilt": 1', output.getvalue())
-
-    def test_receipt_process_command_connects_to_database(self):
-        connection = MagicMock()
-        diagnostic = io.StringIO()
-        with (
-            patch.dict(os.environ, {"DATABASE_URL": "postgresql://example/budget"}),
-            patch.object(cli.scan, "_db_connect", return_value=connection),
-            patch.object(cli.socket, "gethostname", return_value="test-host"),
-            patch.object(cli.backlog_ingest, "process_backlog", return_value={"failed": 0}) as process,
-            redirect_stdout(io.StringIO()),
-            redirect_stderr(diagnostic),
-        ):
-            result = cli.main(["receipts", "process", "/receipts", "--ocr-cache", "/cache", "--verbose"])
-
-        self.assertEqual(result, 0)
-        process.assert_called_once()
-        self.assertTrue(process.call_args.kwargs["verbose"])
-        connection.close.assert_called_once_with()
-        settings = diagnostic.getvalue()
-        self.assertIn("Receipt root: /receipts", settings)
-        self.assertIn("OCR cache: /cache", settings)
-        self.assertIn("Workers: 2 local process(es)", settings)
-        self.assertIn("Worker host: test-host", settings)
-        self.assertIn("Database: postgresql://example/budget", settings)
-        self.assertIn("Ingest schema: ingest", settings)
-        self.assertIn("Budget schema: budget", settings)
-        self.assertIn("Refresh OCR cache: no", settings)
-
     def test_database_display_redacts_passwords(self):
         self.assertEqual(
             cli._display_database_dsn("postgresql://paul:secret@127.0.0.1:5432/home_budget"),

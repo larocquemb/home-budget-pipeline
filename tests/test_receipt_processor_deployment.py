@@ -10,15 +10,17 @@ def test_receipt_processor_cronjob_contract():
     assert "concurrencyPolicy: Forbid" in text
     assert "- ledger" in text
     assert "- receipts" in text
-    assert "- process" in text
-    assert "--workers" in text and '"1"' in text
+    assert "- publish" in text
+    assert "--workers" not in text
+    assert "name: rabbitmq-secret" in text
+    assert "readOnly: true" in text
     assert "HOME_BUDGET_PADDLE_OCR" in text
     assert 'value: "true"' in text
     assert "claimName: home-budget-data" in text
     assert "name: postgres-secret" in text
-    assert 'cpu: "2"' in text
-    assert "memory: 4Gi" in text
-    assert "memory: 8Gi" in text
+    assert "cpu: 100m" in text
+    assert "memory: 256Mi" in text
+    assert "memory: 1Gi" in text
     assert "fsGroup: 1000" in text
     assert "fsGroupChangePolicy: OnRootMismatch" in text
 

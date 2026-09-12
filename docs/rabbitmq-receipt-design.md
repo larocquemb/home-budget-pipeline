@@ -7,17 +7,17 @@ Kubernetes rollout instructions, see the
 
 ## Scope
 
-RabbitMQ adds a distributed execution mode to the existing receipt backlog. It
-does not replace receipt discovery, OCR, normalization, evidence storage, or
-expense persistence. Both execution modes call the same receipt-processing
-function:
+RabbitMQ is the dispatch path for all receipt work. Publishers discover files
+and submit requests; consumers alone invoke OCR and persistence.
 
-- `ledger receipts process` discovers and processes receipts in one process.
-- `ledger receipts publish` discovers eligible receipts and publishes work.
-- `ledger receipts consume` receives work and processes it in a worker.
+- `ledger receipts process` and `publish` queue eligible receipts.
+- `ledger receipts reprocess` and `process --refresh-ocr-cache` queue full refreshes.
+- `ledger ocr-cache rebuild` queues cache-only refreshes.
+- `ledger receipts consume` processes messages in a worker.
 
-It uses the existing receipt and processing-status tables, so enabling this mode
-does not require a database schema rebuild or migration.
+Commands exit after confirmed publication. Broker failures are reported without
+falling back to direct processing. Worker settings control cache location and
+concurrency. The additive request tables track completion and bounded attempts.
 
 The queued mode uses at-least-once delivery. A receipt can be delivered more
 than once, but PostgreSQL state and per-receipt advisory locks prevent
@@ -40,6 +40,14 @@ flowchart TB
 The consumer acknowledges the delivery only after PostgreSQL commits the final
 result. Shared storage contains the receipt and OCR cache; RabbitMQ messages
 carry only the receipt hash and relative path.
+
+In K3s, the `receipt-processor` CronJob is the publisher. Every 15 minutes it
+checks inbox receipts against PostgreSQL completion status and cache-file
+existence under `HOME_BUDGET_OCR_CACHE`. It sends missing-cache reprocess requests
+through RabbitMQ. The `receipt-worker` consumer performs OCR and replaces saved
+extraction results; it does not independently discover missing cache files.
+Manual `receipts publish` and `receipts process` commands use the same discovery
+and publication policy.
 
 ### Failure path
 
@@ -132,7 +140,10 @@ sequenceDiagram
 
     P->>F: Discover candidate and calculate SHA-256
     P->>D: Read status and attempt history
-    alt already complete or ineligible
+    alt complete with missing OCR cache
+        P->>R: Publish persistent v2 reprocess request
+        R-->>P: Confirm routed publication
+    else complete with cache or ineligible
         P-->>P: Skip candidate
     else eligible
         P->>R: Publish persistent v1 message
@@ -145,6 +156,16 @@ There is no database-to-broker outbox transaction. If the publisher exits after
 RabbitMQ confirms a message but before the command finishes reporting, a later
 scan can publish that receipt again. Delivery is at least once, and the
 consumer's database checks make duplicate work safe.
+
+Completed sources are checked for their current date-relative cache file or a
+legacy hash-named cache. A missing cache produces a full v2 reprocess request,
+even if the receipt's historical attempt count has reached the normal limit.
+Its request UUID is derived from the source hash, relative path, and previous
+completion timestamp, so repeated scans before processing reuse the same request
+and attempt budget. After a new successful completion, another cache deletion
+produces a fresh request. The consumer recreates OCR and replaces saved
+extraction results; this is not a cache-only repair. Sources that stop being
+completed during discovery are left to their current processing attempt.
 
 Receipts whose stored processing-attempt count has reached the configured
 maximum are reported as exhausted. An operator must reset one with
@@ -193,10 +214,9 @@ status while holding that lock. Only one worker can process a given receipt at
 a time, even if duplicate messages are in the queue or several consumer
 replicas are running.
 
-The lock is per receipt. Different receipts can run concurrently. The local
-`receipts process` command also uses the same per-receipt lock inside its wider
-backlog lock, so local and RabbitMQ workers cannot process the same receipt at
-the same time.
+The lock is per receipt. Different receipts can run concurrently. Normal,
+full-reprocess, and cache-only messages use the same lock. Manual commands
+publish requests and never create a separate local worker pool.
 
 The completed database state is the idempotency record. A message for a receipt
 in `succeeded` or `review_required` is acknowledged as a duplicate. The design
@@ -302,3 +322,18 @@ The PostgreSQL integration tests exercise competing workers and verify that a
 receipt is processed once. The RabbitMQ integration tests exercise confirmed
 publication, manual acknowledgements, retry delay, and dead-letter routing
 against a real broker.
+
+## Cache-only requests
+
+Version 3 uses the v2 fields with AMQP type `receipt.cache-rebuild.v3`. The worker
+refreshes the cache under the receipt lock and verifies the source hash before
+and after OCR. It records bounded attempts and completion in
+`budget.receipt_cache_requests`, preserving extraction and ingest status. Cache
+writes use atomic file replacement. Completed-request redelivery skips OCR; an
+uncommitted completion may repeat OCR safely. Retries preserve the request ID.
+
+Batch publishers derive per-source UUIDs from a batch request UUID, operation,
+and relative path. Reusing a batch UUID after uncertain publication reuses each
+request. The command reports confirmed counts on partial failure. Full refresh
+batches use v2; cache-only batches use v3. Roll out consumer support through
+Argo CD before publishing a new message version.

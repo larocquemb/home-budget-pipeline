@@ -4,10 +4,10 @@ This page covers setup, commands, recovery, and deployment. See
 [RabbitMQ receipt processing design](rabbitmq-receipt-design.md) for the message
 lifecycle, reliability boundaries, idempotency model, and failure behavior.
 
-The queued processing mode reuses backlog discovery, OCR, evidence persistence,
-and `ingest.receipt_processing_status`. The existing local commands and default
-`k8s` deployment still work. No database migration, Celery service, or new work
-table is required.
+All receipt work goes through RabbitMQ, including manual processing, full
+reprocessing, cache rebuilds, and scheduled discovery. Consumers reuse the OCR
+and persistence implementation. Database setup adds request tracking tables
+without rebuilding existing receipt state. There is no direct OCR fallback.
 
 ## Contract and delivery
 
@@ -94,7 +94,7 @@ matching failed or interrupted receipt's processing status and attempt budget;
 it preserves source identity and canonical evidence. It refuses active processing
 locks, completed receipts (including review-required receipts), and ambiguous
 source references. A successful command reports `retry_ready: true`. It requires
-only database access and prepares the receipt for the next `publish` or local
+only database access and prepares the receipt for the next `publish` or
 `process` command; it does not publish or remove broker messages itself. Do not
 simply move an attempt-3 DLQ body back to work.
 For intentional OCR refresh of one receipt, use
@@ -106,8 +106,11 @@ no-op; each new request gets its own three-attempt budget. If publication is
 uncertain, reuse the printed `--request-id UUID`. Deploy all consumers with v2
 support before publishing reprocess messages. See
 [receipt processing](receipt-processing.md) for K3s commands, rollout details,
-and RabbitMQ GUI monitoring. For a whole-inbox refresh, drain/stop workers and use
-`receipts process --refresh-ocr-cache`. Stop all writers before rebuilding
+and RabbitMQ GUI monitoring. For a whole-inbox refresh, use
+`receipts process --refresh-ocr-cache`; it queues one v2 request per receipt.
+`ocr-cache rebuild` queues v3 requests that preserve saved extraction. Both
+commands return after confirmed publication and accept `--request-id UUID` for
+uncertain batch retries. Keep consumers running to execute the queued work. Stop all writers before rebuilding
 or switching the ingest schema; its completion state is the idempotency record.
 
 ## Run and validate
@@ -223,8 +226,20 @@ resume. Set the Argo CD application's source path to `deploy/rabbitmq` and run
 No cluster resources are changed by rendering the overlay.
 
 The RabbitMQ overlays explicitly set `receipt-processor.spec.suspend: false`.
-Once synced, the CronJob publishes unfinished, eligible receipts every 15 minutes;
-completed receipts are skipped. For a maintenance pause, set `suspend: true` in
+Once synced, the **`receipt-processor` CronJob** runs `ledger receipts publish`
+every 15 minutes. The publisher checks inbox files, PostgreSQL completion status,
+and cache-file existence under `HOME_BUDGET_OCR_CACHE`. Completed receipts with
+missing OCR cache files are queued in RabbitMQ as full v2 reprocess requests.
+The **`receipt-worker` consumer** receives those requests, recreates the cache,
+and replaces saved extraction results. Completed receipts with
+current or legacy cache files are skipped. The publisher uses the same
+`HOME_BUDGET_OCR_CACHE` setting as consumers. Its JSON summary includes
+`cache_missing`, counted within `published`. The publisher never runs OCR;
+the consumer only processes delivered requests. See
+[missing-cache detection](receipt-processing.md#who-checks-for-missing-ocr-cache-files)
+for responsibilities and an immediate manual check.
+
+For a maintenance pause, set `suspend: true` in
 `deploy/rabbitmq/publisher-patch.yaml` and sync through Argo CD, then restore
 `false` to resume. A direct cluster edit may be reverted by Argo CD self-healing.
 

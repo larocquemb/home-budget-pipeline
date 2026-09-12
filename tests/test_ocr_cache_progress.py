@@ -1,4 +1,4 @@
-import json
+import sys
 from concurrent.futures import Future
 from unittest.mock import MagicMock
 
@@ -8,7 +8,7 @@ from home_budget_pipeline import cli
 from home_budget_pipeline.receipts import parallel_ingest as parallel
 
 
-def test_verbose_rebuild_reports_progress_during_ocr_without_database(tmp_path, monkeypatch, capsys):
+def test_worker_parser_reports_progress_during_ocr(tmp_path, monkeypatch, capsys):
     source = tmp_path / "2026-08-14" / "receipt.pdf"
     source.parent.mkdir()
     source.write_bytes(b"test receipt")
@@ -26,17 +26,19 @@ def test_verbose_rebuild_reports_progress_during_ocr_without_database(tmp_path, 
         return object(), False
 
     monkeypatch.setattr(parallel, "_parse_scan_cached", parse)
-    assert cli.main(["ocr-cache", "rebuild", "--workers", "1", "--verbose"]) == 0
+    parallel.parse_scans_parallel([source], tmp_path, 1, tmp_path / "cache", True,
+                                  progress=lambda message: print(message, file=sys.stderr))
     output = capsys.readouterr()
     assert "[1/1] Completed 2026-08-14/receipt.pdf" in output.err
-    assert json.loads(output.out)["cache_rebuilt"] == 1
+    assert not output.out
 
 
 def test_failed_rebuild_reports_filename_without_success_summary(tmp_path, monkeypatch, capsys):
     (tmp_path / "bad.pdf").write_bytes(b"test")
     monkeypatch.setattr(parallel, "_parse_scan_cached", MagicMock(side_effect=RuntimeError("OCR failed")))
     with pytest.raises(RuntimeError, match="OCR failed"):
-        cli.main(["ocr-cache", "rebuild", str(tmp_path), "--workers", "1", "--verbose"])
+        parallel.parse_scans_parallel([tmp_path / "bad.pdf"], tmp_path, 1, tmp_path / "cache", True,
+                                      progress=lambda message: print(message, file=sys.stderr))
     output = capsys.readouterr()
     assert "[0/1] Failed bad.pdf" in output.err
     assert "Completed" not in output.err
@@ -67,10 +69,3 @@ def test_parallel_progress_uses_completion_order_but_results_keep_input_order(tm
         "[0/2] Queued slow.pdf", "[0/2] Queued fast.pdf",
         "[1/2] Completed fast.pdf", "[2/2] Completed slow.pdf",
     ]
-
-
-def test_empty_verbose_rebuild_returns_empty_summary(tmp_path, capsys):
-    assert cli.main(["ocr-cache", "rebuild", str(tmp_path), "--verbose", "--workers", "1"]) == 2
-    output = capsys.readouterr()
-    assert "0 receipt(s)" in output.err
-    assert json.loads(output.out)["cache_rebuilt"] == 0

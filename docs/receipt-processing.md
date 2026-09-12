@@ -1,19 +1,25 @@
 # Receipt backlog processing
 
-The idempotent receipt backlog processor discovers receipt files, skips source
-hashes already represented in receipt evidence, processes pending receipts
-through the shared OCR/parser/persistence path, and records per-receipt status
-for retries and operations.
+All receipt processing and cache rebuild commands submit work through RabbitMQ.
+Publishers discover files and queue requests; consumers run OCR and persistence.
+There is no direct-processing fallback when the broker is unavailable.
 
 ## Manual run
 
-With the database and receipt storage reachable:
+With RabbitMQ, the database, receipt storage, and a consumer available:
 
 ```bash
-ledger receipts process /data/receipts/raw/scanned/inbox --workers 2
+ledger receipts process /data/receipts/raw/scanned/inbox
 ```
 
-Configuration can be supplied with `DATABASE_URL`, `RECEIPT_SOURCE_ROOT`, and `HOME_BUDGET_OCR_CACHE`. The process reports discovered, skipped, succeeded, failed, and review-required counts. A PostgreSQL advisory lock prevents overlapping backlog runs.
+`receipts process` is an alias for queue publication. Configure `RABBITMQ_URL`,
+`DATABASE_URL`, `RECEIPT_SOURCE_ROOT`, and `HOME_BUDGET_OCR_CACHE`. Its summary
+reports discovered, skipped, exhausted, cache-missing, and published counts.
+Completion appears in consumer logs. Per-receipt PostgreSQL locks serialize
+work across consumers. Start a consumer with `ledger receipts consume`.
+The legacy `home-budget-process-receipts` and `home-budget-scan` entry points
+use the same `receipts process` arguments and queue dispatch; old synchronous
+report options such as `--json` and `--show-review` are no longer supported.
 
 Mac development and K3s use separate OCR caches:
 
@@ -98,9 +104,11 @@ has a fresh three-attempt database budget, independent of earlier processing.
 
 In K3s, first deploy this version through Argo CD and wait for all workers to
 finish rolling out. The PreSync database setup adds
-`budget.receipt_reprocess_requests` without rebuilding existing ingest state.
-New workers accept both normal v1 messages and reprocess v2 messages; older
-workers reject v2 messages to the dead queue. Then publish:
+`budget.receipt_reprocess_requests` and `budget.receipt_cache_requests` without
+rebuilding existing ingest state. Workers accept normal v1, full reprocess v2,
+and cache-only v3 messages. Finish rolling out consumers before sending new
+message versions; old consumers send unsupported messages to the dead queue.
+Then publish:
 
 ```bash
 kubectl --context brownrook-k3s1 -n home-budget \
@@ -128,16 +136,49 @@ for normal publishing again.
 | --- | --- | --- |
 | `receipts retry SOURCE_REFERENCE` | One failed or interrupted receipt | Resets its attempt budget for the next publish or process run; refuses completed receipts. |
 | `receipts reprocess SOURCE_REFERENCE` | One receipt, including completed receipts | Queues a refresh; the consumer replaces its OCR and extraction results. |
-| `receipts process --refresh-ocr-cache` | Every receipt under the supplied root | Immediately refreshes OCR and replaces extraction results for the whole selection. |
+| `receipts process --refresh-ocr-cache` | Every receipt under the supplied root | Queues one full reprocess request per receipt; workers replace extraction results. |
+
+## Who checks for missing OCR cache files?
+
+The **`receipt-processor` CronJob** runs `ledger receipts publish` every
+15 minutes (`*/15 * * * *`). This publisher discovers source files under
+`RECEIPT_SOURCE_ROOT`, reads their PostgreSQL completion status, and checks for
+their cache files under `HOME_BUDGET_OCR_CACHE`.
+
+| Component | Responsibility |
+| --- | --- |
+| `receipt-processor` publisher | Detect eligible inbox receipts, including completed receipts whose OCR cache is missing, and publish requests. |
+| RabbitMQ (`receipts.v1.work`) | Hold the requests until a consumer receives them. |
+| `receipt-worker` consumer | Run OCR, recreate cache files, replace saved extraction results for full reprocess requests, and acknowledge completion. |
+
+If a completed receipt's cache is missing, the publisher queues a full reprocess
+request through RabbitMQ. The worker recreates the cache and replaces saved
+extraction results and line items. The publisher never runs OCR, and the worker
+does not scan the inbox independently for missing caches.
+Both `succeeded` and `review_required` receipts are eligible. Existing current
+or legacy cache files keep completed receipts skipped. The publication summary
+reports these requests as `cache_missing` (included in `published`).
+
+Deleting the cache beneath an inbox therefore makes its completed receipts
+eligible for reprocessing on the next 15-minute publisher run. This does not
+require flushing PostgreSQL. The publisher and consumers must use the same
+cache directory; an incorrect publisher cache path could trigger unwanted
+reprocessing.
+
+The scheduled check runs only while the CronJob is enabled (`suspend: false`).
+For an immediate check, run `ledger receipts publish` with the same source,
+database, and cache settings. `ledger receipts process` uses the same check.
+Both commands submit work through RabbitMQ and return after publication;
+consumer logs report processing completion.
 
 ## Rebuild only the OCR cache
 
-Deleting cache files does not reset PostgreSQL completion status, so scheduled
-publishing will still skip completed receipts. To rebuild the cache without
-changing database extraction results:
+To rebuild only the cache without changing database extraction results, use the
+following command. Pause scheduled publishing through Git and Argo CD before
+deleting caches for this purpose, and resume after the rebuild completes:
 
 ```bash
-ledger ocr-cache rebuild --workers 1 --verbose
+ledger ocr-cache rebuild --verbose
 ```
 
 In K3s, run:
@@ -145,23 +186,29 @@ In K3s, run:
 ```bash
 kubectl --context brownrook-k3s1 -n home-budget \
   exec deployment/receipt-worker -- \
-  ledger ocr-cache rebuild --workers 1 --verbose
+  ledger ocr-cache rebuild --verbose
 ```
 
-`--verbose` prints the source/cache directories, filenames, and completed/total
-counts immediately to stderr:
+This publishes one `receipt.cache-rebuild.v3` message per discovered source,
+including receipts already completed in PostgreSQL. `--verbose` prints confirmed
+publication progress, for example `[1/12] Queued 2026-08-14/receipts_20260814_0001.pdf`.
+The JSON summary reports `published`, the batch `request_id`, and `status: queued`.
+It confirms submission, not cache completion. Watch consumer logs for
+`Rebuilding OCR cache`, `cache_rebuilt`, and retry/dead-letter outcomes.
 
-```text
-[0/12] Starting 2026-08-14/receipts_20260814_0001.pdf
-[1/12] Completed 2026-08-14/receipts_20260814_0001.pdf
-```
+The worker uses its own `HOME_BUDGET_OCR_CACHE`, rebuilds one receipt at a time,
+and records request completion without changing saved extraction or ingest
+completion state. `--workers` is deprecated and does not start local processes;
+concurrency comes from consumer replicas. The legacy rebuild `--ocr-cache`
+option does not override the consumer's cache directory.
 
-With multiple workers, files are first reported as `Queued`, then `Completed`
-in completion order. A failure identifies the receipt and exits with an error.
-Without `--verbose`, the command prints only its final JSON summary, apart from
-OCR library output. The rebuild refreshes every discovered receipt, including
-existing caches, and runs directly in the pod rather than through RabbitMQ.
-An already-running rebuild will not gain progress output after deployment.
+For an interrupted or uncertain batch publication, rerun with the printed
+`--request-id UUID`. The same batch and source produce the same request identity,
+so already-completed requests are skipped. A new invocation without that UUID
+creates a fresh rebuild. Partial publication failures report how many messages
+were confirmed. Workers retry each request at most three times before dead-lettering.
+Full-inbox refresh with `receipts process --refresh-ocr-cache` uses the same batch
+publication and retry behavior, but sends v2 requests that replace extraction.
 
 ## Receipt-scoped product enrichment
 
@@ -194,20 +241,17 @@ interactive prompt. Those items remain unenriched for manual review in Ledger.
 
 ## Kubernetes
 
-In the base `k8s` deployment, `k8s/receipt-processor-cronjob.yaml` runs local
-backlog processing every 15 minutes. `concurrencyPolicy: Forbid` prevents
-Kubernetes from starting a second scheduled job while the previous job is still
-running, and the PostgreSQL advisory lock provides an additional guard against
-manual or accidental concurrent runs.
+`k8s/receipt-processor-cronjob.yaml` publishes eligible receipts every 15 minutes.
+`concurrencyPolicy: Forbid` prevents overlapping scheduled discovery runs. The
+publisher mounts receipt storage read-only and requests 100m CPU and 256Mi memory.
+The manual scanned-receipt Job and default container command also publish work.
 
-The job uses one Python worker so the medium PaddleOCR models are loaded only once. PaddleOCR contributes high-confidence line candidates to the Tesseract DPI/layout consensus and falls back cleanly when unavailable. The pod requests 2 CPUs and 4Gi memory and is limited to 4 CPUs and 8Gi memory. The K3s node must have enough capacity for the measured Paddle peak plus PostgreSQL, Ledger, and system workloads.
-
-The shared `home-budget-data` PVC is mounted at `/data`, so raw receipts and the OCR cache are available to the processor. Database credentials come from `postgres-secret`.
-
-The optional `deploy/rabbitmq` overlay keeps the same schedule but changes the
-CronJob to publish work and adds the long-running `receipt-worker` Deployment.
-See the [RabbitMQ runbook](rabbitmq-receipts.md) for rollout, monitoring, and
-recovery.
+Deploy `deploy/rabbitmq` through Argo CD to supply the broker and long-running
+`receipt-worker` Deployment. Base manifests require the same RabbitMQ secret and
+a running consumer. The worker handles one receipt at a time with shared PV
+storage and per-receipt database locks. It requests 2 CPUs and 4Gi memory, with
+limits of 4 CPUs and 8Gi. See the [RabbitMQ runbook](rabbitmq-receipts.md) for
+rollout, monitoring, and recovery.
 
 Useful commands:
 
@@ -224,6 +268,9 @@ Open `/ledger/receipt-processing` to view the latest status for each receipt
 source hash, including attempt count, last attempt time, completion time, and
 last error. Failed receipts retry until their attempt budget is exhausted; an
 operator can then reset them with `ledger receipts retry` after fixing the
-cause. Successful receipts are skipped on subsequent discovery runs.
+cause. Queued publishing skips completed receipts only while their OCR cache
+file exists; otherwise it queues full reprocessing. `receipts process`
+uses this same publication policy. `--refresh-ocr-cache` explicitly queues
+full reprocessing for every discovered receipt.
 
 Receipt processing status is operational metadata only. Canonical expenses, evidence, duplicate review, and reconciliation remain available through their existing Ledger pages.

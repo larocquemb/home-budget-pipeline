@@ -92,30 +92,37 @@ python -m pip install -e '.[db]'
 ledger --help
 ```
 
-Process the backlog locally with the Ledger CLI:
+Submit the backlog through RabbitMQ with the Ledger CLI:
 
 ```bash
 ledger receipts process --verbose
 ```
 
-The command hashes discovered files, skips completed hashes, runs OCR and
-reconciliation, persists receipt evidence and canonical expenses in one
-transaction, and records processing attempts in PostgreSQL. Its JSON summary
-reports `discovered`, `skipped`, `succeeded`, `failed`, and `review_required`.
-Receipts with incomplete extraction remain available for human review.
+The command discovers eligible receipts and publishes persistent, confirmed
+messages. A running `ledger receipts consume` worker performs OCR and persists
+results. All receipt processing and cache rebuild commands use RabbitMQ; broker
+failure never starts local OCR. Completion is reported in worker logs.
 
-To rebuild OCR cache files without writing to PostgreSQL:
+To queue cache rebuilds while preserving saved extraction results:
 
 ```bash
-ledger ocr-cache rebuild --workers 1 --verbose
+ledger ocr-cache rebuild --verbose
 ```
 
-RabbitMQ can distribute the same processing path across workers:
+Run the publisher and consumer separately:
 
 ```bash
 ledger receipts publish
 ledger receipts consume
 ```
+
+The `receipt-processor` CronJob runs `ledger receipts publish` every 15 minutes.
+The publisher checks inbox files, PostgreSQL completion status, and
+`HOME_BUDGET_OCR_CACHE`. Completed receipts whose cache is missing are queued
+through RabbitMQ; the `receipt-worker` consumer recreates their caches and
+replaces saved extraction results and line items. Completed receipts with
+current or legacy caches remain skipped. Deleting cache files does not require
+a database reset. See [who checks for missing caches](docs/receipt-processing.md#who-checks-for-missing-ocr-cache-files).
 
 Publishing is confirmed and consumers acknowledge manually after a durable
 database result or confirmed retry/dead-letter transfer. PostgreSQL advisory
@@ -170,19 +177,20 @@ such as `20260214_sobeys_363_95.pdf`. The final consensus OCR and parsed receipt
 are cached by source hash and persisted as receipt evidence. Individual OCR
 passes and their quality metrics are retained for later effectiveness analysis.
 
-The unified Ledger CLI can rebuild only the local OCR cache, without a
-database connection or database writes:
+The unified Ledger CLI queues cache-only rebuilds through RabbitMQ:
 
 ```bash
-ledger ocr-cache rebuild --workers 1 --verbose
+ledger ocr-cache rebuild --verbose
 ```
 
-It uses `RECEIPT_SOURCE_ROOT` and `HOME_BUDGET_OCR_CACHE` when explicit paths
-are omitted. The equivalent form that does not require an activated virtual
-environment is `.venv/bin/ledger ocr-cache rebuild`.
-Add `--verbose` to show filenames and completed/total progress immediately on
-stderr. With multiple workers, completion updates appear as each receipt
-finishes. The final JSON summary still reports the number of rebuilt caches.
+The publisher uses `RECEIPT_SOURCE_ROOT` and `RABBITMQ_URL`; the consumer uses its
+configured `HOME_BUDGET_OCR_CACHE` and database. Saved extraction results remain
+unchanged; PostgreSQL tracks request attempts and completion. `--verbose` shows
+confirmed publication progress. The final JSON reports `published` and `queued`;
+worker logs report actual rebuild completion. Retry uncertain publication with
+the printed `--request-id UUID`. `--workers` no longer starts local processes;
+consumer replicas control concurrency.
+
 Cache version 13 keeps schema, source, processing, timing, and OCR-pass details
 inside a top-level `metadata` object. It groups final lines by source page and
 records OCR confidence, bounding boxes, line type, and derived department
@@ -212,9 +220,7 @@ reprocesses receipts already marked complete, and replaces their canonical
 extraction and line items. For example:
 
 ```bash
-HOME_BUDGET_PADDLE_OCR=true \
 ledger receipts process /path/to/receipt/inbox \
-  --workers 1 \
   --verbose \
   --refresh-ocr-cache \
   --db-dsn "$DATABASE_URL"

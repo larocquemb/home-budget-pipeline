@@ -9,7 +9,6 @@ writes remain sequential on one connection for predictable transactions.
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -26,20 +25,6 @@ from receipt_datetime import date_part, extract_transaction_datetime
 from receipt_evidence import attach_evidence, find_match, resolve_merchant_alias, upsert_evidence
 from receipt_payment import extract_payment_provenance
 from receipt_total_reconcile import reconcile_total_from_text
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Parallel ingest of scanned paper receipts.")
-    p.add_argument("input_path", help="Scan file or directory containing scanned receipts.")
-    p.add_argument("--workers", type=int, default=min(12, os.cpu_count() or 1), help="Concurrent receipt worker processes (default: min(12, CPU count)).")
-    p.add_argument("--ocr-cache", default=".ocr_cache", help="Local OCR page-text cache directory (default: .ocr_cache).")
-    p.add_argument("--refresh-ocr-cache", action="store_true", help="Ignore cached OCR and rebuild it from source scans.")
-    p.add_argument("--write-db", action="store_true", help="Persist receipt evidence and reconcile it to canonical expenses.")
-    p.add_argument("--db-dsn", default=os.getenv("HOME_BUDGET_PG_DSN", ""))
-    p.add_argument("--db-schema", default="budget")
-    p.add_argument("--json", dest="json_path", default="", help="Optional JSON report path (keep local; may contain financial data).")
-    p.add_argument("--show-review", action="store_true", help="Print receipts requiring review or unreadable.")
-    return p.parse_args()
 
 
 def _page_text_lines(page: str) -> list[str]:
@@ -144,6 +129,14 @@ def _cache_path(cache_dir: Path, source_reference: str | None, source_sha256: st
     if reference.is_absolute() or ".." in reference.parts:
         reference = Path(reference.name)
     return cache_dir / reference.parent / f"{reference.name}.json"
+
+
+def has_ocr_cache(cache_dir: Path, source_reference: str, source_sha256: str) -> bool:
+    """Recognize both current and legacy cache locations without running OCR."""
+    return any(path.is_file() for path in (
+        _cache_path(cache_dir, source_reference, source_sha256),
+        cache_dir / f"{source_sha256}.json",
+    ))
 
 
 DEPARTMENT_RE = re.compile(
@@ -606,59 +599,11 @@ def persist_evidence_first(
 
 
 def main() -> int:
-    args = parse_args()
-    started = time.perf_counter()
+    """Legacy command alias; receipt work is always submitted through RabbitMQ."""
+    import sys
+    from ..cli import main as ledger_main
 
-    root = Path(args.input_path).expanduser().resolve()
-    cache_dir = Path(args.ocr_cache).expanduser().resolve()
-    paths = scan.discover_scans(root)
-    receipts, cache_hits = parse_scans_parallel(
-        paths,
-        root,
-        args.workers,
-        cache_dir,
-        args.refresh_ocr_cache,
-        return_cache_hits=True,
-    )
-
-    db_stats = None
-    if args.write_db:
-        conn = scan._db_connect(args.db_dsn)
-        try:
-            db_stats = persist_evidence_first(conn, receipts, args.db_schema)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-    elapsed_seconds = round(time.perf_counter() - started, 3)
-    receipts_per_second = round(len(paths) / elapsed_seconds, 3) if elapsed_seconds > 0 else None
-
-    report = {
-        "discovered": len(paths),
-        "complete": sum(r.extraction_status == "complete" for r in receipts),
-        "review": sum(r.extraction_status == "review" for r in receipts),
-        "unreadable": sum(r.extraction_status == "unreadable" for r in receipts),
-        "workers": max(1, args.workers),
-        "executor": "process",
-        "ocr_cache_hits": cache_hits,
-        "ocr_cache_misses": len(paths) - cache_hits,
-        "elapsed_seconds": elapsed_seconds,
-        "receipts_per_second": receipts_per_second,
-        "receipts": [_receipt_to_dict(r) for r in receipts],
-    }
-    if db_stats is not None:
-        report["db_reconciliation"] = db_stats
-
-    if args.json_path:
-        Path(args.json_path).write_text(json.dumps(report, indent=2), encoding="utf-8")
-
-    print(json.dumps({k: v for k, v in report.items() if k != "receipts"}, indent=2))
-    if args.show_review:
-        scan.print_review(receipts)
-    return 0 if paths else 2
+    return ledger_main(["receipts", "process", *sys.argv[1:]])
 
 
 if __name__ == "__main__":
