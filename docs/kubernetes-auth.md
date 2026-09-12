@@ -1,6 +1,8 @@
 # Ledger public and private authentication
 
-External URL: `https://idc.brownrook.com/ledger`
+Public URL: `https://idc.brownrook.com/ledger`
+
+Corporate-LAN URL: `https://ledger.brownrook.net/ledger`
 
 The existing BrownRook NGINX proxy terminates TLS for `idc.brownrook.com` and
 forwards requests to the K3s ingress endpoint. The Kubernetes HTTP ingress

@@ -25,14 +25,27 @@ concurrent or repeated completion.
 
 ## Components
 
+### Processing path
+
 ```mermaid
-flowchart LR
+flowchart TB
     inbox[Receipt inbox] --> publisher[Publisher]
     publisher -->|confirmed message| work[Work queue]
     work -->|manual delivery| worker[Consumer]
     worker --> files[Shared receipt files]
     worker --> ocr[OCR and extraction]
-    worker --> db[(PostgreSQL)]
+    ocr -->|atomic result| db[(PostgreSQL)]
+```
+
+The consumer acknowledges the delivery only after PostgreSQL commits the final
+result. Shared storage contains the receipt and OCR cache; RabbitMQ messages
+carry only the receipt hash and relative path.
+
+### Failure path
+
+```mermaid
+flowchart TB
+    work[Work queue] --> worker[Consumer]
     worker -->|transient failure| retry[Retry queue]
     retry -->|TTL expires| work
     worker -->|terminal failure| dead[Dead-letter queue]
