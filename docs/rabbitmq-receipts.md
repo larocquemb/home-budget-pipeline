@@ -97,8 +97,12 @@ source references. A successful command reports `retry_ready: true`. It requires
 only database access and prepares the receipt for the next `publish` or local
 `process` command; it does not publish or remove broker messages itself. Do not
 simply move an attempt-3 DLQ body back to work.
-For intentional OCR refresh, drain/stop workers and use the existing local
-`receipts process --refresh-ocr-cache` command. Stop all writers before rebuilding
+For intentional OCR refresh of one receipt, use
+`ledger receipts reprocess SOURCE_REFERENCE --verbose`. It runs immediately,
+refreshes OCR, and replaces the selected receipt's extraction results under the
+shared per-receipt lock. See [receipt processing](receipt-processing.md) for the
+K3s command. For a whole-inbox refresh, drain/stop workers and use
+`receipts process --refresh-ocr-cache`. Stop all writers before rebuilding
 or switching the ingest schema; its completion state is the idempotency record.
 
 ## Run and validate

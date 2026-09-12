@@ -74,6 +74,11 @@ Use **Receipt processing** to answer whether a source file was discovered,
 attempted, completed, marked for review, or failed. A successful processor run
 may still contain `review_required` receipts.
 
+To rerun extraction for one completed receipt, an operator can use
+`ledger receipts reprocess SOURCE_REFERENCE --verbose`, with the receipt's exact
+path relative to the inbox. This refreshes OCR and replaces its extraction
+results. See [receipt processing](receipt-processing.md) for local and K3s commands.
+
 ### 7. Duplicates
 
 Use **Duplicates** to inspect evidence records that may describe the same
