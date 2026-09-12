@@ -5,6 +5,16 @@ canonical expenses, categorized line items, review data, and budget reports.
 PostgreSQL is the system of record. Receipt files and OCR cache artifacts stay
 on shared storage; RabbitMQ carries work references only.
 
+## Infrastructure context
+
+The BrownRook infrastructure
+[rendered diagram](https://github.com/larocquemb/brownrook-infra/blob/main/docs/brownrook-infra.drawio.png)
+and [editable Draw.io source](https://github.com/larocquemb/brownrook-infra/blob/main/docs/brownrook-infra.drawio)
+show the wider network, edge, DNS, identity, PKI, and K3s platform around Ledger.
+This page focuses on components and data flows owned by the Ledger application.
+Keeping those views separate lets infrastructure changes remain authoritative
+in `brownrook-infra` while application behavior remains authoritative here.
+
 ## Runtime components and data flow
 
 ### Authenticated web access
