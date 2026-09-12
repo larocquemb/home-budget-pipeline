@@ -113,6 +113,62 @@ commands return after confirmed publication and accept `--request-id UUID` for
 uncertain batch retries. Keep consumers running to execute the queued work. Stop all writers before rebuilding
 or switching the ingest schema; its completion state is the idempotency record.
 
+## Interpreting a cache-repair backlog
+
+After introducing a new or empty OCR cache directory, the 15-minute publisher
+can repeatedly queue repairs for completed receipts whose caches are still
+missing. These publications reuse a request UUID for the same source hash,
+relative path, and previous completion time. RabbitMQ retains each delivery;
+the worker checks PostgreSQL request completion and ACKs completed copies with
+`status=skipped`. See
+[scheduled cache discovery and duplicate backlog](rabbitmq-receipt-design.md#scheduled-cache-discovery-and-duplicate-backlog)
+for the identity rules and tradeoff.
+
+A queue that drains rapidly after a period of slow OCR can therefore be normal.
+Compare worker outcomes rather than interpreting every delivery as a new OCR
+run:
+
+| Worker log | Meaning |
+| --- | --- |
+| `Running OCR and parsing` | A processing attempt reached OCR/parsing. |
+| `status=skipped` | Completion was already recorded; this delivery did not run OCR. |
+| `status=succeeded` or `status=review_required` | Processing completed; review-required receipts still need review. |
+| `routed=receipts.v1.dead` | The delivery left work for inspection, without successful completion. |
+
+For example, the retained worker logs on September 12, 2026, around
+08:23–08:31 Winnipeg time contained 161 handled deliveries: 154 skipped, six
+processed (three succeeded and three required review), and one stale-source
+message sent to the dead-letter queue. This demonstrates how many deliveries
+can drain with few OCR runs; the outcome counts alone do not establish when
+each duplicate was originally published.
+
+In the management UI, open **Queues and Streams → receipts.v1.work** and select
+**last hour** beside **Queued messages**. Total includes ready and unacknowledged
+deliveries. The configured `x-max-length` of 100,000 is a capacity limit, not an
+observed peak. Check retry and dead-letter queues separately.
+
+RabbitMQ's management statistics are stored in memory and lost on broker
+restart, while durable messages can survive on the broker volume. A graph that
+shows zero before recovery is not evidence that the queue was empty. Its
+highest retained sample cannot establish the peak before a crash loop or
+restart. Persistent external monitoring is needed for history across restarts;
+see [RabbitMQ management statistics](https://www.rabbitmq.com/docs/management#statistics-db).
+
+To inspect retained worker activity since a specific time, use an explicit UTC
+timestamp and override the selector's default log tail. For example, 05:00 in
+Winnipeg on September 12, 2026, is 10:00 UTC:
+
+```sh
+kubectl --context brownrook-k3s1 -n home-budget logs \
+  -l app=receipt-worker \
+  --since-time='2026-09-12T10:00:00Z' \
+  --tail=-1 --timestamps=true --prefix=true
+```
+
+Add `--previous` to inspect the preceding container instance when available.
+Kubernetes log retention and container replacement can limit coverage; worker
+logs describe processing outcomes rather than historical queue depth.
+
 ## Run and validate
 
 Install the project with its database dependencies
