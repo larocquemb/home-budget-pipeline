@@ -226,8 +226,11 @@ It does require working GitHub CLI authentication, Kubernetes access, and
 `jq`. When multiple kubeconfigs exist, set
 `KUBECONFIG=~/.kube/config-brownrook` first.
 
-The `ledger` application tracks `main` with automated sync, pruning, and
-self-healing. A PreSync hook runs `home-budget-db-setup` before workloads are
+The `ledger` application tracks `main`. Its current sync policy is manual:
+merging a PR and publishing an image does not deploy it until Argo CD is synced.
+Use `make deploy-k3s` to provision environment configuration and request the sync,
+or use the Argo CD UI/CLI when configuration is already provisioned.
+A PreSync hook runs `home-budget-db-setup` before workloads are
 updated. The hook applies current constraints, audit and description fields,
 merchant aliases, OCR learning, product enrichment, and blue/green receipt
 processing state.
