@@ -148,6 +148,20 @@ PreSync migration image remains tied to the application deployment.
 
 ## Argo CD deployment
 
+Open the private Argo CD UI at
+`https://argocd.brownrook.net/applications/ledger`. For CLI operations, log in
+through the same private hostname:
+
+```bash
+argocd login argocd.brownrook.net --grpc-web
+argocd account get-user-info
+```
+
+The current Argo CD installation uses native Argo CD accounts; SSO is not
+configured. The login command prompts for the username and password, then stores
+its session in the user's Argo CD configuration. Do not put an Argo CD password
+or token in the repository or shell history.
+
 Show recent CI runs, Argo status, Kubernetes Jobs, and Pods in one read-only
 dashboard:
 
@@ -161,6 +175,12 @@ overridden when needed:
 ```bash
 RUN_LIMIT=10 ARGO_APP=ledger KUBE_NAMESPACE=home-budget make status
 ```
+
+`make status` does not require an Argo CD login. It reads the Application in
+core mode through the current Kubernetes context and falls back to `kubectl`.
+It does require working GitHub CLI authentication, Kubernetes access, and
+`jq`. When multiple kubeconfigs exist, set
+`KUBECONFIG=~/.kube/config-brownrook` first.
 
 The `ledger` application tracks `main` with automated sync, pruning, and
 self-healing. A PreSync hook runs `home-budget-db-setup` before workloads are
@@ -181,7 +201,9 @@ To refresh repository state and retry a failed sync:
 
 ```bash
 argocd app get ledger --hard-refresh
-argocd app sync ledger
+argocd app sync ledger --grpc-web
+argocd app wait ledger --sync --health --timeout 600 --grpc-web
+make status
 ```
 
 Do not pass a commit with `--revision` while the application is configured to

@@ -708,10 +708,15 @@ initialization.
 The PostgreSQL persistent volume is intentionally independent from Argo application synchronization. Running:
 
 ```bash
+argocd login argocd.brownrook.net --grpc-web
 argocd app sync ledger --grpc-web
+argocd app wait ledger --sync --health --timeout 600 --grpc-web
+make status
 ```
 
 updates the desired Kubernetes resources but does not by itself erase an existing PostgreSQL data volume.
+See the [operations runbook](docs/operations-runbook.md#argo-cd-deployment) for
+browser and CLI login, status prerequisites, synchronization, and recovery.
 
 ---
 
