@@ -71,7 +71,7 @@ Add this Web redirect URI to the Entra application:
 
 The private hostname must resolve only through corporate DNS. The public reverse
 proxy must forward only explicitly configured public hosts and must not forward
-the private `.net` hostname. Create the `ledger-brownrook-net-tls` secret outside
+the private `.net` hostname. Create the `k3ingress-tls` secret outside
 Git before using `deploy/private-lan` or `deploy/rabbitmq-private`. See the
 [network access guide](private-networking.md) for the required DNS, TLS, and
 firewall boundaries.
