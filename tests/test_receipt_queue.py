@@ -178,10 +178,13 @@ def test_publisher_skips_completed_exhausted_and_duplicate_sources(tmp_path, mon
     candidates = [queue.backlog.ReceiptCandidate(path, sha * 64) for path, sha in zip(paths, "aabc")]
     plan = queue.backlog.DiscoveryPlan(tuple(candidates), tuple(candidates[:2] + candidates[3:]), (candidates[2],))
     monkeypatch.setattr(queue.backlog, "plan_unprocessed_receipts", lambda *args, **kwargs: plan)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "done.pdf.json").write_text("cached")
     conn = FakeConn(existing=("c" * 64,))
-    messages, summary = queue.publication_plan(conn, tmp_path)
+    messages, summary = queue.publication_plan(conn, tmp_path, cache_dir=cache)
     assert messages == [replace(MESSAGE, source_reference="a.pdf")]
-    assert summary == {"discovered": 4, "skipped": 1, "exhausted": 1, "published": 1}
+    assert summary == {"discovered": 4, "skipped": 1, "exhausted": 1, "cache_missing": 0, "published": 1}
 
 
 def test_unified_cli_exposes_queue_commands(monkeypatch):

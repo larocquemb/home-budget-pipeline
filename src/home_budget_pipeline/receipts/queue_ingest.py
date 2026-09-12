@@ -1,4 +1,4 @@
-"""Optional RabbitMQ transport around the existing receipt processor."""
+"""RabbitMQ dispatch and consumption for receipt processing and cache rebuilds."""
 
 from __future__ import annotations
 
@@ -12,10 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event
-from uuid import uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from . import backlog_ingest as backlog
 from .message import MAX_ATTEMPTS, InvalidReceiptMessage, ReceiptMessage
+from .parallel_ingest import has_ocr_cache
 
 LOG = logging.getLogger(__name__)
 
@@ -97,10 +98,16 @@ def publish_confirmed(channel, exchange: str, body: bytes, *, message_id: str | 
     )
 
 
-def publication_plan(conn, root: Path, ingest_schema: str = "ingest") -> tuple[list[ReceiptMessage], dict[str, int]]:
-    """Rediscovery may publish duplicates; exhausted hashes require operator replay."""
+def publication_plan(
+    conn, root: Path, ingest_schema: str = "ingest", *, cache_dir: Path | None = None,
+) -> tuple[list[ReceiptMessage], dict[str, int]]:
+    """Queue unfinished receipts and refresh completed receipts missing OCR caches."""
     if not root.is_dir():
         raise ValueError("receipt root must be an existing directory")
+    if cache_dir is None:
+        cache_dir = Path(backlog._default_path(
+            "receipts/derived/ocr-cache", "/data/receipts/derived/ocr-cache", "HOME_BUDGET_OCR_CACHE",
+        )).expanduser().resolve()
     plan = backlog.plan_unprocessed_receipts(conn, root, ingest_schema=ingest_schema)
     with conn.cursor() as cur:
         cur.execute(
@@ -108,6 +115,20 @@ def publication_plan(conn, root: Path, ingest_schema: str = "ingest") -> tuple[l
             (MAX_ATTEMPTS,),
         )
         exhausted = {row[0] for row in cur.fetchall()}
+    missing_cache = [
+        candidate for candidate in plan.skipped
+        if not has_ocr_cache(cache_dir, candidate.path.relative_to(root).as_posix(), candidate.source_sha256)
+    ]
+    completed = {}
+    if missing_cache:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT source_sha256, EXTRACT(EPOCH FROM completed_at)::text "
+                f"FROM {ingest_schema}.receipt_processing_status "
+                "WHERE source_sha256 = ANY(%s) AND status IN ('succeeded', 'review_required')",
+                ([candidate.source_sha256 for candidate in missing_cache],),
+            )
+            completed = dict(cur.fetchall())
     conn.commit()
     messages = {}
     for candidate in plan.pending:
@@ -117,10 +138,26 @@ def publication_plan(conn, root: Path, ingest_schema: str = "ingest") -> tuple[l
         message = ReceiptMessage(candidate.source_sha256, reference)
         message.resolve_source(root)
         messages.setdefault(message.message_id, message)
+    reprocess_messages = {}
+    for candidate in missing_cache:
+        if candidate.source_sha256 not in completed:
+            continue  # Another worker has already started processing this source.
+        reference = candidate.path.relative_to(root).as_posix()
+        # Repeated scans of the same completion publish the same request. A later
+        # completion followed by cache deletion creates a fresh request/budget.
+        request_id = str(uuid5(
+            NAMESPACE_URL,
+            f"ledger:missing-ocr-cache:{candidate.source_sha256}:{reference}:{completed[candidate.source_sha256]}",
+        ))
+        message = ReceiptMessage(candidate.source_sha256, reference, version=2, request_id=request_id)
+        message.resolve_source(root)
+        reprocess_messages.setdefault(message.message_id, message)
+    messages.update(reprocess_messages)
     return list(messages.values()), {
         "discovered": len(plan.discovered),
-        "skipped": len(plan.skipped),
+        "skipped": len(plan.skipped) - len(reprocess_messages),
         "exhausted": sum(c.source_sha256 in exhausted for c in plan.pending),
+        "cache_missing": len(reprocess_messages),
         "published": len(messages),
     }
 
@@ -173,12 +210,95 @@ def publish_reprocess(args) -> int:
     return 0
 
 
+def publish_batch(args, *, cache_only: bool = False) -> int:
+    """Queue one request per source, with a stable identity for batch retries."""
+    from pika.exceptions import AMQPError
+
+    batch_id = args.request_id or str(uuid4())
+    published = 0
+    try:
+        if not args.rabbitmq_url:
+            raise ValueError("RABBITMQ_URL or --rabbitmq-url is required")
+        namespace = UUID(batch_id)
+        if str(namespace) != batch_id:
+            raise ValueError("request_id must be a canonical UUID")
+        root = Path(args.receipt_root).expanduser().resolve()
+        if not root.is_dir():
+            raise ValueError("receipt root must be an existing directory")
+        paths = backlog.scan.discover_scans(root)
+        connection = connect_broker(args.rabbitmq_url)
+        try:
+            channel = connection.channel()
+            topology = Topology()
+            declare_topology(channel, topology)
+            for path in paths:
+                reference = path.relative_to(root).as_posix()
+                request = ReceiptMessage(
+                    "0" * 64, reference, version=3 if cache_only else 2,
+                    request_id=str(uuid5(namespace, f"{'cache' if cache_only else 'reprocess'}:{reference}")),
+                )
+                request.resolve_source(root)
+                request = replace(request, source_sha256=backlog.scan.sha256_file(path))
+                publish_confirmed(
+                    channel, topology.work, request.to_bytes(),
+                    message_id=request.message_id, message_type=request.message_type,
+                )
+                published += 1
+                if args.verbose:
+                    print(f"[{published}/{len(paths)}] Queued {reference}", file=sys.stderr, flush=True)
+        finally:
+            if connection.is_open:
+                connection.close()
+    except (ValueError, RuntimeError, OSError, AMQPError) as exc:
+        detail = str(exc) if type(exc) is ValueError else type(exc).__name__
+        print(f"Cannot finish batch {batch_id}: {detail}; {published} publication(s) confirmed.", file=sys.stderr)
+        print(f"Retry with --request-id {batch_id} to reuse these requests.", file=sys.stderr)
+        return 1
+    print(json.dumps({"discovered": len(paths), "published": published, "request_id": batch_id,
+                      "queue": topology.work, "status": "queued"}, indent=2))
+    return 0 if paths else 2
+
+
+def rebuild_cache_message(conn, message: ReceiptMessage, root: Path, cache_dir: Path, budget_schema: str) -> str:
+    """Rebuild on the consumer, preserving extraction and ingest completion state."""
+    backlog.validate_schema(budget_schema)
+    path = message.resolve_source(root)
+    table = f"{budget_schema}.receipt_cache_requests"
+    key = (message.source_sha256, message.request_id)
+    with backlog.receipt_lock(conn, message.source_sha256):
+        with conn.cursor() as cur:
+            cur.execute(f"INSERT INTO {table} (source_sha256, request_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", key)
+            cur.execute(f"SELECT attempts, completed_at FROM {table} WHERE source_sha256 = %s AND request_id = %s FOR UPDATE", key)
+            attempts, completed_at = cur.fetchone()
+            if completed_at is not None:
+                conn.commit()
+                return "skipped"
+            if attempts >= MAX_ATTEMPTS:
+                raise backlog.RetryExhausted("cache rebuild request attempt limit reached")
+            cur.execute(f"UPDATE {table} SET attempts = attempts + 1 WHERE source_sha256 = %s AND request_id = %s", key)
+        conn.commit()
+        if backlog.scan.sha256_file(path) != message.source_sha256:
+            raise InvalidReceiptMessage("source contents changed since publication")
+        LOG.info("receipt=%s Rebuilding OCR cache %s", message.message_id, message.source_reference)
+        receipts = backlog.parse_scans_parallel([path], root, 1, cache_dir, True)
+        if len(receipts) != 1 or receipts[0].source_sha256 != message.source_sha256 or backlog.scan.sha256_file(path) != message.source_sha256:
+            raise InvalidReceiptMessage("source contents changed during cache rebuild")
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE {table} SET completed_at = NOW() WHERE source_sha256 = %s AND request_id = %s", key)
+        conn.commit()
+        return "cache_rebuilt"
+
+
 def process_message(message: ReceiptMessage, args) -> str:
     root = Path(args.receipt_root).expanduser().resolve()
     message.resolve_source(root)
     path = root / message.source_reference
     conn = backlog.scan._db_connect(args.db_dsn)
     try:
+        if message.version == 3:
+            return rebuild_cache_message(
+                conn, message, root, Path(args.ocr_cache).expanduser().resolve(), args.budget_schema,
+            )
         return backlog.process_candidate(
             conn, backlog.ReceiptCandidate(path, message.source_sha256),
             root, Path(args.ocr_cache).expanduser().resolve(),
@@ -284,7 +404,10 @@ def run(args) -> int:
     if args.queue_mode == "publish":
         conn = backlog.scan._db_connect(args.db_dsn)
         try:
-            messages, summary = publication_plan(conn, Path(args.receipt_root).expanduser().resolve(), args.ingest_schema)
+            messages, summary = publication_plan(
+                conn, Path(args.receipt_root).expanduser().resolve(), args.ingest_schema,
+                cache_dir=Path(args.ocr_cache).expanduser().resolve(),
+            )
         finally:
             conn.close()
     connection = connect_broker(args.rabbitmq_url)
@@ -292,8 +415,13 @@ def run(args) -> int:
         channel = connection.channel()
         declare_topology(channel, topology)
         if args.queue_mode == "publish":
-            for message in messages:
-                publish_confirmed(channel, topology.work, message.to_bytes(), message_id=message.message_id)
+            for index, message in enumerate(messages, start=1):
+                publish_confirmed(
+                    channel, topology.work, message.to_bytes(),
+                    message_id=message.message_id, message_type=message.message_type,
+                )
+                if getattr(args, "verbose", False):
+                    print(f"[{index}/{len(messages)}] Queued {message.source_reference}", file=sys.stderr, flush=True)
             print(json.dumps(summary, indent=2))
         else:
             stop = Event()

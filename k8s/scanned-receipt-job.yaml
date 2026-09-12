@@ -13,18 +13,21 @@ spec:
       restartPolicy: Never
       containers:
         - name: pipeline
-          image: ghcr.io/larocquemb/home-budget-pipeline:KAN-79
+          image: ghcr.io/larocquemb/home-budget-pipeline:latest
           imagePullPolicy: Always
-          args:
-            - home_budget_pipeline.receipts.parallel_ingest
-            - /data/receipts/raw/scanned/inbox
-            - --workers
-            - "2"
-            - --ocr-cache
-            - $(HOME_BUDGET_OCR_CACHE)
-            - --json
-            - /data/receipts/derived/k3s-scanned-receipts.json
+          command: [ledger]
+          args: [receipts, publish, /data/receipts/raw/scanned/inbox]
           env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rabbitmq-secret
+                  key: RABBITMQ_URL
             - name: HOME_BUDGET_OCR_CACHE
               valueFrom:
                 configMapKeyRef:
@@ -35,6 +38,7 @@ spec:
           volumeMounts:
             - name: budget-data
               mountPath: /data
+              readOnly: true
       volumes:
         - name: budget-data
           persistentVolumeClaim:

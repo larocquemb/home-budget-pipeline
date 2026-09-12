@@ -46,4 +46,4 @@ RUN tesseract --version \
     && python -c "from paddleocr import PaddleOCR; PaddleOCR(text_detection_model_name='PP-OCRv6_medium_det', text_recognition_model_name='PP-OCRv6_medium_rec', use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False)"
 
 ENTRYPOINT ["python", "-m"]
-CMD ["home_budget_pipeline.receipts.parallel_ingest", "/data/receipts/raw/scanned/inbox"]
+CMD ["home_budget_pipeline.receipts.queue_ingest", "publish", "/data/receipts/raw/scanned/inbox"]

@@ -426,53 +426,16 @@ def _default_path(relative_path: str, legacy_default: str, explicit_env: str) ->
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Process unprocessed receipt files into BrownRook Ledger.")
-    parser.add_argument(
-        "receipt_root",
-        nargs="?",
-        default=_default_path(
-            "receipts/raw/scanned/inbox",
-            "/data/receipts/raw/scanned/inbox",
-            "RECEIPT_SOURCE_ROOT",
-        ),
-    )
-    parser.add_argument("--workers", type=int, default=2)
-    parser.add_argument(
-        "--ocr-cache",
-        default=_default_path(
-            "receipts/derived/ocr-cache",
-            "/data/receipts/derived/ocr-cache",
-            "HOME_BUDGET_OCR_CACHE",
-        ),
-    )
-    parser.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))
-    parser.add_argument("--ingest-schema", default="ingest")
-    parser.add_argument("--budget-schema", default="budget")
-    parser.add_argument("--refresh-ocr-cache", action="store_true")
-    parser.add_argument("--verbose", action="store_true", help="Print per-receipt progress to stderr.")
-    return parser.parse_args(argv)
+    from ..cli import build_parser
+
+    return build_parser().parse_args(["receipts", "process", *(sys.argv[1:] if argv is None else argv)])
 
 
 def main() -> int:
-    args = parse_args()
-    root = Path(args.receipt_root).expanduser().resolve()
-    cache_dir = Path(args.ocr_cache).expanduser().resolve()
-    conn = scan._db_connect(args.db_dsn)
-    try:
-        summary = process_backlog(
-            conn,
-            root,
-            cache_dir,
-            workers=max(1, args.workers),
-            ingest_schema=args.ingest_schema,
-            budget_schema=args.budget_schema,
-            refresh_ocr_cache=args.refresh_ocr_cache,
-            verbose=args.verbose,
-        )
-    finally:
-        conn.close()
-    print(json.dumps(summary, indent=2))
-    return 1 if summary["failed"] else 0
+    # Preserve the legacy entry point while enforcing the same queue dispatch.
+    from ..cli import main as ledger_main
+
+    return ledger_main(["receipts", "process", *sys.argv[1:]])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Normal (v1) and explicit reprocess (v2) receipt work contracts."""
+"""Normal (v1), reprocess (v2), and cache rebuild (v3) work contracts."""
 
 from __future__ import annotations
 
@@ -24,11 +24,11 @@ class ReceiptMessage:
     request_id: str | None = None
 
     def __post_init__(self) -> None:
-        if type(self.version) is not int or self.version not in (1, 2):
+        if type(self.version) is not int or self.version not in (1, 2, 3):
             raise InvalidReceiptMessage("unsupported receipt message version")
         if self.version == 1 and self.request_id is not None:
             raise InvalidReceiptMessage("normal receipt work cannot have a request_id")
-        if self.version == 2:
+        if self.version in (2, 3):
             try:
                 if not isinstance(self.request_id, str) or str(UUID(self.request_id)) != self.request_id:
                     raise ValueError("noncanonical UUID")
@@ -48,11 +48,13 @@ class ReceiptMessage:
     @property
     def message_id(self) -> str:
         if self.request_id:
-            return f"receipt.reprocess.v2:{self.source_sha256}:{self.request_id}"
+            return f"{self.message_type}:{self.source_sha256}:{self.request_id}"
         return f"receipt.v1:{self.source_sha256}"
 
     @property
     def message_type(self) -> str:
+        if self.version == 3:
+            return "receipt.cache-rebuild.v3"
         return "receipt.reprocess.v2" if self.request_id else "receipt.process.v1"
 
     def to_bytes(self) -> bytes:
@@ -68,7 +70,7 @@ class ReceiptMessage:
                 raise ValueError("message exceeds 8192 bytes")
             value = json.loads(body)
             fields = {"version", "source_sha256", "source_reference", "attempt"}
-            if isinstance(value, dict) and value.get("version") == 2:
+            if isinstance(value, dict) and value.get("version") in (2, 3):
                 fields.add("request_id")
             if not isinstance(value, dict) or set(value) != fields:
                 raise ValueError("unexpected message fields")
