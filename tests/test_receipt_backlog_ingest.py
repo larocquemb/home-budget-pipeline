@@ -205,7 +205,9 @@ def test_process_backlog_isolates_failed_receipt_and_continues(monkeypatch):
     assert summary["failed"] == 1
     assert summary["succeeded"] == 1
     assert len(persisted) == 1
-    assert conn.rollbacks == 2
+    # Failure rollback plus clean transaction state for both receipt locks and
+    # the outer backlog lock.
+    assert conn.rollbacks == 4
     assert conn.commits >= 3
 
 

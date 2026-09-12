@@ -143,7 +143,7 @@ sobeys_receipt_items_categorized.xlsx
 
 # Runtime receipt evidence lives on external PVE-backed storage.
 # Sanitized test fixtures belong under tests/, not receipts/.
-receipts/
+/receipts/
 .receipt-test/
 .dev-certs/
 .ocr_cache/

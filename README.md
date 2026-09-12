@@ -16,6 +16,8 @@ Operational documentation:
 - [Ledger user guide](docs/user-guide.md)
 - [Build, deployment, and recovery runbook](docs/operations-runbook.md)
 - [Receipt backlog processing](docs/receipt-processing.md)
+- [RabbitMQ receipt processing design](docs/rabbitmq-receipt-design.md)
+- [RabbitMQ receipt processing runbook](docs/rabbitmq-receipts.md)
 
 ---
 

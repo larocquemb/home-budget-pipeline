@@ -59,6 +59,19 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("--verbose", action="store_true", help="Print per-receipt progress to stderr.")
     process.set_defaults(handler=_process_receipts)
 
+    from .receipts.queue_ingest import add_arguments
+    for mode in ("publish", "consume"):
+        queued = receipt_commands.add_parser(mode, help=f"{mode.title()} receipt work through RabbitMQ.")
+        add_arguments(queued, mode)
+
+    retry = receipt_commands.add_parser(
+        "retry", help="Reset a failed or interrupted receipt for the next publish or process command.",
+    )
+    retry.add_argument("source_reference", help="Exact receipt path relative to the receipt source root.")
+    retry.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))
+    retry.add_argument("--ingest-schema", default="ingest")
+    retry.set_defaults(handler=_retry_receipt)
+
     feedback = receipt_commands.add_parser("feedback", help="Record verified OCR quality feedback.")
     feedback.add_argument("evidence_id", type=int)
     feedback.add_argument("--outcome", required=True, choices=("confirmed", "corrected", "rejected"))
@@ -88,6 +101,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     setup.set_defaults(handler=_setup_database)
     return parser
+
+
+def _retry_receipt(args: argparse.Namespace) -> int:
+    if not args.db_dsn:
+        print(
+            "Missing database DSN (--db-dsn, DATABASE_URL, or HOME_BUDGET_PG_DSN). "
+            "Export .env.dev variables with: set -a; source .env.dev; set +a",
+            file=sys.stderr,
+        )
+        return 1
+    conn = scan._db_connect(args.db_dsn)
+    try:
+        result = backlog_ingest.reset_receipt_for_retry(
+            conn, args.source_reference, ingest_schema=args.ingest_schema,
+        )
+    except (ValueError, RuntimeError) as exc:
+        print(f"Cannot retry receipt: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+    print(json.dumps(result, indent=2))
+    return 0
 
 
 def _process_receipts(args: argparse.Namespace) -> int:
