@@ -66,9 +66,12 @@ def test_confirmed_publish_and_unacked_connection_loss_redelivers(broker):
         replacement.close()
 
 
-def test_retry_delay_and_bounded_dlq_preserve_identity(broker):
+@pytest.mark.parametrize("reprocess", [False, True])
+def test_retry_delay_and_bounded_dlq_preserve_identity(broker, reprocess):
     connection, channel, topology = broker
     original = ReceiptMessage("b" * 64, "receipt.pdf")
+    if reprocess:
+        original = replace(original, version=2, request_id=str(uuid.uuid4()))
     queue.publish_confirmed(channel, topology.work, original.to_bytes(), message_id=original.message_id)
     def fail(message):
         raise RuntimeError("transient OCR error")
@@ -103,7 +106,8 @@ def test_consumer_uses_manual_ack_and_drains_on_stop(broker):
     assert channel.basic_get(queue=topology.work)[0] is None
 
 
-def test_database_commit_followed_by_lost_ack_does_not_repeat_ocr_or_items(broker, tmp_path, monkeypatch):
+@pytest.mark.parametrize("reprocess", [False, True])
+def test_database_commit_followed_by_lost_ack_does_not_repeat_ocr_or_items(broker, tmp_path, monkeypatch, reprocess):
     import psycopg
     from types import SimpleNamespace
     from test_receipt_queue_postgres import receipt_for
@@ -122,6 +126,11 @@ def test_database_commit_followed_by_lost_ack_does_not_repeat_ocr_or_items(broke
     )
     connection, channel, topology = broker
     message = ReceiptMessage(receipt.source_sha256, source.name)
+    if reprocess:
+        # Start with a completed receipt; the request must force one new OCR run.
+        assert queue.process_message(message, args) == "succeeded"
+        calls.clear()
+        message = replace(message, version=2, request_id=str(uuid.uuid4()))
     queue.publish_confirmed(channel, topology.work, message.to_bytes())
     method, properties, body = get_message(connection, channel, topology.work)
     assert queue.process_message(ReceiptMessage.from_bytes(body), args) == "succeeded"
@@ -143,6 +152,6 @@ def test_database_commit_followed_by_lost_ack_does_not_repeat_ocr_or_items(broke
             ).fetchone() == (1,)
             assert conn.execute(
                 "SELECT attempts FROM ingest.receipt_processing_status WHERE source_sha256 = %s", (receipt.source_sha256,),
-            ).fetchone() == (1,)
+            ).fetchone() == (2 if reprocess else 1,)
     finally:
         replacement.close()

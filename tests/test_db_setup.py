@@ -24,6 +24,7 @@ def _write_upgrade_files(tmp_path):
         "aliases_migration": tmp_path / "merchant_aliases_migration.sql",
         "ocr_lines": tmp_path / "receipt_ocr_lines.sql",
         "ocr_learning": tmp_path / "receipt_ocr_learning.sql",
+        "reprocess": tmp_path / "receipt_reprocess_requests.sql",
         "aliases_data": tmp_path / "merchant_aliases.sql",
         "enrichment": tmp_path / "product_enrichment.sql",
         "template": tmp_path / "receipt_processing_template.sql",
@@ -34,6 +35,7 @@ def _write_upgrade_files(tmp_path):
     paths["aliases_migration"].write_text("CREATE TABLE IF NOT EXISTS budget.merchant_aliases(id int);", encoding="utf-8")
     paths["ocr_lines"].write_text("CREATE TABLE IF NOT EXISTS budget.receipt_ocr_lines(id bigint);", encoding="utf-8")
     paths["ocr_learning"].write_text("CREATE TABLE IF NOT EXISTS budget.receipt_ocr_runs(run_uuid uuid);", encoding="utf-8")
+    paths["reprocess"].write_text("CREATE TABLE IF NOT EXISTS budget.receipt_reprocess_requests(request_id uuid);", encoding="utf-8")
     paths["aliases_data"].write_text("INSERT INTO budget.merchant_aliases VALUES (1);", encoding="utf-8")
     paths["enrichment"].write_text("CREATE SCHEMA IF NOT EXISTS enrichment; CREATE TABLE IF NOT EXISTS enrichment.product_cache(id int);", encoding="utf-8")
     paths["template"].write_text("template", encoding="utf-8")
@@ -47,6 +49,7 @@ def _patch_upgrade_files(monkeypatch, paths):
     monkeypatch.setattr(db_setup, "MERCHANT_ALIASES_MIGRATION", paths["aliases_migration"])
     monkeypatch.setattr(db_setup, "RECEIPT_OCR_LINES_MIGRATION", paths["ocr_lines"])
     monkeypatch.setattr(db_setup, "RECEIPT_OCR_LEARNING_MIGRATION", paths["ocr_learning"])
+    monkeypatch.setattr(db_setup, "RECEIPT_REPROCESS_SCHEMA", paths["reprocess"])
     monkeypatch.setattr(db_setup, "MERCHANT_ALIASES_DATA", paths["aliases_data"])
     monkeypatch.setattr(db_setup, "ENRICHMENT_SCHEMA", paths["enrichment"])
     monkeypatch.setattr(db_setup, "RECEIPT_TEMPLATE", paths["template"])
@@ -73,7 +76,8 @@ def test_existing_base_schema_applies_shared_upgrades_and_ensures_receipt_schema
     conn.execute.assert_any_call("CREATE SCHEMA IF NOT EXISTS enrichment; CREATE TABLE IF NOT EXISTS enrichment.product_cache(id int);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_ocr_lines(id bigint);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_ocr_runs(run_uuid uuid);")
-    assert conn.commit.call_count == 8
+    conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_reprocess_requests(request_id uuid);")
+    assert conn.commit.call_count == 9
     ensure.assert_called_once_with(conn, paths["template"])
 
 
@@ -102,5 +106,6 @@ def test_blank_database_loads_base_and_shared_schemas_before_receipt_schema(tmp_
     conn.execute.assert_any_call("CREATE SCHEMA IF NOT EXISTS enrichment; CREATE TABLE IF NOT EXISTS enrichment.product_cache(id int);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_ocr_lines(id bigint);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_ocr_runs(run_uuid uuid);")
-    assert conn.commit.call_count == 9
+    conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_reprocess_requests(request_id uuid);")
+    assert conn.commit.call_count == 10
     ensure.assert_called_once_with(conn, paths["template"])

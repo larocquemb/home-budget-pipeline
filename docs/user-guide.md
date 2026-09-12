@@ -76,8 +76,9 @@ may still contain `review_required` receipts.
 
 To rerun extraction for one completed receipt, an operator can use
 `ledger receipts reprocess SOURCE_REFERENCE --verbose`, with the receipt's exact
-path relative to the inbox. This refreshes OCR and replaces its extraction
-results. See [receipt processing](receipt-processing.md) for local and K3s commands.
+path relative to the inbox. This queues a RabbitMQ request and returns `queued`;
+the consumer refreshes OCR and replaces its extraction results. See
+[receipt processing](receipt-processing.md) for commands and progress monitoring.
 
 ### 7. Duplicates
 

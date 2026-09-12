@@ -98,10 +98,15 @@ only database access and prepares the receipt for the next `publish` or local
 `process` command; it does not publish or remove broker messages itself. Do not
 simply move an attempt-3 DLQ body back to work.
 For intentional OCR refresh of one receipt, use
-`ledger receipts reprocess SOURCE_REFERENCE --verbose`. It runs immediately,
-refreshes OCR, and replaces the selected receipt's extraction results under the
-shared per-receipt lock. See [receipt processing](receipt-processing.md) for the
-K3s command. For a whole-inbox refresh, drain/stop workers and use
+`ledger receipts reprocess SOURCE_REFERENCE --verbose`. It publishes a confirmed
+reprocess message to `receipts.v1.work` and returns `queued`. The consumer
+refreshes OCR and replaces the selected receipt's extraction results under the
+shared per-receipt lock. A request UUID makes completed-request redelivery a
+no-op; each new request gets its own three-attempt budget. If publication is
+uncertain, reuse the printed `--request-id UUID`. Deploy all consumers with v2
+support before publishing reprocess messages. See
+[receipt processing](receipt-processing.md) for K3s commands, rollout details,
+and RabbitMQ GUI monitoring. For a whole-inbox refresh, drain/stop workers and use
 `receipts process --refresh-ocr-cache`. Stop all writers before rebuilding
 or switching the ingest schema; its completion state is the idempotency record.
 

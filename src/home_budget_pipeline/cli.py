@@ -8,7 +8,7 @@ import os
 import re
 import socket
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Sequence
 
 from . import db_setup, receipt_enrichment
@@ -78,16 +78,15 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     retry.set_defaults(handler=_retry_receipt)
 
     reprocess = receipt_commands.add_parser(
-        "reprocess", help="Refresh OCR and replace extraction results for exactly one receipt.",
+        "reprocess", help="Queue an OCR refresh and extraction replacement for exactly one receipt.",
     )
     reprocess.add_argument("source_reference", help="Exact receipt path relative to the receipt source root.")
     reprocess.add_argument("--receipt-root", default=_receipt_root_default())
-    reprocess.add_argument("--ocr-cache", default=_ocr_cache_default())
-    reprocess.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))
-    reprocess.add_argument("--ingest-schema", default="ingest")
-    reprocess.add_argument("--budget-schema", default="budget")
-    reprocess.add_argument("--verbose", action="store_true", help="Print per-receipt progress to stderr.")
-    reprocess.set_defaults(handler=_reprocess_receipt)
+    reprocess.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))
+    reprocess.add_argument("--request-id", help="Reuse a UUID when retrying an uncertain publication.")
+    reprocess.add_argument("--verbose", action="store_true", help="Print publication progress to stderr.")
+    from .receipts.queue_ingest import publish_reprocess
+    reprocess.set_defaults(handler=publish_reprocess)
 
     enrich = receipt_commands.add_parser(
         "enrich", help="Enrich all line items belonging to one receipt.",
@@ -145,48 +144,6 @@ def _retry_receipt(args: argparse.Namespace) -> int:
     finally:
         conn.close()
     print(json.dumps(result, indent=2))
-    return 0
-
-
-def _reprocess_receipt(args: argparse.Namespace) -> int:
-    if not args.db_dsn:
-        print("Missing database DSN (--db-dsn, DATABASE_URL, or HOME_BUDGET_PG_DSN).", file=sys.stderr)
-        return 1
-    try:
-        root = Path(args.receipt_root).expanduser().resolve()
-        reference = args.source_reference
-        if (
-            not reference or "\\" in reference or "\x00" in reference
-            or PurePosixPath(reference).is_absolute()
-            or any(part in ("", ".", "..") for part in reference.split("/"))
-        ):
-            raise ValueError("source_reference must be an exact relative POSIX path under the receipt root")
-        path = root / reference
-        if not path.resolve().is_relative_to(root):
-            raise ValueError("source_reference resolves outside the receipt root")
-        if not path.is_file():
-            raise ValueError(f"Receipt not found: {reference}")
-        if path.suffix.lower() not in scan.SUPPORTED_EXTS:
-            raise ValueError(f"Unsupported receipt file: {reference}")
-        cache_dir = Path(args.ocr_cache).expanduser().resolve()
-        candidate = backlog_ingest.ReceiptCandidate(path, scan.sha256_file(path))
-        conn = scan._db_connect(args.db_dsn)
-        try:
-            status = backlog_ingest.process_candidate(
-                conn, candidate, root, cache_dir,
-                workers=1,
-                ingest_schema=args.ingest_schema,
-                budget_schema=args.budget_schema,
-                refresh_ocr_cache=True,
-                verify_source=True,
-                progress=lambda message: print(message, file=sys.stderr, flush=True) if args.verbose else None,
-            )
-        finally:
-            conn.close()
-    except (ValueError, RuntimeError, OSError) as exc:
-        print(f"Cannot reprocess receipt: {exc}", file=sys.stderr)
-        return 1
-    print(json.dumps({"source_reference": reference, "status": status}, indent=2))
     return 0
 
 

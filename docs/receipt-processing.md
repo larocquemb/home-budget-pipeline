@@ -63,31 +63,44 @@ receipt source root:
 ledger receipts reprocess '2026-08-14/receipts_20260814_0001.pdf' --verbose
 ```
 
-This runs immediately with one OCR worker, refreshes that receipt's OCR cache,
-and replaces its canonical extraction and line items, even if it already
-succeeded. It preserves the date-relative source reference and takes the same
-per-receipt PostgreSQL lock as the queue consumer. It does not publish RabbitMQ
-messages. The JSON result reports `succeeded` or `review_required`; failures
-return a nonzero exit code.
+This publishes one persistent, confirmed message to `receipts.v1.work`. The
+existing queue consumer refreshes that receipt's OCR cache and replaces its
+canonical extraction and line items, even if it already succeeded. The
+date-relative source reference is preserved. The command exits after RabbitMQ
+confirms publication; OCR runs asynchronously in the consumer.
 
-A successful run ends with:
+A successful publication ends with output like:
 
 ```json
 {
   "source_reference": "2026-08-14/receipts_20260814_0001.pdf",
-  "status": "succeeded"
+  "source_sha256": "<receipt SHA-256>",
+  "request_id": "740023b1-a078-4914-b074-81bd7129bb75",
+  "queue": "receipts.v1.work",
+  "status": "queued"
 }
 ```
 
-This confirms that processing and persistence completed for that receipt.
-`review_required` means processing completed but the extraction needs review.
+`queued` confirms broker acceptance, not completed extraction. Worker logs report
+OCR and persistence progress, then `succeeded`, `review_required`, or a retry/dead
+queue routing result. `review_required` means the extraction needs review.
 
-Defaults come from `RECEIPT_SOURCE_ROOT`, `HOME_BUDGET_OCR_CACHE`, and
-`DATABASE_URL` (or `HOME_BUDGET_PG_DSN`). Override them with `--receipt-root`,
-`--ocr-cache`, and `--db-dsn`; custom schemas use `--ingest-schema` and
-`--budget-schema`.
+The publisher uses `RECEIPT_SOURCE_ROOT` and `RABBITMQ_URL`, with overrides
+`--receipt-root` and `--rabbitmq-url`. It requires source-file access but no
+database connection. The consumer's configuration supplies `HOME_BUDGET_OCR_CACHE`,
+the database DSN, and schemas; the publisher cannot override them.
 
-In K3s, after deploying an image containing this command through Argo CD:
+Each invocation creates a new request UUID. If a publication fails or its
+confirmation is lost, retry with the printed `--request-id UUID` to reuse that
+request. The worker records completion atomically with the extraction under the
+receipt lock, so redelivering a completed request skips OCR. Each new request
+has a fresh three-attempt database budget, independent of earlier processing.
+
+In K3s, first deploy this version through Argo CD and wait for all workers to
+finish rolling out. The PreSync database setup adds
+`budget.receipt_reprocess_requests` without rebuilding existing ingest state.
+New workers accept both normal v1 messages and reprocess v2 messages; older
+workers reject v2 messages to the dead queue. Then publish:
 
 ```bash
 kubectl --context brownrook-k3s1 -n home-budget \
@@ -95,14 +108,26 @@ kubectl --context brownrook-k3s1 -n home-budget \
   ledger receipts reprocess '2026-08-14/receipts_20260814_0001.pdf' --verbose
 ```
 
-Run this when the worker is idle so the extra OCR process has memory available.
+Follow the consumer's progress separately:
+
+```bash
+kubectl --context brownrook-k3s1 -n home-budget \
+  logs -f deployment/receipt-worker --tail=100
+```
+
+In [RabbitMQ](https://rabbitmq.brownrook.net), select vhost `receipts` and open
+**Queues and Streams → receipts.v1.work**. `Ready` shows waiting requests;
+`Unacked` shows delivered work awaiting completion. A fast receipt may only be
+visible in message-rate charts. RabbitMQ does not keep an acknowledged-message
+history; use the request UUID in worker logs to follow the final result.
+
 Use `receipts retry` for failed or interrupted work that should become eligible
 for normal publishing again.
 
 | Command | Scope | Result |
 | --- | --- | --- |
 | `receipts retry SOURCE_REFERENCE` | One failed or interrupted receipt | Resets its attempt budget for the next publish or process run; refuses completed receipts. |
-| `receipts reprocess SOURCE_REFERENCE` | One receipt, including completed receipts | Immediately refreshes OCR and replaces its extraction results. |
+| `receipts reprocess SOURCE_REFERENCE` | One receipt, including completed receipts | Queues a refresh; the consumer replaces its OCR and extraction results. |
 | `receipts process --refresh-ocr-cache` | Every receipt under the supplied root | Immediately refreshes OCR and replaces extraction results for the whole selection. |
 
 ## Receipt-scoped product enrichment

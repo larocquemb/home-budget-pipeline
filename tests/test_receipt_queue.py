@@ -12,6 +12,7 @@ from home_budget_pipeline.receipts.message import InvalidReceiptMessage, Receipt
 
 
 MESSAGE = ReceiptMessage("a" * 64, "2026/receipt.pdf")
+REPROCESS = replace(MESSAGE, version=2, request_id="740023b1-a078-4914-b074-81bd7129bb75")
 
 
 @pytest.fixture
@@ -30,6 +31,24 @@ def channel(monkeypatch):
 def test_contract_round_trip_and_stable_identity():
     assert ReceiptMessage.from_bytes(MESSAGE.to_bytes()) == MESSAGE
     assert replace(MESSAGE, attempt=2, source_reference="copy.pdf").message_id == MESSAGE.message_id
+
+
+def test_reprocess_contract_preserves_v1_and_has_request_identity():
+    assert set(json.loads(MESSAGE.to_bytes())) == {"version", "source_sha256", "source_reference", "attempt"}
+    assert ReceiptMessage.from_bytes(REPROCESS.to_bytes()) == REPROCESS
+    assert replace(REPROCESS, attempt=2).message_id == REPROCESS.message_id
+    assert replace(REPROCESS, request_id="840023b1-a078-4914-b074-81bd7129bb75").message_id != REPROCESS.message_id
+
+
+@pytest.mark.parametrize("request_id", [None, "", "not-a-uuid", True, 12, "740023B1-A078-4914-B074-81BD7129BB75"])
+def test_reprocess_contract_rejects_invalid_request_id(request_id):
+    with pytest.raises(InvalidReceiptMessage):
+        replace(REPROCESS, request_id=request_id)
+
+
+def test_normal_message_cannot_request_reprocessing():
+    with pytest.raises(InvalidReceiptMessage):
+        replace(MESSAGE, request_id=REPROCESS.request_id)
 
 
 @pytest.mark.parametrize("field,value", [
@@ -83,6 +102,15 @@ def test_retry_confirm_precedes_ack(channel):
     assert publication["properties"].delivery_mode == 2
     assert publication["properties"].message_id == MESSAGE.message_id
     assert ReceiptMessage.from_bytes(publication["body"]).attempt == 2
+    assert [event[0] for event in channel.events] == ["publish", "ack"]
+
+
+def test_reprocess_retry_preserves_refresh_request_and_message_type(channel):
+    queue.handle_delivery(channel, 42, REPROCESS.to_bytes(), fail, queue.Topology())
+    publication = channel.events[0][1]
+    assert ReceiptMessage.from_bytes(publication["body"]) == replace(REPROCESS, attempt=2)
+    assert publication["properties"].message_id == REPROCESS.message_id
+    assert publication["properties"].type == "receipt.reprocess.v2"
     assert [event[0] for event in channel.events] == ["publish", "ack"]
 
 

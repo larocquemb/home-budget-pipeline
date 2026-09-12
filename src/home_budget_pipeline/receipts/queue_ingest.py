@@ -7,10 +7,12 @@ import json
 import logging
 import os
 import signal
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event
+from uuid import uuid4
 
 from . import backlog_ingest as backlog
 from .message import MAX_ATTEMPTS, InvalidReceiptMessage, ReceiptMessage
@@ -76,7 +78,7 @@ def connect_broker(url: str):
     return pika.BlockingConnection(parameters)
 
 
-def publish_confirmed(channel, exchange: str, body: bytes, *, message_id: str | None = None, error: str | None = None) -> None:
+def publish_confirmed(channel, exchange: str, body: bytes, *, message_id: str | None = None, error: str | None = None, message_type: str = "receipt.process.v1") -> None:
     import pika
 
     channel.basic_publish(
@@ -89,7 +91,7 @@ def publish_confirmed(channel, exchange: str, body: bytes, *, message_id: str | 
             content_encoding="utf-8",
             delivery_mode=2,
             message_id=message_id,
-            type="receipt.process.v1",
+            type=message_type,
             headers={"error_type": error} if error else {},
         ),
     )
@@ -123,9 +125,58 @@ def publication_plan(conn, root: Path, ingest_schema: str = "ingest") -> tuple[l
     }
 
 
+def publish_reprocess(args) -> int:
+    """Publish one confirmed refresh request; OCR and DB work belong to consumers."""
+    from pika.exceptions import AMQPError
+
+    request_id = args.request_id or str(uuid4())
+    try:
+        if not args.rabbitmq_url:
+            raise ValueError("RABBITMQ_URL or --rabbitmq-url is required")
+        root = Path(args.receipt_root).expanduser().resolve()
+        # Validate the reference before reading or hashing the selected source.
+        selection = ReceiptMessage("0" * 64, args.source_reference, version=2, request_id=request_id)
+        selection.resolve_source(root)
+        path = root / selection.source_reference
+        if not path.is_file():
+            raise ValueError(f"Receipt not found: {selection.source_reference}")
+        if path.suffix.lower() not in backlog.scan.SUPPORTED_EXTS:
+            raise ValueError(f"Unsupported receipt file: {selection.source_reference}")
+        message = replace(selection, source_sha256=backlog.scan.sha256_file(path))
+        if args.verbose:
+            print(f"Publishing reprocess request {request_id} for {message.source_reference}", file=sys.stderr, flush=True)
+        connection = connect_broker(args.rabbitmq_url)
+        try:
+            channel = connection.channel()
+            topology = Topology()
+            declare_topology(channel, topology)
+            publish_confirmed(
+                channel, topology.work, message.to_bytes(),
+                message_id=message.message_id, message_type=message.message_type,
+            )
+        finally:
+            if connection.is_open:
+                connection.close()
+    except (ValueError, RuntimeError, OSError, AMQPError) as exc:
+        # Connection errors can contain URLs; report their type without credentials.
+        detail = str(exc) if isinstance(exc, InvalidReceiptMessage) or type(exc) is ValueError else type(exc).__name__
+        print(f"Cannot queue reprocess request {request_id}: {detail}", file=sys.stderr)
+        print(f"If publication was uncertain, retry with --request-id {request_id}.", file=sys.stderr)
+        return 1
+    print(json.dumps({
+        "source_reference": message.source_reference,
+        "source_sha256": message.source_sha256,
+        "request_id": request_id,
+        "queue": topology.work,
+        "status": "queued",
+    }, indent=2))
+    return 0
+
+
 def process_message(message: ReceiptMessage, args) -> str:
     root = Path(args.receipt_root).expanduser().resolve()
-    path = message.resolve_source(root)
+    message.resolve_source(root)
+    path = root / message.source_reference
     conn = backlog.scan._db_connect(args.db_dsn)
     try:
         return backlog.process_candidate(
@@ -135,6 +186,9 @@ def process_message(message: ReceiptMessage, args) -> str:
             budget_schema=args.budget_schema,
             max_attempts=MAX_ATTEMPTS,
             verify_source=True,
+            refresh_ocr_cache=message.request_id is not None,
+            reprocess_request_id=message.request_id,
+            progress=lambda text: LOG.info("receipt=%s %s", message.message_id, text),
         )
     finally:
         conn.close()
@@ -159,6 +213,7 @@ def handle_delivery(channel, delivery_tag: int, body: bytes, process, topology: 
             channel, target, next_body,
             message_id=message.message_id if message else None,
             error=type(exc).__name__,
+            message_type=message.message_type if message else "receipt.process.v1",
         )
         LOG.warning("receipt=%s routed=%s error=%s", message.message_id if message else "invalid", target, type(exc).__name__)
     else:

@@ -16,3 +16,4 @@ cp "$repo_root/sql/schema_constraints.sql" "$destination/006-schema-constraints.
 cp "$repo_root/sql/receipt_processing.sql" "$destination/007-receipt-processing.sql"
 cp "$repo_root/sql/merchant_aliases.sql" "$destination/008-merchant-aliases.sql"
 cp "$repo_root/sql/product_enrichment.sql" "$destination/009-product-enrichment.sql"
+cp "$repo_root/sql/receipt_reprocess_requests.sql" "$destination/010-receipt-reprocess-requests.sql"

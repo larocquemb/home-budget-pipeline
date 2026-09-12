@@ -258,6 +258,7 @@ def process_candidate(
     refresh_ocr_cache: bool = False,
     max_attempts: int | None = None,
     verify_source: bool = False,
+    reprocess_request_id: str | None = None,
     progress: Callable[[str], None] = lambda message: None,
 ) -> str:
     """Commit one receipt atomically; recheck completion after taking its lock."""
@@ -265,12 +266,37 @@ def process_candidate(
     validate_schema(budget_schema)
     reference = _source_reference(candidate, root)
     with receipt_lock(conn, candidate.source_sha256):
+        if reprocess_request_id:
+            if not refresh_ocr_cache:
+                raise ValueError("a reprocess request must refresh OCR")
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"INSERT INTO {budget_schema}.receipt_reprocess_requests (source_sha256, request_id) "
+                    "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (candidate.source_sha256, reprocess_request_id),
+                )
+                cur.execute(
+                    f"SELECT attempts, completed_at FROM {budget_schema}.receipt_reprocess_requests "
+                    "WHERE source_sha256 = %s AND request_id = %s FOR UPDATE",
+                    (candidate.source_sha256, reprocess_request_id),
+                )
+                request_attempts, completed_at = cur.fetchone()
+                if completed_at is not None:
+                    conn.commit()
+                    return "skipped"
+                if max_attempts is not None and request_attempts >= max_attempts:
+                    raise RetryExhausted("reprocess request attempt limit reached")
+                cur.execute(
+                    f"UPDATE {budget_schema}.receipt_reprocess_requests SET attempts = attempts + 1 "
+                    "WHERE source_sha256 = %s AND request_id = %s",
+                    (candidate.source_sha256, reprocess_request_id),
+                )
         if not refresh_ocr_cache and candidate.source_sha256 in _completed_hashes(
             conn, [candidate.source_sha256], ingest_schema
         ):
             conn.commit()
             return "skipped"
-        if max_attempts is not None:
+        if max_attempts is not None and not reprocess_request_id:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT attempts FROM {ingest_schema}.receipt_processing_status WHERE source_sha256 = %s",
@@ -311,6 +337,13 @@ def process_candidate(
             persist_evidence_first(conn, [receipt], budget_schema, replace_existing=refresh_ocr_cache)
             status = "review_required" if receipt.extraction_status != "complete" else "succeeded"
             _mark_completed(conn, candidate, root, ingest_schema, status)
+            if reprocess_request_id:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE {budget_schema}.receipt_reprocess_requests SET completed_at = NOW() "
+                        "WHERE source_sha256 = %s AND request_id = %s",
+                        (candidate.source_sha256, reprocess_request_id),
+                    )
             conn.commit()
             return status
         except Exception as exc:

@@ -228,9 +228,11 @@ relative to `RECEIPT_SOURCE_ROOT`:
 ledger receipts reprocess '2026-08-14/receipts_20260814_0001.pdf' --verbose
 ```
 
-This refreshes its OCR cache and replaces its canonical extraction and line
-items. It uses the configured database and cache directory. See
-[receipt processing](docs/receipt-processing.md) for overrides and the K3s command.
+This queues a persistent RabbitMQ request and returns `queued`. The consumer
+refreshes its OCR cache and replaces its canonical extraction and line items
+using the worker's configured database and cache directory. See
+[receipt processing](docs/receipt-processing.md) for configuration, deployment,
+and progress monitoring in worker logs and the RabbitMQ GUI.
 
 ### AI-grounded product enrichment
 
