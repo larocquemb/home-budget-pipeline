@@ -61,35 +61,54 @@ The important architectural principle is that receipt files are **evidence**, wh
 
 ## 2. Receipt Sources and Ingestion
 
-Ledger currently supports receipt data originating from:
-
-- Instacart electronic receipts
-- Costco receipts
-- Sobeys receipts
-- scanned paper receipts
-
-The canonical source vocabulary is stored on `budget.expenses.source`.
+Ledger stores canonical expenses using the source codes `instacart`, `costco`,
+`sobeys`, and `scanned` on `budget.expenses.source`. Electronic importers retain
+their merchant-specific source. PDFs and images processed by the OCR pipeline
+use `scanned`, regardless of merchant, and retain their original file as receipt
+evidence.
 
 ### Scanned paper receipts
 
-Scanned receipts can be discovered and processed without immediately modifying PostgreSQL. A dry-run is useful for validating OCR quality and reconciliation before ingesting data.
+Place complete receipt files under `RECEIPT_SOURCE_ROOT`. Discovery walks that
+directory recursively and accepts PDF, JPEG, PNG, HEIC/HEIF, and TIFF files.
+Configure PostgreSQL with `DATABASE_URL` and optionally set
+`HOME_BUDGET_OCR_CACHE`.
+
+Process the backlog locally with the BrownRook CLI:
 
 ```bash
-.venv/bin/python3 scanned_receipt_ingest.py /path/to/scanned-receipts \
-  --json scanned_receipts_report.json
+brownrook receipts process --verbose
 ```
 
-Receipts with missing totals, missing items, or low extraction confidence can be marked for review. Scans for which usable OCR text cannot be extracted can be marked unreadable.
+The command hashes discovered files, skips completed hashes, runs OCR and
+reconciliation, persists receipt evidence and canonical expenses in one
+transaction, and records processing attempts in PostgreSQL. Its JSON summary
+reports `discovered`, `skipped`, `succeeded`, `failed`, and `review_required`.
+Receipts with incomplete extraction remain available for human review.
 
-To persist the result:
+To rebuild OCR cache files without writing to PostgreSQL:
 
 ```bash
-.venv/bin/python3 scanned_receipt_ingest.py /path/to/scanned-receipts \
-  --write-db \
-  --db-dsn "host=localhost port=5432 dbname=home_budget user=postgres"
+brownrook ocr-cache rebuild
 ```
 
-Scanned input is idempotent. The SHA-256 hash of the source artifact is retained so rerunning the same receipt does not create an unrelated duplicate purchase.
+RabbitMQ can distribute the same processing path across workers:
+
+```bash
+brownrook receipts publish
+brownrook receipts consume
+```
+
+Publishing is confirmed and consumers acknowledge manually after a durable
+database result or confirmed retry/dead-letter transfer. PostgreSQL advisory
+locks serialize duplicate deliveries for the same SHA-256. Use
+`brownrook receipts retry SOURCE_REFERENCE` after fixing a failed or interrupted
+receipt whose attempt budget is exhausted. Enabling RabbitMQ does not require a
+database schema rebuild.
+
+See the [receipt backlog guide](docs/receipt-processing.md),
+[RabbitMQ design](docs/rabbitmq-receipt-design.md), and
+[RabbitMQ runbook](docs/rabbitmq-receipts.md) for configuration and recovery.
 
 ---
 
@@ -142,7 +161,7 @@ brownrook ocr-cache rebuild
 
 It uses `RECEIPT_SOURCE_ROOT` and `HOME_BUDGET_OCR_CACHE` when explicit paths
 are omitted. The equivalent form that does not require an activated virtual
-environment is `.venv/bin/python -m home_budget_pipeline ocr-cache rebuild`.
+environment is `.venv/bin/brownrook ocr-cache rebuild`.
 Cache version 13 keeps schema, source, processing, timing, and OCR-pass details
 inside a top-level `metadata` object. It groups final lines by source page and
 records OCR confidence, bounding boxes, line type, and derived department
@@ -176,7 +195,7 @@ extraction and line items. For example:
 
 ```bash
 HOME_BUDGET_PADDLE_OCR=true \
-home-budget-process-receipts /path/to/receipt/inbox \
+brownrook receipts process /path/to/receipt/inbox \
   --workers 1 \
   --verbose \
   --refresh-ocr-cache \
@@ -232,7 +251,7 @@ module. A numeric selector is the canonical `budget.expenses.id` (not
 `budget.receipt_evidence.id`); a filename or path selector is also accepted:
 
 ```bash
-python -m home_budget_pipeline.receipt_enrichment --receipt 1
+brownrook receipts enrich --receipt 1
 ```
 
 The command is a dry run unless `--write-db` is supplied. A dry run performs
@@ -241,7 +260,7 @@ the items as `Not enriched`. Confirm that `item_ids` contains the expected line
 items, then persist accepted matches with:
 
 ```bash
-python -m home_budget_pipeline.receipt_enrichment \
+brownrook receipts enrich \
   --receipt 1 \
   --write-db
 ```
@@ -660,11 +679,17 @@ updates the desired Kubernetes resources but does not by itself erase an existin
 
 ## 13. Tests
 
-Run the project tests with:
+Use the Make targets so unit and integration tests receive the repository's
+standard configuration:
 
 ```bash
-python -m pytest
+make test       # unit tests
+make test-db    # integration tests; resets the disposable test schemas
+make test-all   # unit and integration tests
 ```
+
+Run `make help` to list development, test, and operational targets. See the
+[operations runbook](docs/operations-runbook.md#make-targets) for details.
 
 The test suite covers receipt ingestion/OCR, canonical expense construction, categorization, SQL analytics contracts, transaction reconciliation, receipt deduplication, and the read-only web/query layer.
 

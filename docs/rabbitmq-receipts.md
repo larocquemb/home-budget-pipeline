@@ -129,8 +129,7 @@ Equivalent container commands are `home-budget-receipt-queue publish` and
 # Disposable local RabbitMQ; use only the separate test database.
 docker compose -f compose.queue-test.yaml up -d --wait
 TEST_RABBITMQ_URL='amqp://test:test@localhost:5673/%2F' \
-  .venv/bin/python -m pytest -v -m integration \
-  tests/test_receipt_queue_postgres.py tests/test_receipt_queue_rabbitmq.py
+  make test-db
 docker compose -f compose.queue-test.yaml down -v
 ```
 
@@ -141,7 +140,7 @@ same-source serialization, different-source concurrency, rollback, attempt
 limits, lock release, and commit-before-ACK replay. Broker tests cover confirmed
 publishing, unroutable messages, unacknowledged redelivery, delayed retries, DLQ
 routing, and consumer shutdown. CI supplies both services. Unit tests need no
-external services: `python -m pytest -m 'not integration'`.
+external services: `make test`.
 
 ## Kubernetes rollout
 
