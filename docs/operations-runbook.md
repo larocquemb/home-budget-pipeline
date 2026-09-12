@@ -119,6 +119,36 @@ immutable image tag. Start each branch from an updated `main`; if the deployment
 commit arrives first, update the branch from `origin/main` before merging.
 Never force-push `main` to resolve this race.
 
+### Documentation-only change
+
+Start from synchronized `main`, build the manual with strict validation, and
+review the staged change before creating a pull request:
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c docs/<short-topic>
+
+make docs-build
+
+git add docs/ README.md mkdocs.yml
+git diff --cached --check
+git commit -m "Describe the documentation change"
+git push -u origin HEAD
+
+gh pr create --base main --fill
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+
+git switch main
+git pull --ff-only
+```
+
+Stage only files that belong to the change; `git add docs/ README.md mkdocs.yml`
+is appropriate when all current documentation edits are intentional. Pull
+requests validate the manual. After merge, the Documentation workflow publishes
+GitHub Pages and the CI workflow validates the repository on `main`.
+
 ## GitHub Actions and GHCR
 
 List recent workflows:
