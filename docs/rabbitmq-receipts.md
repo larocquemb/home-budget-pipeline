@@ -163,10 +163,44 @@ worker Deployment, and adds a single RabbitMQ StatefulSet with an 8 GiB
 `home-budget-data` PVC. The worker image follows the immutable image selected by
 CI for the publisher. Use an application image built from this change.
 
-Create `rabbitmq-secret` from `k8s/rabbitmq-secret.example.yaml` using real
-credentials; keep the password and URL-encoded password in `RABBITMQ_URL`
-consistent. The broker initializes the `receipts` vhost. Secrets are deliberately
-excluded from the overlay. Review the rendered configuration:
+Set `RABBITMQ_DEFAULT_USER` and `RABBITMQ_DEFAULT_PASS` in the uncommitted
+`.env.k3s` file (copy `.env.k3s.example`). Keep `.env.dev` for local Mac settings.
+Use `receipts` as the username and
+generate a password with `openssl rand -hex 32`. For an existing broker, use its
+current credentials. From the repository root, create the deployment secret:
+
+```sh
+set -a
+source .env.k3s
+set +a
+.venv/bin/python - <<'PY' | kubectl --context "$KUBE_CONTEXT" -n "$KUBE_NAMESPACE" apply -f -
+import json
+import os
+from urllib.parse import quote
+
+user = os.environ["RABBITMQ_DEFAULT_USER"]
+password = os.environ["RABBITMQ_DEFAULT_PASS"]
+if not user or not password:
+    raise SystemExit("Set RABBITMQ_DEFAULT_USER and RABBITMQ_DEFAULT_PASS in .env.k3s")
+print(json.dumps({
+    "apiVersion": "v1",
+    "kind": "Secret",
+    "metadata": {"name": "rabbitmq-secret", "namespace": os.environ["KUBE_NAMESPACE"]},
+    "type": "Opaque",
+    "stringData": {
+        "RABBITMQ_DEFAULT_USER": user,
+        "RABBITMQ_DEFAULT_PASS": password,
+        "RABBITMQ_URL": f"amqp://{quote(user, safe='')}:{quote(password, safe='')}@rabbitmq:5672/receipts",
+    },
+}))
+PY
+```
+
+This derives the connection URL from the same credentials and URL-encodes them.
+Only the RabbitMQ settings are sent to Kubernetes. The namespace must already
+exist. `k8s/rabbitmq-secret.example.yaml` remains available as a manual template.
+The broker initializes the `receipts` vhost. Secrets are deliberately excluded
+from the overlay. Review the rendered configuration:
 
 ```sh
 kubectl kustomize deploy/rabbitmq
@@ -175,9 +209,9 @@ kubectl kustomize deploy/rabbitmq
 During rollout, suspend the existing receipt CronJob, let its active local job
 finish, then switch the deployment target from `k8s` to `deploy/rabbitmq`. Confirm
 broker readiness and worker startup before allowing the publisher CronJob to
-resume. Applying this overlay normally is `kubectl apply -k deploy/rabbitmq`;
-in GitOps, change the application's path instead. Scale `receipt-worker` for
-additional workers. No cluster resources are changed by rendering the overlay.
+resume. Set the Argo CD application's source path to `deploy/rabbitmq` and run
+`make deploy-k3s`. Change `receipt-worker` replicas in Git for additional workers.
+No cluster resources are changed by rendering the overlay.
 
 This broker is persistent but single-node, not highly available. Local storage
 loss can lose queued work; inbox rediscovery recovers unfinished sources within
@@ -194,6 +228,5 @@ TLS secret, Traefik entry point, and firewall controls are documented in the
 
 To roll back, suspend publishing, drain work/retry queues, and stop workers before
 restoring the `k8s` deployment target. Preserve broker storage and DLQ contents
-until outstanding failures have been resolved. Plain `kubectl apply` of the base
-does not delete the worker/broker resources added by the overlay; scale workers
-down explicitly or use the existing GitOps pruning workflow.
+until outstanding failures have been resolved. Use Argo CD's existing GitOps
+pruning workflow to remove resources no longer present in the selected overlay.

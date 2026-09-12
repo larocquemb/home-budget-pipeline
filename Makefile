@@ -7,15 +7,20 @@ RECEIPT_TEST_ROOT ?= .receipt-test
 RECEIPT_TEST_WORKERS ?= 6
 RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 KUBE_NAMESPACE ?= home-budget
+ARGO_APP ?= ledger
+ARGO_SERVER ?= argocd.brownrook.net
+export ARGO_APP ARGO_SERVER
 ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 
-.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products
+.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
 	@echo "Documentation: docs-build docs-serve"
 	@echo "Tests:       test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
 	@echo "Operations:  status enrich-products"
+	@echo "Deployment:  deploy-k3s k3s-config-check k3s-config-apply (uses .env.k3s)"
+	@echo "PostgreSQL:  postgres-config-check postgres-config-apply postgres-password-rotate"
 
 docs-build:
 	$(MKDOCS) build --strict
@@ -25,6 +30,27 @@ docs-serve:
 
 status:
 	@./scripts/deployment_status.sh
+
+postgres-config-check:
+	@$(PYTHON) scripts/postgres_credentials.py
+
+postgres-config-apply:
+	@$(PYTHON) scripts/postgres_credentials.py --apply
+
+postgres-password-rotate:
+	@$(PYTHON) scripts/postgres_credentials.py --rotate
+
+k3s-config-check:
+	@$(PYTHON) scripts/k3s_runtime_config.py
+
+k3s-config-apply:
+	@$(PYTHON) scripts/k3s_runtime_config.py --apply
+
+deploy-k3s: postgres-config-check k3s-config-check
+	@argocd app get "$(ARGO_APP)" --server "$(ARGO_SERVER)" --grpc-web >/dev/null
+	@$(PYTHON) scripts/postgres_credentials.py --sync
+	@$(PYTHON) scripts/k3s_runtime_config.py --apply
+	argocd app sync "$(ARGO_APP)" --server "$(ARGO_SERVER)" --grpc-web
 
 dev-up:
 	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)

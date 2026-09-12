@@ -15,6 +15,44 @@ ledger receipts process /data/receipts/raw/scanned/inbox --workers 2
 
 Configuration can be supplied with `DATABASE_URL`, `RECEIPT_SOURCE_ROOT`, and `HOME_BUDGET_OCR_CACHE`. The process reports discovered, skipped, succeeded, failed, and review-required counts. A PostgreSQL advisory lock prevents overlapping backlog runs.
 
+Mac development and K3s use separate OCR caches:
+
+| Environment | Cache location |
+| --- | --- |
+| Mac | `.ocr_cache` in the local repository, configured by `HOME_BUDGET_OCR_CACHE` in `.env.dev`. |
+| K3s | `HOME_BUDGET_OCR_CACHE` in `.env.k3s`, currently `/data/receipts/derived/ocr-cache` on the `home-budget-data` PVC. |
+
+Load the Mac settings before running local processing or cache rebuilds:
+
+```bash
+set -a
+source .env.dev
+set +a
+```
+
+Keep the Mac cache on local disk, even when reading source receipts from the
+shared SMB folder. OCR creates cache files as needed. Switching the Mac cache
+location leaves existing PV cache files intact; only K3s continues using them.
+Already-running Mac processes retain their previous environment until restarted.
+
+`make deploy-k3s` reads the K3s cache path from `.env.k3s` and writes it to the
+`receipt-runtime-config` ConfigMap before starting Argo CD sync. The receipt
+CronJob, RabbitMQ worker, and manual scanned-receipt Job read that ConfigMap.
+Use a directory below `/data` so the cache stays on the PV. The ConfigMap is
+provisioned outside Git, so Argo CD does not overwrite the chosen value.
+Changed values request Deployment restarts through Argo CD; future Jobs use the updated setting,
+while already-running Jobs finish with their original setting. Existing cache
+files are neither moved nor deleted when the path changes.
+
+To check or provision only these runtime settings:
+
+```bash
+make k3s-config-check
+make k3s-config-apply
+```
+
+Provision this ConfigMap before deploying these manifests for the first time.
+
 Pass `--refresh-ocr-cache` to bypass cached OCR and reprocess every discovered
 receipt, including receipts already marked succeeded or review-required.
 
