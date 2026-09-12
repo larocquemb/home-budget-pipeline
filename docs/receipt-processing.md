@@ -130,6 +130,39 @@ for normal publishing again.
 | `receipts reprocess SOURCE_REFERENCE` | One receipt, including completed receipts | Queues a refresh; the consumer replaces its OCR and extraction results. |
 | `receipts process --refresh-ocr-cache` | Every receipt under the supplied root | Immediately refreshes OCR and replaces extraction results for the whole selection. |
 
+## Rebuild only the OCR cache
+
+Deleting cache files does not reset PostgreSQL completion status, so scheduled
+publishing will still skip completed receipts. To rebuild the cache without
+changing database extraction results:
+
+```bash
+ledger ocr-cache rebuild --workers 1 --verbose
+```
+
+In K3s, run:
+
+```bash
+kubectl --context brownrook-k3s1 -n home-budget \
+  exec deployment/receipt-worker -- \
+  ledger ocr-cache rebuild --workers 1 --verbose
+```
+
+`--verbose` prints the source/cache directories, filenames, and completed/total
+counts immediately to stderr:
+
+```text
+[0/12] Starting 2026-08-14/receipts_20260814_0001.pdf
+[1/12] Completed 2026-08-14/receipts_20260814_0001.pdf
+```
+
+With multiple workers, files are first reported as `Queued`, then `Completed`
+in completion order. A failure identifies the receipt and exits with an error.
+Without `--verbose`, the command prints only its final JSON summary, apart from
+OCR library output. The rebuild refreshes every discovered receipt, including
+existing caches, and runs directly in the pod rather than through RabbitMQ.
+An already-running rebuild will not gain progress output after deployment.
+
 ## Receipt-scoped product enrichment
 
 After import, product enrichment can be limited to all line items belonging to

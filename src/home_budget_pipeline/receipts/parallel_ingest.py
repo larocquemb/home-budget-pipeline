@@ -16,9 +16,10 @@ import re
 import socket
 import time
 import uuid
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from . import ingest as scan
 from receipt_datetime import date_part, extract_transaction_datetime
@@ -481,12 +482,15 @@ def parse_scans_parallel(
     refresh: bool = False,
     *,
     return_cache_hits: bool = False,
+    progress: Callable[[str], None] | None = None,
 ):
     """Parse scans while preserving the original helper API.
 
     Existing callers that omit cache_dir receive only the ordered receipt list,
     matching the pre-cache behavior. The CLI supplies cache_dir and asks for
-    cache statistics explicitly.
+    cache statistics explicitly. Cache progress is reported from the parent
+    process; parallel completions are reported as they finish, while returned
+    receipts retain input order.
     """
     workers = max(1, workers)
 
@@ -494,12 +498,48 @@ def parse_scans_parallel(
         receipts = [scan.parse_scan(path, root) for path in paths]
         return (receipts, 0) if return_cache_hits else receipts
 
+    def report(path: Path, action: str, completed: int) -> None:
+        if progress is not None:
+            try:
+                reference = path.relative_to(root).as_posix() if root.is_dir() else path.name
+            except ValueError:
+                reference = path.name
+            progress(f"[{completed}/{len(paths)}] {action} {reference}")
+
     if workers == 1:
-        results = [_parse_scan_cached(path, root, cache_dir, refresh) for path in paths]
+        results = []
+        for path in paths:
+            report(path, "Starting", len(results))
+            try:
+                result = _parse_scan_cached(path, root, cache_dir, refresh)
+            except Exception:
+                report(path, "Failed", len(results))
+                raise
+            results.append(result)
+            report(path, "Completed", len(results))
     else:
         work = [(str(path), str(root), str(cache_dir), refresh) for path in paths]
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            results = list(executor.map(_parse_scan_worker, work))
+            if progress is None:
+                results = list(executor.map(_parse_scan_worker, work))
+            else:
+                futures = {}
+                for index, item in enumerate(work):
+                    futures[executor.submit(_parse_scan_worker, item)] = index
+                    report(paths[index], "Queued", 0)
+                results = [None] * len(paths)
+                completed = 0
+                for future in as_completed(futures):
+                    index = futures[future]
+                    try:
+                        results[index] = future.result()
+                    except Exception:
+                        report(paths[index], "Failed", completed)
+                        for pending in futures:
+                            pending.cancel()
+                        raise
+                    completed += 1
+                    report(paths[index], "Completed", completed)
 
     receipts = [receipt for receipt, _ in results]
     cache_hits = sum(1 for _, hit in results if hit)
