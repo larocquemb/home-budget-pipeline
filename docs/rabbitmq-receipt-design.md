@@ -171,6 +171,40 @@ Receipts whose stored processing-attempt count has reached the configured
 maximum are reported as exhausted. An operator must reset one with
 `ledger receipts retry SOURCE_REFERENCE` before it becomes publishable.
 
+### Scheduled cache discovery and duplicate backlog
+
+When a new or empty cache directory is introduced, many completed receipts can
+become eligible for missing-cache repair at once. Every 15 minutes, the publisher
+checks database status and cache existence again. It does not check whether an
+equivalent request is already waiting in RabbitMQ or record a durable
+"already queued" reservation. If workers have not reached those receipts, later
+successful scans can publish additional copies of the same v2 requests.
+
+The UUID derived from source hash, relative path, and previous completion time
+identifies one logical repair request across those scans. RabbitMQ stores and
+delivers each publication even when its message ID matches an existing message.
+Deduplication happens in the worker against PostgreSQL, under the receipt lock.
+The worker checks `(source_sha256, request_id)` in
+`budget.receipt_reprocess_requests`: once `completed_at` is set, another copy
+returns `status=skipped` and is ACKed without OCR, extraction writes, or another
+processing attempt. An unfinished request can retry within its shared attempt
+budget. A later cache deletion after a new completion creates a new UUID and
+therefore permits another repair.
+
+For example, if 100 completed receipts still lack caches and no worker starts
+them during three successful discovery runs, RabbitMQ can hold 300 deliveries
+for 100 logical repair requests. Once those repairs complete, the other 200
+deliveries only require completion checks and ACKs. Queue depth can decline
+slowly while OCR runs, then fall rapidly as workers reach completed duplicates.
+With workers active during discovery, only sources still eligible at each scan
+contribute to that scan's missing-cache publications.
+
+This trades additional broker deliveries and database lookups for recovery
+through repeated discovery without a separate queued-state reconciliation
+mechanism. Queue depth measures outstanding deliveries, not unique receipts or
+remaining OCR runs. An empty work queue can coexist with `review_required`
+receipts or dead-letter messages; those outcomes still need operator attention.
+
 ## Consumer transaction and ACK boundaries
 
 The consumer sets prefetch to one and receives with automatic acknowledgements
@@ -218,9 +252,12 @@ The lock is per receipt. Different receipts can run concurrently. Normal,
 full-reprocess, and cache-only messages use the same lock. Manual commands
 publish requests and never create a separate local worker pool.
 
-The completed database state is the idempotency record. A message for a receipt
-in `succeeded` or `review_required` is acknowledged as a duplicate. The design
-does not depend on RabbitMQ deduplication or message ordering.
+The completed database state is the idempotency record. Normal v1 messages for
+receipts in `succeeded` or `review_required` are acknowledged as duplicates.
+Full-reprocess v2 and cache-only v3 messages check completion of their specific
+request UUID in the corresponding request table; a new request can intentionally
+process an already-completed receipt. The design does not depend on RabbitMQ
+deduplication or message ordering.
 
 ## Retry and dead-letter behavior
 
