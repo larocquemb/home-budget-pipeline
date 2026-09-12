@@ -222,6 +222,12 @@ resume. Set the Argo CD application's source path to `deploy/rabbitmq` and run
 `make deploy-k3s`. Change `receipt-worker` replicas in Git for additional workers.
 No cluster resources are changed by rendering the overlay.
 
+The RabbitMQ overlays explicitly set `receipt-processor.spec.suspend: false`.
+Once synced, the CronJob publishes unfinished, eligible receipts every 15 minutes;
+completed receipts are skipped. For a maintenance pause, set `suspend: true` in
+`deploy/rabbitmq/publisher-patch.yaml` and sync through Argo CD, then restore
+`false` to resume. A direct cluster edit may be reverted by Argo CD self-healing.
+
 Worker updates use `maxSurge: 0` and `maxUnavailable: 1`, allowing an old worker
 to release its CPU reservation before its replacement starts. With one replica,
 consumption pauses during replacement; the existing shutdown grace period lets

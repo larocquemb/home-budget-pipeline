@@ -4,6 +4,7 @@ metadata:
   name: receipt-processor
   namespace: home-budget
 spec:
+  suspend: false
   jobTemplate:
     spec:
       template:
