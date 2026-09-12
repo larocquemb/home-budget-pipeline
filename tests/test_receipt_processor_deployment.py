@@ -8,7 +8,9 @@ def test_receipt_processor_cronjob_contract():
     text = (ROOT / "k8s" / "receipt-processor-cronjob.yaml").read_text()
     assert "kind: CronJob" in text
     assert "concurrencyPolicy: Forbid" in text
-    assert "home-budget-process-receipts" in text
+    assert "- ledger" in text
+    assert "- receipts" in text
+    assert "- process" in text
     assert "--workers" in text and '"1"' in text
     assert "HOME_BUDGET_PADDLE_OCR" in text
     assert 'value: "true"' in text

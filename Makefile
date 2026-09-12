@@ -1,7 +1,7 @@
 TEST_DB ?= home_budget_test
 TEST_DATABASE_URL ?= postgresql://localhost/$(TEST_DB)
 PYTHON ?= .venv/bin/python
-BROWNROOK ?= .venv/bin/brownrook
+LEDGER ?= .venv/bin/ledger
 MKDOCS ?= .venv/bin/mkdocs
 RECEIPT_TEST_ROOT ?= .receipt-test
 RECEIPT_TEST_WORKERS ?= 6
@@ -9,12 +9,12 @@ RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 KUBE_NAMESPACE ?= home-budget
 ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 
-.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products
+.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
 	@echo "Documentation: docs-build docs-serve"
-	@echo "Tests:       test test-db-setup test-db test-db-verbose test-all test-receipts"
+	@echo "Tests:       test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
 	@echo "Operations:  status enrich-products"
 
 docs-build:
@@ -36,6 +36,7 @@ dev-down:
 dev-web:
 	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
 	@set -a; . ./.env.dev; set +a; \
+		test -n "$$LEDGER_PROXY_SECRET" || { echo "Set LEDGER_PROXY_SECRET in .env.dev"; exit 2; }; \
 		LEDGER_BASE_PATH=/ledger HOST=0.0.0.0 PORT=8080 \
 		.venv/bin/uvicorn home_budget_pipeline.web.app:app \
 			--host 0.0.0.0 --port 8080 --reload
@@ -72,8 +73,14 @@ test-db-setup:
 	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/product_enrichment.sql >/dev/null
 
 test-db: test-db-setup
-	@echo "Running PostgreSQL integration tests..."
-	@TEST_DATABASE_URL=$(TEST_DATABASE_URL) $(PYTHON) -m pytest -q -m integration
+	@if test -n "$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}"; then \
+		echo "Running PostgreSQL and RabbitMQ integration tests..."; \
+	else \
+		echo "Running PostgreSQL integration tests; RabbitMQ tests will be skipped (no broker URL)..."; \
+	fi
+	@TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
+		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
+		$(PYTHON) -m pytest -q -rA -m integration
 
 test-db-verbose:
 	@psql postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='$(TEST_DB)'" | grep -q 1 || createdb $(TEST_DB)
@@ -82,7 +89,15 @@ test-db-verbose:
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/receipt_processing.sql
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/schema_constraints.sql
 	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/product_enrichment.sql
-	TEST_DATABASE_URL=$(TEST_DATABASE_URL) $(PYTHON) -m pytest -q -m integration
+	TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
+		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
+		$(PYTHON) -m pytest -q -m integration
+
+test-rabbit: test-db-setup
+	@test -n "$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" || { echo "Export RABBITMQ_URL or TEST_RABBITMQ_URL"; exit 2; }
+	@TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
+		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
+		$(PYTHON) -m pytest -v -m integration tests/test_receipt_queue_rabbitmq.py
 
 test-all: test
 	@$(MAKE) test-db
@@ -96,4 +111,4 @@ test-receipts: test-db-setup
 	@rsync -a "$(RECEIPT_SOURCE_ROOT)/" "$(RECEIPT_TEST_ROOT)/inbox/"
 	@echo "Running receipt backlog against local PostgreSQL test database..."
 	@DATABASE_URL=$(TEST_DATABASE_URL) HOME_BUDGET_OCR_CACHE="$(RECEIPT_TEST_ROOT)/ocr-cache" \
-		$(BROWNROOK) receipts process "$(RECEIPT_TEST_ROOT)/inbox" --workers $(RECEIPT_TEST_WORKERS)
+		$(LEDGER) receipts process "$(RECEIPT_TEST_ROOT)/inbox" --workers $(RECEIPT_TEST_WORKERS)

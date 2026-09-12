@@ -21,6 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
+ledger = "home_budget_pipeline.cli:main"
 brownrook = "home_budget_pipeline.cli:main"
 home-budget-scan = "home_budget_pipeline.receipts.parallel_ingest:main"
 home-budget-process-receipts = "home_budget_pipeline.receipts.backlog_ingest:main"

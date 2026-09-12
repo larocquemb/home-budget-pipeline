@@ -84,9 +84,9 @@ DLQ and `ingest.receipt_processing_status`. Fix the source/configuration, remove
 stale deliveries for that hash, then use the CLI to reset its attempt budget:
 
 ```sh
-brownrook receipts retry '2026-08-14/receipts_20260814_0001.pdf'
-brownrook receipts publish
-brownrook receipts consume
+ledger receipts retry '2026-08-14/receipts_20260814_0001.pdf'
+ledger receipts publish
+ledger receipts consume
 ```
 
 Use the exact path relative to the receipt source root. `retry` resets only the
@@ -119,12 +119,12 @@ Broker credentials must have configure/write/read access
 to the queues and exchanges in a dedicated vhost. Then run:
 
 ```sh
-brownrook receipts publish /shared/receipts
-brownrook receipts consume /shared/receipts
+ledger receipts publish /shared/receipts
+ledger receipts consume /shared/receipts
 ```
 
-Equivalent container commands are `home-budget-receipt-queue publish` and
-`home-budget-receipt-queue consume`. Add consumers to increase concurrency.
+The Kubernetes publisher and worker use the same `ledger receipts` commands.
+Add consumers to increase concurrency.
 
 ```sh
 # Disposable local RabbitMQ; use only the separate test database.
@@ -184,6 +184,13 @@ loss can lose queued work; inbox rediscovery recovers unfinished sources within
 their attempt budget. A replicated broker is a separate operational slice.
 The management service is internal; no public ingress is included. The worker
 has a 15-minute shutdown grace period, and the broker ACK timeout is one hour.
+
+For authenticated access to the management UI from the corporate LAN, use the
+`deploy/rabbitmq-private` overlay. It exposes only port 15672 through the private
+hostname at `rabbitmq.brownrook.net`; AMQP remains cluster-internal.
+RabbitMQ's own user and password are still required. The required private DNS,
+TLS secret, Traefik entry point, and firewall controls are documented in the
+[network access guide](private-networking.md).
 
 To roll back, suspend publishing, drain work/retry queues, and stop workers before
 restoring the `k8s` deployment target. Preserve broker storage and DLQ contents

@@ -42,8 +42,13 @@ def _display_database_dsn(dsn: str) -> str:
     return re.sub(r"(?i)(\bpassword=)[^\s&]+", r"\1***", redacted)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="brownrook", description="BrownRook Ledger operations.")
+def _program_name() -> str:
+    invoked = Path(sys.argv[0]).stem
+    return invoked if invoked in {"ledger", "brownrook"} else "ledger"
+
+
+def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="BrownRook Ledger operations.")
     commands = parser.add_subparsers(dest="command", required=True)
 
     receipts = commands.add_parser("receipts", help="Process receipt evidence.")
@@ -229,5 +234,5 @@ def _setup_database(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = build_parser(_program_name()).parse_args(argv)
     return args.handler(args)

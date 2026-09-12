@@ -17,6 +17,7 @@ Operational documentation:
 - [Solution architecture](docs/solution-architecture.md)
 - [Ledger user guide](docs/user-guide.md)
 - [Build, deployment, and recovery runbook](docs/operations-runbook.md)
+- [Network access and private-LAN deployment](docs/private-networking.md)
 - [Receipt backlog processing](docs/receipt-processing.md)
 - [RabbitMQ receipt processing design](docs/rabbitmq-receipt-design.md)
 - [RabbitMQ receipt processing runbook](docs/rabbitmq-receipts.md)
@@ -76,10 +77,20 @@ directory recursively and accepts PDF, JPEG, PNG, HEIC/HEIF, and TIFF files.
 Configure PostgreSQL with `DATABASE_URL` and optionally set
 `HOME_BUDGET_OCR_CACHE`.
 
-Process the backlog locally with the BrownRook CLI:
+The primary command-line program is `ledger`, matching the web application.
+The previous `brownrook` name remains installed as a compatibility alias for
+existing scripts. After pulling this change into an existing virtual
+environment, reinstall the project once to create `.venv/bin/ledger`:
 
 ```bash
-brownrook receipts process --verbose
+python -m pip install -e '.[db]'
+ledger --help
+```
+
+Process the backlog locally with the Ledger CLI:
+
+```bash
+ledger receipts process --verbose
 ```
 
 The command hashes discovered files, skips completed hashes, runs OCR and
@@ -91,20 +102,20 @@ Receipts with incomplete extraction remain available for human review.
 To rebuild OCR cache files without writing to PostgreSQL:
 
 ```bash
-brownrook ocr-cache rebuild
+ledger ocr-cache rebuild
 ```
 
 RabbitMQ can distribute the same processing path across workers:
 
 ```bash
-brownrook receipts publish
-brownrook receipts consume
+ledger receipts publish
+ledger receipts consume
 ```
 
 Publishing is confirmed and consumers acknowledge manually after a durable
 database result or confirmed retry/dead-letter transfer. PostgreSQL advisory
 locks serialize duplicate deliveries for the same SHA-256. Use
-`brownrook receipts retry SOURCE_REFERENCE` after fixing a failed or interrupted
+`ledger receipts retry SOURCE_REFERENCE` after fixing a failed or interrupted
 receipt whose attempt budget is exhausted. Enabling RabbitMQ does not require a
 database schema rebuild.
 
@@ -154,16 +165,16 @@ such as `20260214_sobeys_363_95.pdf`. The final consensus OCR and parsed receipt
 are cached by source hash and persisted as receipt evidence. Individual OCR
 passes and their quality metrics are retained for later effectiveness analysis.
 
-The unified BrownRook CLI can rebuild only the local OCR cache, without a
+The unified Ledger CLI can rebuild only the local OCR cache, without a
 database connection or database writes:
 
 ```bash
-brownrook ocr-cache rebuild
+ledger ocr-cache rebuild
 ```
 
 It uses `RECEIPT_SOURCE_ROOT` and `HOME_BUDGET_OCR_CACHE` when explicit paths
 are omitted. The equivalent form that does not require an activated virtual
-environment is `.venv/bin/brownrook ocr-cache rebuild`.
+environment is `.venv/bin/ledger ocr-cache rebuild`.
 Cache version 13 keeps schema, source, processing, timing, and OCR-pass details
 inside a top-level `metadata` object. It groups final lines by source page and
 records OCR confidence, bounding boxes, line type, and derived department
@@ -194,7 +205,7 @@ extraction and line items. For example:
 
 ```bash
 HOME_BUDGET_PADDLE_OCR=true \
-brownrook receipts process /path/to/receipt/inbox \
+ledger receipts process /path/to/receipt/inbox \
   --workers 1 \
   --verbose \
   --refresh-ocr-cache \
@@ -250,7 +261,7 @@ module. A numeric selector is the canonical `budget.expenses.id` (not
 `budget.receipt_evidence.id`); a filename or path selector is also accepted:
 
 ```bash
-brownrook receipts enrich --receipt 1
+ledger receipts enrich --receipt 1
 ```
 
 The command is a dry run unless `--write-db` is supplied. A dry run performs
@@ -259,7 +270,7 @@ the items as `Not enriched`. Confirm that `item_ids` contains the expected line
 items, then persist accepted matches with:
 
 ```bash
-brownrook receipts enrich \
+ledger receipts enrich \
   --receipt 1 \
   --write-db
 ```
@@ -543,7 +554,7 @@ Initialize the core runtime schema or apply its additive upgrades to an existing
 database with:
 
 ```bash
-brownrook database setup
+ledger database setup
 ```
 
 Receipt OCR runs and their individual passes are retained in
@@ -551,8 +562,8 @@ Receipt OCR runs and their individual passes are retained in
 ground truth after reviewing a receipt with:
 
 ```bash
-brownrook receipts feedback 123 --outcome confirmed
-brownrook receipts feedback 123 --outcome corrected \
+ledger receipts feedback 123 --outcome confirmed
+ledger receipts feedback 123 --outcome corrected \
   --corrected-fields '{"merchant":"Sobeys","total":"42.17"}'
 ```
 
@@ -687,7 +698,8 @@ K3s
 ```
 
 The optional `deploy/rabbitmq` overlay changes the receipt CronJob to a
-publisher and adds RabbitMQ plus a receipt-worker Deployment.
+publisher and adds RabbitMQ plus a receipt-worker Deployment. Private-LAN
+variants are documented in the [network access guide](docs/private-networking.md).
 
 A fresh PostgreSQL persistent volume automatically receives the staged schema,
 category catalogue, analytics views, and supporting processing tables during
@@ -711,6 +723,7 @@ standard configuration:
 ```bash
 make test       # unit tests
 make test-db    # integration tests; resets the disposable test schemas
+make test-rabbit # named RabbitMQ integration tests
 make test-all   # unit and integration tests
 ```
 
@@ -759,7 +772,8 @@ The development proxy runs Caddy and OAuth2 Proxy in Docker while Ledger runs
 directly from the working tree. This avoids the image build and K3S deployment
 loop for application changes.
 
-1. Copy `.env.dev.example` to `.env.dev` and fill in the Entra and database values.
+1. Copy `.env.dev.example` to `.env.dev`, fill in the Entra and database values,
+   and generate the separate `LEDGER_PROXY_SECRET` described in that file.
 2. Add `127.0.0.1 ledger-dev.brownrook.net` to `/etc/hosts`.
 3. Add `https://ledger-dev.brownrook.net/ledger/oauth2/callback` as a redirect URI in Entra.
 4. Start PostgreSQL forwarding with `kubectl -n home-budget port-forward svc/postgres 5433:5432`.
@@ -768,6 +782,10 @@ loop for application changes.
 
 Stop the proxy with `make dev-down`. The local Ledger process is intentionally
 outside Docker so source changes only require restarting that process.
+Caddy publishes ports 80 and 443 only on `127.0.0.1`. Ledger listens on port
+8080 for the Docker proxy, and verifies `LEDGER_PROXY_SECRET` before trusting
+the proxy's identity headers. See the [network access guide](docs/private-networking.md)
+for the local and K3s boundaries.
 
 To discard and rebuild the local `home_budget` schemas with the exact SQL
 bootstrap sequence used by K3S, run `make dev-db-reset`. The command refuses

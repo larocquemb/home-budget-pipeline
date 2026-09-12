@@ -166,6 +166,13 @@ def test_unified_cli_exposes_queue_commands(monkeypatch):
         assert args.rabbitmq_url == "amqp://test:test@localhost/"
 
 
+def test_ledger_is_primary_cli_and_brownrook_remains_compatible():
+    from home_budget_pipeline.cli import build_parser
+
+    assert build_parser().prog == "ledger"
+    assert build_parser("brownrook").prog == "brownrook"
+
+
 @pytest.mark.parametrize("db_dsn,rabbitmq_url,missing", [
     ("", "amqp://example/", ["database DSN"]),
     ("dbname=test", "", ["RabbitMQ URL"]),

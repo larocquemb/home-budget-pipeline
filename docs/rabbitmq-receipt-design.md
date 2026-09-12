@@ -12,9 +12,9 @@ does not replace receipt discovery, OCR, normalization, evidence storage, or
 expense persistence. Both execution modes call the same receipt-processing
 function:
 
-- `brownrook receipts process` discovers and processes receipts in one process.
-- `brownrook receipts publish` discovers eligible receipts and publishes work.
-- `brownrook receipts consume` receives work and processes it in a worker.
+- `ledger receipts process` discovers and processes receipts in one process.
+- `ledger receipts publish` discovers eligible receipts and publishes work.
+- `ledger receipts consume` receives work and processes it in a worker.
 
 It uses the existing receipt and processing-status tables, so enabling this mode
 does not require a database schema rebuild or migration.
@@ -114,7 +114,7 @@ consumer's database checks make duplicate work safe.
 
 Receipts whose stored processing-attempt count has reached the configured
 maximum are reported as exhausted. An operator must reset one with
-`brownrook receipts retry SOURCE_REFERENCE` before it becomes publishable.
+`ledger receipts retry SOURCE_REFERENCE` before it becomes publishable.
 
 ## Consumer transaction and ACK boundaries
 

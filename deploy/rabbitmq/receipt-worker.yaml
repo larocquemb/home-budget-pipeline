@@ -23,8 +23,8 @@ spec:
         - name: receipt-worker
           image: ghcr.io/larocquemb/home-budget-pipeline
           imagePullPolicy: IfNotPresent
-          command: [home-budget-receipt-queue]
-          args: [consume, /data/receipts/raw/scanned/inbox]
+          command: [ledger]
+          args: [receipts, consume, /data/receipts/raw/scanned/inbox]
           env:
             - name: DATABASE_URL
               valueFrom:

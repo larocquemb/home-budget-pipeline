@@ -27,8 +27,10 @@ spec:
               image: ghcr.io/larocquemb/home-budget-pipeline:latest
               imagePullPolicy: IfNotPresent
               command:
-                - home-budget-process-receipts
+                - ledger
               args:
+                - receipts
+                - process
                 - /data/receipts/raw/scanned/inbox
                 - --workers
                 - "1"

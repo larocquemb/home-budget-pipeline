@@ -1,4 +1,6 @@
 ledger-dev.brownrook.net {
     tls internal
-    reverse_proxy oauth2-proxy:4180
+    reverse_proxy oauth2-proxy:4180 {
+        header_up X-Ledger-Proxy-Secret {$LEDGER_PROXY_SECRET}
+    }
 }
