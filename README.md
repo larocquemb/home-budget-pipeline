@@ -107,7 +107,7 @@ Receipts with incomplete extraction remain available for human review.
 To rebuild OCR cache files without writing to PostgreSQL:
 
 ```bash
-ledger ocr-cache rebuild
+ledger ocr-cache rebuild --workers 1 --verbose
 ```
 
 RabbitMQ can distribute the same processing path across workers:
@@ -174,12 +174,15 @@ The unified Ledger CLI can rebuild only the local OCR cache, without a
 database connection or database writes:
 
 ```bash
-ledger ocr-cache rebuild
+ledger ocr-cache rebuild --workers 1 --verbose
 ```
 
 It uses `RECEIPT_SOURCE_ROOT` and `HOME_BUDGET_OCR_CACHE` when explicit paths
 are omitted. The equivalent form that does not require an activated virtual
 environment is `.venv/bin/ledger ocr-cache rebuild`.
+Add `--verbose` to show filenames and completed/total progress immediately on
+stderr. With multiple workers, completion updates appear as each receipt
+finishes. The final JSON summary still reports the number of rebuilt caches.
 Cache version 13 keeps schema, source, processing, timing, and OCR-pass details
 inside a top-level `metadata` object. It groups final lines by source page and
 records OCR confidence, bounding boxes, line type, and derived department

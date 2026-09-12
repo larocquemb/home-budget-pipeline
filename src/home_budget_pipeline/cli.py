@@ -110,6 +110,7 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     rebuild.add_argument("receipt_root", nargs="?", default=_receipt_root_default())
     rebuild.add_argument("--ocr-cache", default=_ocr_cache_default())
     rebuild.add_argument("--workers", type=int, default=2)
+    rebuild.add_argument("--verbose", action="store_true", help="Print receipt filenames and completed/total progress to stderr.")
     rebuild.set_defaults(handler=_rebuild_ocr_cache)
 
     database = commands.add_parser("database", help="Manage the PostgreSQL database.")
@@ -183,7 +184,15 @@ def _rebuild_ocr_cache(args: argparse.Namespace) -> int:
     root = Path(args.receipt_root).expanduser().resolve()
     cache_dir = Path(args.ocr_cache).expanduser().resolve()
     paths = scan.discover_scans(root)
-    parse_scans_parallel(paths, root, max(1, args.workers), cache_dir, refresh=True)
+    options = {}
+    if args.verbose:
+        def progress(message: str) -> None:
+            print(message, file=sys.stderr, flush=True)
+        progress(f"Rebuilding OCR cache: {len(paths)} receipt(s), {max(1, args.workers)} worker(s)")
+        progress(f"Receipt root: {root}")
+        progress(f"OCR cache: {cache_dir}")
+        options["progress"] = progress
+    parse_scans_parallel(paths, root, max(1, args.workers), cache_dir, refresh=True, **options)
     print(json.dumps({
         "discovered": len(paths),
         "cache_rebuilt": len(paths),
