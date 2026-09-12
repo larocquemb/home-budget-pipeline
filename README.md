@@ -171,23 +171,20 @@ usage, and provenance. Readers remain compatible with legacy flat cache
 formats. This keeps raw layout evidence available for receipt comparison and
 later item recognition.
 
-```json
-{
-  "metadata": {
-    "schema_version": 1,
-    "cache_version": 13,
-    "run_uuid": "eb49d924-9a70-4ef5-b10f-21864b4ae531",
-    "source_reference": "2026-02-14/20260214_sobeys_363_95.pdf",
-    "source_sha256": "...",
-    "processed_at": "2026-09-11T09:00:00+00:00",
-    "processing_seconds": 12.4,
-    "timings": {},
-    "ocr_passes": []
-  },
-  "plain_text": "SOBEYS\\nTOTAL 363.95",
-  "pages": []
-}
-```
+The current payload is organized as follows:
+
+| Location | Contents |
+| --- | --- |
+| `metadata` | Schema/cache versions, run UUID, relative source reference, SHA-256, UTC processing time, and total duration. |
+| `metadata.timings` | `text_extraction_seconds`, `layout_extraction_seconds`, and `structuring_seconds`. |
+| `metadata.ocr_passes[]` | Page and pass identity, OCR engine and options, status, duration, selection flag, quality scores, usage, and provenance. |
+| `plain_text` | Consensus text reconstructed from the structured page lines. |
+| `pages[]` | Source page number and nested lines with text, confidence, type, department context, geometry, indentation, and supporting child lines. |
+
+The [cache writer](src/home_budget_pipeline/receipts/parallel_ingest.py) and
+[schema tests](tests/test_receipt_metadata_schema.py) are the authoritative
+definition. Existing legacy flat cache files remain readable and are replaced
+with the current shape when rebuilt.
 
 `--refresh-ocr-cache` performs a complete refresh: it bypasses cached OCR,
 reprocesses receipts already marked complete, and replaces their canonical
