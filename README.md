@@ -13,6 +13,8 @@ A payment account answers **where the money came from**. A budget category answe
 
 Operational documentation:
 
+- [Online manual](https://larocquemb.github.io/home-budget-pipeline/)
+- [Solution architecture](docs/solution-architecture.md)
 - [Ledger user guide](docs/user-guide.md)
 - [Build, deployment, and recovery runbook](docs/operations-runbook.md)
 - [Receipt backlog processing](docs/receipt-processing.md)
@@ -305,7 +307,7 @@ The schema exposes a reconciliation value that compares the receipt components w
 ```text
 reconciliation difference
     = item subtotal
-    + discounts
+    - discounts
     + tip
     + service fee
     + recycling fee
@@ -535,9 +537,10 @@ Credit cards, prepaid accounts, and bank accounts therefore remain payment sourc
 
 ## 9. PostgreSQL Bootstrap
 
-`sql/schema_phase1.sql` is the canonical bootstrap DDL for a fresh Ledger database.
+`sql/schema_phase1.sql` is the canonical core DDL for a fresh Ledger database.
 
-Initialize a new database or apply all additive schema upgrades to an existing one with:
+Initialize the core runtime schema or apply its additive upgrades to an existing
+database with:
 
 ```bash
 brownrook database setup
@@ -559,9 +562,14 @@ configuration.
 
 The `/sql` directory intentionally separates schema from reporting queries.
 
-Household category configuration is **not** embedded in the SQL schema. On a fresh Kubernetes PostgreSQL volume, bootstrap stages the canonical schema, category catalogue, analytics views, financial transactions, and receipt-deduplication DDL.
+Household category configuration is **not** embedded in the SQL schema. On a
+fresh Kubernetes PostgreSQL volume, `scripts/stage_db_bootstrap.sh` stages the
+canonical schema, category catalogue, analytics views, financial transactions, receipt
+deduplication, constraints, receipt processing, merchant aliases, and product
+enrichment DDL.
 
-During the current pre-production phase, the bootstrap SQL represents the desired clean database rather than a long sequence of historical story-specific migrations.
+The staged bootstrap represents the desired state for a clean deployment;
+additive runtime migrations upgrade existing databases.
 
 ---
 
@@ -573,7 +581,8 @@ The project exposes a command for categorizing all line items belonging to one c
 home-budget-categorize <expense_pk>
 ```
 
-The command requires a PostgreSQL connection through `DATABASE_URL` or `--database-url`.
+The command requires a PostgreSQL connection through `HOME_BUDGET_PG_DSN`,
+`DATABASE_URL`, `--pg-dsn`, or `--database-url`.
 
 Example:
 
@@ -588,17 +597,26 @@ Avoid placing database passwords directly in shell history where possible.
 
 ## 11. Ledger Web Application
 
-The read-only Ledger web UI exposes the KAN-71 analytics views and review data from receipt deduplication, transaction reconciliation, and data-quality checks.
+The authenticated Ledger web UI is a receipt-first workspace for inspecting
+source documents, OCR results, canonical expenses, reconciliation, duplicates,
+data-quality findings, and processing status. It also supports audited category
+overrides, category-rule management, and item description or product-link
+corrections.
 
 The main browser pages include:
 
 ```text
+/ledger/receipts
+/ledger/receipts/<source_sha256>
+/ledger/dashboard
 /ledger/expenses
 /ledger/category-spend
-/ledger/review
+/ledger/category-rules
+/ledger/review-queue
 /ledger/extraction-audit
 /ledger/duplicates
 /ledger/transactions
+/ledger/receipt-processing
 /ledger/expenses/<expense_pk>
 /ledger/evidence/<evidence_id>
 ```
@@ -624,7 +642,9 @@ The browser application normally sits behind oauth2-proxy, which supplies authen
 /ledger/ready    database-backed readiness
 ```
 
-All PostgreSQL sessions used by the query service execute `SET TRANSACTION READ ONLY` before application queries.
+Read paths execute `SET TRANSACTION READ ONLY`. The three supported write paths
+use explicit transactions and record the authenticated user in audit tables:
+category overrides, category rules, and item description/product-link changes.
 
 ### Kubernetes / K3s
 
@@ -643,9 +663,11 @@ The existing ingress and oauth2-proxy resources continue to provide Microsoft En
 
 ## 12. Kubernetes and GitOps Deployment
 
-Ledger is deployed to K3s using Argo CD.
+Ledger is deployed to K3s using Argo CD. See the
+[solution architecture](docs/solution-architecture.md) for the complete runtime
+and delivery diagrams.
 
-The current deployment includes:
+The base deployment includes:
 
 ```text
 Internet / LAN
@@ -659,10 +681,17 @@ K3s
     -> Ledger web
     -> oauth2-proxy
     -> PostgreSQL StatefulSet + persistent volume
-    -> receipt data PVC mounted read-only by Ledger web
+    -> receipt processor CronJob
+    -> product enrichment CronJob template
+    -> shared receipt data and OCR cache PVC
 ```
 
-A fresh PostgreSQL persistent volume automatically receives the canonical schema and category catalogue during initialization.
+The optional `deploy/rabbitmq` overlay changes the receipt CronJob to a
+publisher and adds RabbitMQ plus a receipt-worker Deployment.
+
+A fresh PostgreSQL persistent volume automatically receives the staged schema,
+category catalogue, analytics views, and supporting processing tables during
+initialization.
 
 The PostgreSQL persistent volume is intentionally independent from Argo application synchronization. Running:
 
@@ -688,13 +717,23 @@ make test-all   # unit and integration tests
 Run `make help` to list development, test, and operational targets. See the
 [operations runbook](docs/operations-runbook.md#make-targets) for details.
 
-The test suite covers receipt ingestion/OCR, canonical expense construction, categorization, SQL analytics contracts, transaction reconciliation, receipt deduplication, and the read-only web/query layer.
+Build or preview the online manual locally after installing the documentation
+extra with `python -m pip install -e '.[docs]'`:
+
+```bash
+make docs-build
+make docs-serve
+```
+
+The test suite covers receipt ingestion/OCR, canonical expense construction,
+categorization, SQL analytics contracts, transaction reconciliation, receipt
+deduplication, authenticated web queries, and audited correction workflows.
 
 ---
 
-## 14. Current Design Direction
+## 14. Design Boundaries
 
-The intended progression is:
+The data flow is:
 
 ```text
 receipt ingestion
@@ -707,7 +746,10 @@ receipt ingestion
     -> Ledger web UI
 ```
 
-The immediate web goal is reliable read-only inspection of canonical expenses, evidence, analytics, and review queues before write-capable review workflows are introduced.
+Ledger provides receipt-first inspection with narrowly scoped, authenticated,
+and audited correction workflows. Canonical expenses remain the financial
+record, receipt artifacts remain evidence, and payment accounts remain separate
+from budget categories.
 
 ---
 

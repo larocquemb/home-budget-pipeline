@@ -1,12 +1,21 @@
 # BrownRook Ledger user guide
 
-BrownRook Ledger is a read-only view of canonical household expenses, their
-line items, and the receipt evidence used to create them. Sign in through the
-normal Ledger URL and start from the dashboard.
+BrownRook Ledger is an authenticated, receipt-first workspace for reviewing
+canonical household expenses, their line items, and the evidence used to create
+them. Sign in through the normal Ledger URL and start from **Receipts** or the
+accounting and review dashboard.
 
 ## Recommended review order
 
-### 1. Extraction audit
+### 1. Receipts
+
+**Receipts** is the default landing page. It lists each discovered source file
+with its merchant, transaction time, total, processing state, and extraction
+state. Open a receipt to review the source document beside extracted text,
+canonical line items, and accepted product-enrichment evidence. Use the link to
+the accounting and review dashboard for cross-receipt reports and corrections.
+
+### 2. Extraction audit
 
 Open **Extraction audit** first. The report defaults to receipts with four or
 fewer canonical line items, which are the most likely to have incomplete OCR
@@ -31,13 +40,13 @@ For each row:
 Raise **Maximum items** to broaden the audit after the lowest-count receipts
 have been checked.
 
-### 2. Review queue
+### 3. Review queue
 
 Open **Review queue** for canonical expenses with extraction, reconciliation,
 or data-quality concerns. Use the expense link to inspect its items and linked
 receipt evidence.
 
-### 3. Expenses
+### 4. Expenses
 
 **Expenses** lists canonical purchases, not individual items. Filter by source,
 merchant, or review state. Opening an expense shows:
@@ -46,19 +55,32 @@ merchant, or review state. Opening an expense shows:
 - canonical line items and category decisions;
 - linked receipt evidence and the original document.
 
-### 4. Receipt processing
+From an expense, you can save an additional item description or merchant
+product URL. You can also save a category override. An override creates or
+updates an approved exact-match rule for the same source and merchant, applies
+it to matching imported items, and records the authenticated user in the audit
+history.
+
+### 5. Category rules
+
+Use **Category rules** to create, change, disable, and search approved matching
+rules. A rule can be scoped by source and merchant, use exact or contains
+matching, and set its priority. Saving an active rule immediately applies it to
+matching imported items and records the change in the rule audit history.
+
+### 6. Receipt processing
 
 Use **Receipt processing** to answer whether a source file was discovered,
 attempted, completed, marked for review, or failed. A successful processor run
 may still contain `review_required` receipts.
 
-### 5. Duplicates
+### 7. Duplicates
 
 Use **Duplicates** to inspect evidence records that may describe the same
 purchase. Do not infer that two similar scans are separate purchases until the
 canonical expense links and receipt details have been checked.
 
-### 6. Category spend and transactions
+### 8. Category spend and transactions
 
 Use **Category spend** after line-item categorization is sufficiently complete.
 Use **Transactions** to inspect matches between canonical expenses and imported
@@ -71,8 +93,11 @@ financial transactions.
 - `unreadable`: useful receipt data could not be extracted.
 - `succeeded`: backlog processing completed without an application error.
 - `review_required`: processing completed, but the receipt needs review.
-- `failed`: processing raised an error and remains eligible for retry.
+- `failed`: processing raised an error; it retries until its attempt budget is
+  exhausted, after which an operator can reset it with `brownrook receipts retry`
+  once the underlying problem is fixed.
 
-The web application is currently read-only. Corrections and category changes
-must use the supported command-line/database workflows until write-capable
-review controls are added.
+Write controls are limited to category overrides, category-rule management, and
+item description/product-link corrections. Read queries use read-only database
+transactions; supported changes use explicit transactions and retain the
+authenticated actor in audit records.

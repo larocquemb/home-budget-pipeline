@@ -291,6 +291,12 @@ kubectl -n home-budget scale deployment ledger-web --replicas=0
 kubectl -n home-budget delete jobs -l app=receipt-processor
 ```
 
+If the RabbitMQ overlay is active, also stop its receipt consumer:
+
+```bash
+kubectl -n home-budget scale deployment receipt-worker --replicas=0
+```
+
 After no pods reference the PVC, a previously requested PVC deletion can
 complete. Because the static PV uses `Retain`, the SMB files remain on the
 backing share. Once the old PV/PVC Kubernetes objects are gone, Argo CD can
@@ -307,10 +313,13 @@ kubectl -n home-budget patch cronjob receipt-processor \
   --type merge -p '{"spec":{"suspend":false}}'
 ```
 
+If the RabbitMQ overlay is active, restore `receipt-worker` to its previous
+replica count after the PVC is bound.
+
 Avoid manually removing PV/PVC protection finalizers while workloads still
 reference the volume.
 
-## 8. Receipt processor CronJob is Degraded
+## 8. Receipt processor or publisher CronJob is Degraded
 
 Argo CD can be `Synced` but `Degraded` solely because the receipt processor is
 unhealthy:
@@ -334,8 +343,11 @@ kubectl -n home-budget create job \
 kubectl -n home-budget logs job/receipt-processor-manual
 ```
 
-A healthy run should report `failed: 0`. `review_required` is not an
-infrastructure failure; it means those receipts require data-quality review.
+In the base deployment, a healthy run reports `failed: 0`; `review_required` is
+a data-quality outcome. With the RabbitMQ overlay, the CronJob reports
+`published`, `skipped`, and `exhausted`. Confirm the worker Deployment is ready,
+then inspect `receipt-worker` logs and the work/retry/dead queues before treating
+a successful publication as completed processing.
 
 After a successful Job, verify Argo health:
 
@@ -361,7 +373,8 @@ When several failures occur together, recover in dependency order:
 4. Restore PostgreSQL and confirm the Service endpoint.
 5. Complete the PreSync schema hook.
 6. Verify the SMB receipt PV/PVC are `Bound`.
-7. Restore `ledger-web` and the receipt CronJob.
+7. Restore `ledger-web`, the receipt CronJob, and `receipt-worker` when the
+   RabbitMQ overlay is active.
 8. Run one manual receipt-processing Job.
 9. Require `failed: 0` and `Synced / Healthy` before declaring recovery complete.
 
