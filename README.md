@@ -77,6 +77,11 @@ directory recursively and accepts PDF, JPEG, PNG, HEIC/HEIF, and TIFF files.
 Configure PostgreSQL with `DATABASE_URL` and optionally set
 `HOME_BUDGET_OCR_CACHE`.
 
+For Mac development, `.env.dev` sets `HOME_BUDGET_OCR_CACHE` to the repository's
+local `.ocr_cache` directory. K3s uses `/data/receipts/derived/ocr-cache` on its
+PV. Load `.env.dev` before running the local CLI so development and deployment
+keep separate OCR caches, even when their source receipts are on the same share.
+
 The primary command-line program is `ledger`, matching the web application.
 The previous `brownrook` name remains installed as a compatibility alias for
 existing scripts. After pulling this change into an existing virtual

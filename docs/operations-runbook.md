@@ -86,6 +86,12 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make dev-db-reset` | Rebuild the local development database configured in `.env.dev`. |
 | `make status` | Report deployment and recent workflow status. |
 | `make enrich-products` | Start and follow a one-off Kubernetes product-enrichment job. |
+| `make deploy-k3s` | Apply PostgreSQL credentials and the OCR cache path from `.env.k3s`, then sync the Argo CD application. Matching settings are reused. |
+| `make k3s-config-check` | Validate the K3s OCR cache setting in `.env.k3s` without cluster access. |
+| `make k3s-config-apply` | Update `receipt-runtime-config` from `.env.k3s` and restart Deployment clients when the cache path changes. |
+| `make postgres-config-check` | Validate PostgreSQL deployment settings in `.env.k3s` without cluster access. |
+| `make postgres-config-apply` | Provision `postgres-secret` from `.env.k3s` for a new deployment. |
+| `make postgres-password-rotate` | Rotate an existing database password and Secret, verify authentication, and restart database clients. |
 
 The `test-db*` targets destroy and recreate schemas only in `TEST_DB`, which
 defaults to `home_budget_test`. `make test-receipts` also recreates
@@ -177,6 +183,14 @@ PostgreSQL volume still receives the latest bootstrap files. The versioned
 PreSync migration image remains tied to the application deployment.
 
 ## Argo CD deployment
+
+Argo CD owns application deployments and workload restarts. `make deploy-k3s`
+provisions the local environment's PostgreSQL Secret and OCR ConfigMap, then
+requests an Argo CD sync. Configuration changes that need fresh pods use Argo CD
+Deployment restart actions. The helpers do not apply workload manifests or run
+`kubectl rollout restart`. They require an Argo CD login and permission to run
+the application's restart actions. `ARGO_APP` and `ARGO_SERVER` configure both
+sync and restart operations.
 
 Open the private Argo CD UI at
 `https://argocd.brownrook.net/applications/ledger`. For CLI operations, log in

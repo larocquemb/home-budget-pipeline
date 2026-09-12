@@ -28,10 +28,14 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
         env = {entry["name"]: entry for entry in container["env"]}
         assert env["RABBITMQ_URL"]["valueFrom"]["secretKeyRef"]["name"] == "rabbitmq-secret"
         assert env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] == "postgres-secret"
+        assert env["HOME_BUDGET_OCR_CACHE"]["valueFrom"]["configMapKeyRef"] == {
+            "name": "receipt-runtime-config", "key": "HOME_BUDGET_OCR_CACHE",
+        }
     broker = resources["StatefulSet", "rabbitmq"]["spec"]
     assert broker["replicas"] == 1
     assert broker["volumeClaimTemplates"][0]["metadata"]["name"] == "rabbitmq-data"
     assert ("Secret", "rabbitmq-secret") not in resources
+    assert ("ConfigMap", "receipt-runtime-config") not in resources
 
 
 def test_default_deployment_remains_local_and_ci_exercises_live_broker():

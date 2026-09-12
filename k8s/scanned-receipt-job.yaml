@@ -21,10 +21,15 @@ spec:
             - --workers
             - "2"
             - --ocr-cache
-            - /data/receipts/derived/ocr-cache
+            - $(HOME_BUDGET_OCR_CACHE)
             - --json
             - /data/receipts/derived/k3s-scanned-receipts.json
           env:
+            - name: HOME_BUDGET_OCR_CACHE
+              valueFrom:
+                configMapKeyRef:
+                  name: receipt-runtime-config
+                  key: HOME_BUDGET_OCR_CACHE
             - name: HOME_BUDGET_DATA_ROOT
               value: /data
           volumeMounts:
