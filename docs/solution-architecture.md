@@ -7,28 +7,23 @@ on shared storage; RabbitMQ carries work references only.
 
 ## Runtime components and data flow
 
+### Authenticated web access
+
 ```mermaid
-flowchart LR
+flowchart TB
     publicUser[Public Ledger user]
     privateUser[Corporate LAN user]
     entra[Microsoft Entra ID]
-    publicEdge[Public NGINX and Traefik]
-    privateEdge[Private Traefik entry point]
+    publicEdge[Public NGINX to Traefik]
+    privateEdge[Private DNS to Traefik]
 
     subgraph cluster[K3s home-budget namespace]
         publicOauth[Public OAuth2 Proxy]
         privateOauth[Private OAuth2 Proxy]
         web[Ledger web application]
-        cron[Receipt processor CronJob]
-        publisher[Receipt publisher]
-        rabbit[(RabbitMQ work, retry, and dead queues)]
-        worker[Receipt worker]
-        enrich[Product enrichment job]
         db[(PostgreSQL)]
         files[(Shared receipt files and OCR cache)]
     end
-
-    sources[Scans, PDFs, and electronic receipt sources] --> files
 
     publicUser -->|idc.brownrook.com/ledger| publicEdge --> publicOauth
     privateUser -->|ledger.brownrook.net/ledger| privateEdge --> privateOauth
@@ -38,19 +33,39 @@ flowchart LR
     privateOauth -->|authenticated identity| web
     web -->|read reports and audited corrections| db
     web -->|receipt preview| files
+```
 
-    files --> cron
-    cron -->|base deployment: discover, OCR, normalize| db
+Public and private browser routes use separate OAuth2 Proxy deployments because
+their callback hosts and secure cookies differ. Both enforce the same Microsoft
+Entra tenant and access policy.
 
-    files --> publisher
-    publisher -->|optional queued deployment: confirmed v1 message| rabbit
+### Receipt processing
+
+```mermaid
+flowchart TB
+    sources[Scans, PDFs, and electronic receipts]
+    files[(Shared receipt files and OCR cache)]
+    mode{Deployment mode}
+    cron[Receipt processor CronJob]
+    publisher[Receipt publisher]
+    rabbit[(RabbitMQ work, retry, and dead queues)]
+    worker[Receipt worker]
+    db[(PostgreSQL system of record)]
+    enrich[Product enrichment job]
+    providers[Brave Search and optional OpenAI]
+
+    sources --> files --> mode
+    mode -->|base| cron
+    cron -->|discover, OCR, normalize, persist| db
+    mode -->|queued| publisher
+    publisher -->|confirmed v1 message| rabbit
     rabbit -->|manual-ACK delivery| worker
     worker -->|read and verify source| files
     worker -->|OCR, normalize, reconcile, persist| db
     worker -->|transient retry or terminal failure| rabbit
-
-    enrich -->|read items and save accepted evidence| db
-    enrich -->|product search; optional query expansion| providers[Brave Search and optional OpenAI]
+    db -->|pending items| enrich
+    enrich -->|accepted product evidence| db
+    enrich -->|search and optional query expansion| providers
 ```
 
 The base Kubernetes deployment runs receipt discovery and processing in one

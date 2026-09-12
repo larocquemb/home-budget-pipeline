@@ -6,12 +6,33 @@ is required on both public and private browser routes.
 
 ## Network boundaries
 
-| Scope | Address | Exposure and authentication |
-| --- | --- | --- |
-| Mac development | `https://ledger-dev.brownrook.net/ledger` | Resolves to `127.0.0.1`; Caddy listens only on loopback and sends users through Microsoft Entra ID. |
-| Public K3s | `https://idc.brownrook.com/ledger` | Public edge TLS and Microsoft Entra ID through the public OAuth2 Proxy. |
-| Corporate K3s | `*.brownrook.net` | Private DNS on `192.168.2.0/24`; Traefik at `192.168.2.240`, private TLS, and authentication protect browser services. |
-| Kubernetes services | `*.home-budget.svc.cluster.local` | Cluster-internal application, PostgreSQL, and RabbitMQ traffic. |
+**Mac development**
+
+Address: `https://ledger-dev.brownrook.net/ledger`
+
+The name resolves to `127.0.0.1`. Caddy listens only on loopback and sends users
+through Microsoft Entra ID.
+
+**Public K3s**
+
+Address: `https://idc.brownrook.com/ledger`
+
+The public edge terminates TLS and sends users through Microsoft Entra ID using
+the public OAuth2 Proxy.
+
+**Corporate K3s**
+
+Address pattern: `*.brownrook.net`
+
+Private DNS serves `192.168.2.0/24`. Traefik listens at `192.168.2.240`; private
+TLS and authentication protect browser services.
+
+**Kubernetes services**
+
+Address pattern: `*.home-budget.svc.cluster.local`
+
+These names carry cluster-internal application, PostgreSQL, and RabbitMQ
+traffic.
 
 Private DNS is one part of the access boundary. Traefik's LoadBalancer address
 is private, and the public reverse proxy must forward only explicitly configured
