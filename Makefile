@@ -12,10 +12,11 @@ ARGO_SERVER ?= argocd.brownrook.net
 export ARGO_APP ARGO_SERVER
 ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 
-.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply
+.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
+	@echo "Local logs:  dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down"
 	@echo "Documentation: docs-build docs-serve"
 	@echo "Tests:       test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
 	@echo "Operations:  status enrich-products"
@@ -76,6 +77,24 @@ dev-cert-install:
 		caddy:/data/caddy/pki/authorities/local/root.crt .dev-certs/caddy-root.crt
 	sudo security add-trusted-cert -d -r trustRoot \
 		-k /Library/Keychains/System.keychain .dev-certs/caddy-root.crt
+
+dev-logging-up:
+	@./scripts/local_logging_up.sh
+
+dev-logging-test:
+	@./scripts/local_logging_test.sh
+
+dev-logging-status:
+	@kubectl --context kind-home-budget-logging -n home-budget get pods
+	@./scripts/docker_compose.sh -p home-budget-local-logging \
+		-f deploy/local-logging/compose.yaml ps
+
+dev-logging-logs:
+	./scripts/docker_compose.sh -p home-budget-local-logging \
+		-f deploy/local-logging/compose.yaml logs -f alloy loki grafana
+
+dev-logging-down:
+	@./scripts/local_logging_down.sh
 
 enrich-products:
 	@set -eu; \

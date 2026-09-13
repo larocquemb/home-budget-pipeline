@@ -1,0 +1,104 @@
+// Local Method B test: Alloy runs in Docker but outside the Kind cluster.
+discovery.kubernetes "home_budget_pods" {
+  role            = "pod"
+  kubeconfig_file = "/etc/alloy/home-budget.kubeconfig"
+
+  namespaces {
+    names = ["home-budget"]
+  }
+}
+
+discovery.relabel "home_budget_pods" {
+  targets = discovery.kubernetes.home_budget_pods.targets
+
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    action        = "replace"
+    target_label  = "namespace"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    action        = "replace"
+    target_label  = "pod"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_container_name"]
+    action        = "replace"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_node_name"]
+    action        = "replace"
+    target_label  = "node"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app"]
+    action        = "replace"
+    target_label  = "app"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_container_name"]
+    action        = "replace"
+    separator     = "/"
+    target_label  = "job"
+  }
+}
+
+loki.source.kubernetes "home_budget" {
+  targets    = discovery.relabel.home_budget_pods.output
+  forward_to = [loki.process.home_budget.receiver]
+
+  client {
+    kubeconfig_file = "/etc/alloy/home-budget.kubeconfig"
+  }
+}
+
+loki.process "home_budget" {
+  stage.decolorize {}
+
+  stage.static_labels {
+    values = {
+      cluster     = "kind-home-budget-logging",
+      environment = "local",
+      collection  = "kubernetes-api",
+    }
+  }
+
+  stage.replace {
+    expression = `(?i)postgres(ql)?://[^\s"']+`
+    replace    = "postgresql://[REDACTED]"
+  }
+
+  stage.replace {
+    expression = `(?i)(api[_-]?key|token|password)\s*[=:]\s*[^\s,;]+`
+    replace    = "[REDACTED_CREDENTIAL]"
+  }
+
+  stage.replace {
+    expression = `(?i)bearer\s+[^\s,;]+`
+    replace    = "Bearer [REDACTED]"
+  }
+
+  forward_to = [loki.write.local_tls.receiver]
+}
+
+loki.write "local_tls" {
+  endpoint {
+    url = "https://loki:3100/loki/api/v1/push"
+
+    tls_config {
+      ca_file     = "/etc/alloy/tls/ca.crt"
+      server_name = "loki"
+      min_version = "TLS12"
+    }
+  }
+
+  wal {
+    enabled = true
+  }
+}

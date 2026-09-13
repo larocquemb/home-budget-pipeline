@@ -1,0 +1,112 @@
+// Method B: collect only home-budget Pod logs through the Kubernetes API.
+// The kubeconfig contains a dedicated, namespace-scoped service-account token
+// and the K3s API CA. It must be mode 0640 and readable only by root:alloy.
+discovery.kubernetes "home_budget_pods" {
+  role            = "pod"
+  kubeconfig_file = "/etc/alloy/home-budget.kubeconfig"
+
+  namespaces {
+    names = ["home-budget"]
+  }
+}
+
+// Promote only bounded Kubernetes identity fields to Loki labels. Arbitrary
+// Pod labels and annotations are deliberately not copied.
+discovery.relabel "home_budget_pods" {
+  targets = discovery.kubernetes.home_budget_pods.targets
+
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    action        = "replace"
+    target_label  = "namespace"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    action        = "replace"
+    target_label  = "pod"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_container_name"]
+    action        = "replace"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_node_name"]
+    action        = "replace"
+    target_label  = "node"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app"]
+    action        = "replace"
+    target_label  = "app"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_container_name"]
+    action        = "replace"
+    separator     = "/"
+    target_label  = "job"
+  }
+}
+
+loki.source.kubernetes "home_budget" {
+  targets    = discovery.relabel.home_budget_pods.output
+  forward_to = [loki.process.home_budget.receiver]
+
+  client {
+    kubeconfig_file = "/etc/alloy/home-budget.kubeconfig"
+  }
+}
+
+loki.process "home_budget" {
+  stage.decolorize {}
+
+  stage.static_labels {
+    values = {
+      cluster     = "brownrook-k3s1",
+      environment = "production",
+      collection  = "kubernetes-api",
+    }
+  }
+
+  // Defense in depth. Applications remain responsible for never logging
+  // credentials or personal information.
+  stage.replace {
+    expression = `(?i)postgres(ql)?://[^\s"']+`
+    replace    = "postgresql://[REDACTED]"
+  }
+
+  stage.replace {
+    expression = `(?i)(api[_-]?key|token|password)\s*[=:]\s*[^\s,;]+`
+    replace    = "[REDACTED_CREDENTIAL]"
+  }
+
+  stage.replace {
+    expression = `(?i)bearer\s+[^\s,;]+`
+    replace    = "Bearer [REDACTED]"
+  }
+
+  forward_to = [loki.write.monitoring_tls.receiver]
+}
+
+loki.write "monitoring_tls" {
+  endpoint {
+    // Loki runs on the external monitoring host. The connection remains on
+    // loopback but still validates its dedicated server certificate.
+    url = "https://127.0.0.1:3100/loki/api/v1/push"
+
+    tls_config {
+      ca_file     = "/etc/alloy/brown-rook-root-ca.crt"
+      server_name = "monitoring.idc.brownrook.net"
+      min_version = "TLS12"
+    }
+  }
+
+  wal {
+    enabled = true
+  }
+}

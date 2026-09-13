@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: external-log-reader
+  namespace: home-budget
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: external-log-reader
+  namespace: home-budget
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: external-log-reader
+  namespace: home-budget
+subjects:
+  - kind: ServiceAccount
+    name: external-log-reader
+    namespace: home-budget
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: external-log-reader

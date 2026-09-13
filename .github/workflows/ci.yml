@@ -35,6 +35,42 @@ jobs:
       - name: Run unit tests
         run: python -m pytest -v -m "not integration"
 
+      - name: Validate external Alloy configuration
+        run: |
+          mkdir -p "$RUNNER_TEMP/alloy"
+          cp deploy/external-logging/config.alloy "$RUNNER_TEMP/alloy/config.alloy"
+          cp deploy/local-logging/config.local.alloy "$RUNNER_TEMP/alloy/config.local.alloy"
+          cp /etc/ssl/certs/ca-certificates.crt "$RUNNER_TEMP/alloy/brown-rook-root-ca.crt"
+          cp /etc/ssl/certs/ca-certificates.crt "$RUNNER_TEMP/alloy/ca.crt"
+          cat > "$RUNNER_TEMP/alloy/home-budget.kubeconfig" <<'EOF'
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - name: validation
+              cluster:
+                insecure-skip-tls-verify: true
+                server: https://kubernetes.invalid
+          users:
+            - name: validation
+              user:
+                token: validation-only
+          contexts:
+            - name: validation
+              context:
+                cluster: validation
+                namespace: home-budget
+                user: validation
+          current-context: validation
+          EOF
+          docker run --rm \
+            --mount type=bind,source="$RUNNER_TEMP/alloy",target=/etc/alloy,readonly \
+            grafana/alloy:v1.19.0 \
+            validate /etc/alloy/config.alloy
+          docker run --rm \
+            --mount type=bind,source="$RUNNER_TEMP/alloy",target=/etc/alloy,readonly \
+            grafana/alloy:v1.19.0 \
+            validate /etc/alloy/config.local.alloy
+
   postgres-integration:
     runs-on: ubuntu-latest
 

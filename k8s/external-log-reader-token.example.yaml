@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: external-log-reader-token
+  namespace: home-budget
+  annotations:
+    kubernetes.io/service-account.name: external-log-reader
+type: kubernetes.io/service-account-token

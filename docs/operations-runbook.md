@@ -107,6 +107,12 @@ For private-LAN deployments, select either `deploy/private-lan` or
 Traefik, and firewall prerequisites in the
 [network access guide](private-networking.md).
 
+Kubernetes logs are initially collected with the external Method B collector:
+namespace-scoped API access from Alloy on `monitoring.idc.brownrook.net`, then
+verified TLS delivery to the existing Loki service. Fluent Bit remains deferred.
+See [Kubernetes log forwarding](log-forwarding.md) for credential provisioning,
+TLS setup, rollout, validation, rotation, and rollback procedures.
+
 ## Commit and pull request
 
 ```bash

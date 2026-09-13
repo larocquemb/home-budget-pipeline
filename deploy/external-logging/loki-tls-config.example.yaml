@@ -1,0 +1,9 @@
+# Merge this block into /etc/loki/config.yml on monitoring.idc.brownrook.net.
+# Keep Loki on loopback; Alloy and Grafana run on the same external host.
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: 3100
+  tls_min_version: VersionTLS12
+  http_tls_config:
+    cert_file: /etc/monitoring/tls/monitoring.fullchain.crt
+    key_file: /etc/monitoring/tls/monitoring.key

@@ -12,6 +12,7 @@ resources:
   - ledger-ingress.yaml
   - receipt-processor-cronjob.yaml
   - product-enrichment-cronjob.yaml
+  - external-log-reader-rbac.yaml
 
 images:
   - name: ghcr.io/larocquemb/home-budget-pipeline
