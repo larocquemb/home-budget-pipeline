@@ -1,0 +1,57 @@
+services:
+  loki:
+    image: grafana/loki:3.7.7
+    # The local key is mode 0600 on macOS, so this disposable service starts as
+    # root solely to read its bind-mounted development key.
+    user: "0"
+    command:
+      - -config.file=/etc/loki/config.yaml
+    ports:
+      - "127.0.0.1:13100:3100"
+    volumes:
+      - ./loki.yaml:/etc/loki/config.yaml:ro
+      - ../../.local-logging/tls:/etc/loki/tls:ro
+    tmpfs:
+      - /loki:mode=1777
+
+  alloy:
+    image: grafana/alloy:v1.19.0
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports:
+      - "127.0.0.1:12345:12345"
+    volumes:
+      - ./config.local.alloy:/etc/alloy/config.alloy:ro
+      - ../../.local-logging/home-budget.kubeconfig:/etc/alloy/home-budget.kubeconfig:ro
+      - ../../.local-logging/tls:/etc/alloy/tls:ro
+    tmpfs:
+      - /var/lib/alloy:mode=1777
+    depends_on:
+      - loki
+    networks:
+      - default
+      - kind
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: local-only
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:13000:3000"
+    volumes:
+      - ./grafana-datasource.yaml:/etc/grafana/provisioning/datasources/local-loki.yaml:ro
+      - ../../.local-logging/tls/ca.crt:/etc/ssl/certs/home-budget-local-ca.crt:ro
+    tmpfs:
+      - /var/lib/grafana:mode=1777
+    depends_on:
+      - loki
+
+networks:
+  kind:
+    name: kind
+    external: true
