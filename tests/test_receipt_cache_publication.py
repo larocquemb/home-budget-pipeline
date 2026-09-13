@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -86,5 +87,13 @@ def test_publisher_passes_configured_cache_and_reprocess_message_type(completed_
     assert queue.run(args) == 0
     publication = broker.channel.return_value.basic_publish.call_args.kwargs
     assert publication["properties"].type == "receipt.reprocess.v2"
-    assert '"cache_missing": 1' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert len(output.splitlines()) == 1
+    assert json.loads(output) == {
+        "discovered": 1,
+        "skipped": 0,
+        "exhausted": 0,
+        "cache_missing": 1,
+        "published": 1,
+    }
     conn.close.assert_called_once()
