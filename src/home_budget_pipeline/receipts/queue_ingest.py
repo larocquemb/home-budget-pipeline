@@ -21,6 +21,11 @@ from .parallel_ingest import has_ocr_cache
 LOG = logging.getLogger(__name__)
 
 
+def _print_json(payload: object) -> None:
+    """Emit one JSON object per stdout line for container log collectors."""
+    print(json.dumps(payload, sort_keys=True), flush=True)
+
+
 @dataclass(frozen=True)
 class Topology:
     prefix: str = "receipts.v1"
@@ -200,13 +205,13 @@ def publish_reprocess(args) -> int:
         print(f"Cannot queue reprocess request {request_id}: {detail}", file=sys.stderr)
         print(f"If publication was uncertain, retry with --request-id {request_id}.", file=sys.stderr)
         return 1
-    print(json.dumps({
+    _print_json({
         "source_reference": message.source_reference,
         "source_sha256": message.source_sha256,
         "request_id": request_id,
         "queue": topology.work,
         "status": "queued",
-    }, indent=2))
+    })
     return 0
 
 
@@ -254,8 +259,8 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
         print(f"Cannot finish batch {batch_id}: {detail}; {published} publication(s) confirmed.", file=sys.stderr)
         print(f"Retry with --request-id {batch_id} to reuse these requests.", file=sys.stderr)
         return 1
-    print(json.dumps({"discovered": len(paths), "published": published, "request_id": batch_id,
-                      "queue": topology.work, "status": "queued"}, indent=2))
+    _print_json({"discovered": len(paths), "published": published, "request_id": batch_id,
+                 "queue": topology.work, "status": "queued"})
     return 0 if paths else 2
 
 
@@ -422,7 +427,7 @@ def run(args) -> int:
                 )
                 if getattr(args, "verbose", False):
                     print(f"[{index}/{len(messages)}] Queued {message.source_reference}", file=sys.stderr, flush=True)
-            print(json.dumps(summary, indent=2))
+            _print_json(summary)
         else:
             stop = Event()
             previous = {sig: signal.signal(sig, lambda signum, frame: stop.set()) for sig in (signal.SIGINT, signal.SIGTERM)}
