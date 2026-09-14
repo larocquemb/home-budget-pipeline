@@ -39,6 +39,10 @@ dev = [
 docs = [
     "mkdocs-material>=9.6,<10",
 ]
+ops = [
+    "ansible-core>=2.19,<2.22",
+    "paramiko>=4,<6",
+]
 db = [
     "psycopg[binary]>=3.2",
 ]

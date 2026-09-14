@@ -1,0 +1,35 @@
+---
+monitoring_repo_root: "{{ playbook_dir | dirname | dirname }}"
+
+# Secret inputs are resolved on the controller and are never copied into Git.
+monitoring_pki_dir: "{{ lookup('ansible.builtin.env', 'MONITORING_PKI_DIR') }}"
+monitoring_alloy_kubeconfig: >-
+  {{ lookup('ansible.builtin.env', 'MONITORING_ALLOY_KUBECONFIG') }}
+monitoring_admin_kubeconfig: >-
+  {{ lookup('ansible.builtin.env', 'MONITORING_ADMIN_KUBECONFIG') }}
+monitoring_grafana_admin_user: >-
+  {{ lookup('ansible.builtin.env', 'MONITORING_GRAFANA_ADMIN_USER') | default('admin', true) }}
+monitoring_grafana_admin_password: >-
+  {{ lookup('ansible.builtin.env', 'MONITORING_GRAFANA_ADMIN_PASSWORD') }}
+
+monitoring_root_ca_source: "{{ monitoring_pki_dir }}/root/root_ca.crt"
+monitoring_intermediate_ca_source: "{{ monitoring_pki_dir }}/intermediate/intermediate_ca.crt"
+monitoring_server_cert_source: "{{ monitoring_pki_dir }}/leafs/monitoring/monitoring.fullchain.crt"
+monitoring_server_key_source: "{{ monitoring_pki_dir }}/leafs/monitoring/monitoring.key"
+monitoring_alloy_cert_source: >-
+  {{ monitoring_pki_dir }}/leafs/alloy-loki-client/alloy-loki-client.fullchain.crt
+monitoring_alloy_key_source: >-
+  {{ monitoring_pki_dir }}/leafs/alloy-loki-client/alloy-loki-client.key
+monitoring_grafana_cert_source: >-
+  {{ monitoring_pki_dir }}/leafs/grafana-loki-client/grafana-loki-client.fullchain.crt
+monitoring_grafana_key_source: >-
+  {{ monitoring_pki_dir }}/leafs/grafana-loki-client/grafana-loki-client.key
+monitoring_fluent_bit_cert_source: >-
+  {{ monitoring_pki_dir }}/leafs/fluent-bit-loki-client/fluent-bit-loki-client.fullchain.crt
+monitoring_fluent_bit_key_source: >-
+  {{ monitoring_pki_dir }}/leafs/fluent-bit-loki-client/fluent-bit-loki-client.key
+
+monitoring_loki_config_path: /etc/loki/config.yml
+monitoring_tls_dir: /etc/monitoring/tls
+monitoring_alloy_dir: /etc/alloy
+monitoring_grafana_secret_marker: /var/lib/grafana/.home-budget-loki-datasource.sha256

@@ -160,6 +160,43 @@ Node root access is still materially stronger than Method B: the DaemonSet reads
 `/var/lib/home-budget/fluent-bit`. That privilege is why Method A is limited to
 BrownRook-managed clusters.
 
+## Git-controlled production reconciliation
+
+The production commands are captured in `ops/monitoring` as an idempotent
+Ansible playbook. Git holds the Loki and nftables templates, the exact Alloy
+configuration, the Grafana datasource shape, the Kubernetes Secret shape, and
+the rollout stage. Private keys, kubeconfigs, Grafana credentials, and CA
+signing keys are external inputs and are never rendered into the repository or
+Ansible output.
+
+This is a Git-controlled push workflow rather than a continuously running pull
+controller for the Debian monitoring host. `check` detects drift and `apply`
+reconciles it; Argo CD continues to own Kubernetes workload manifests. Prepare
+the ignored environment file, validate, inspect the remote diff, and apply:
+
+```sh
+cp ops/monitoring/env.example .env.monitoring
+chmod 0600 .env.monitoring
+python -m pip install -e '.[ops]'
+
+make monitoring-gitops-syntax
+make monitoring-gitops-check
+make monitoring-gitops-apply
+```
+
+The committed `optional` stage exactly describes the current safe checkpoint:
+Loki remains on loopback with `VerifyClientCertIfGiven`, while Alloy and Grafana
+already use their dedicated identities. The playbook also reconciles the
+Fluent Bit TLS Secret with a controller-only Kubernetes credential. Switching
+`monitoring_loki_stage` to `enforced` is a reviewed Git change that binds Loki
+to the LAN listener and selects `RequireAndVerifyClientCert`; do that only as
+part of the Fluent Bit overlay rollout.
+
+The full input contract, ordering, idempotency behavior, and rollback are in
+the [monitoring automation README](https://github.com/larocquemb/home-budget-pipeline/tree/main/ops/monitoring).
+The command-by-command sections below remain the certificate-ceremony and
+emergency-recovery reference; the playbook is the normal repeatable path.
+
 ## Deploy the Kubernetes access policy
 
 The base Kustomization includes
@@ -220,12 +257,13 @@ kubectl --kubeconfig .monitoring/home-budget.kubeconfig auth can-i get secrets
 The last command must report `no`. Files ending in `.kubeconfig` are ignored by
 Git.
 
-## Prepare TLS and client identities on the monitoring host
+## Manual reference: prepare TLS and client identities
 
 Issue the dedicated server leaf certificate from the Brown Rook intermediate
 CA. Its SANs should include `monitoring.idc.brownrook.net` and
-`grafana.idc.brownrook.net`. Keep `monitoring.key` on the monitoring host and
-copy only the signed full chain back to it.
+`grafana.idc.brownrook.net`. Keep `monitoring.key` only in the protected
+external PKI directory and on the monitoring host; the playbook transfers it
+with `no_log` and installs it as `0640 root:monitoring-tls`.
 
 Issue three separate private-CA client identities with the `clientAuth` extended
 key usage: `alloy-loki-client`, `grafana-loki-client`, and
@@ -274,7 +312,7 @@ sudo install -m 0644 -o root -g root \
 sudo update-ca-certificates
 ```
 
-## Install and configure external Alloy
+## Manual reference: install and configure external Alloy
 
 Install the official package on the Debian monitoring host:
 
@@ -387,9 +425,10 @@ rm -f /tmp/grafana-loki-client.crt /tmp/grafana-loki-client.key
 
 ## Provision and deploy Fluent Bit
 
-Create the in-cluster TLS Secret from the public server CA and the dedicated
-Fluent Bit client identity. The example manifest documents the required keys but
-is deliberately excluded from Kustomize:
+The normal Ansible reconciliation creates the in-cluster TLS Secret from the
+public server CA and dedicated Fluent Bit client identity without logging its
+contents. The example manifest documents the required keys but is deliberately
+excluded from Kustomize. The following command is retained for manual recovery:
 
 ```sh
 kubectl --context brownrook-k3s1 -n home-budget create secret generic \

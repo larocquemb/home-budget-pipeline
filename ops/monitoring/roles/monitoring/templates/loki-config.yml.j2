@@ -1,0 +1,64 @@
+# Managed by ops/monitoring/site.yml. Local edits will be replaced.
+auth_enabled: false
+
+server:
+  http_listen_address: {{ '127.0.0.1' if monitoring_loki_stage == 'optional' else '0.0.0.0' }}
+  http_listen_port: {{ monitoring_loki_port }}
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9096
+  log_level: debug
+  grpc_server_max_concurrent_streams: 1000
+  tls_min_version: VersionTLS12
+  http_tls_config:
+    cert_file: {{ monitoring_tls_dir }}/monitoring.fullchain.crt
+    key_file: {{ monitoring_tls_dir }}/monitoring.key
+    client_auth_type: {{ 'VerifyClientCertIfGiven' if monitoring_loki_stage == 'optional' else 'RequireAndVerifyClientCert' }}
+    client_ca_file: {{ monitoring_tls_dir }}/brown-rook-client-ca.crt
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /tmp/loki
+  storage:
+    filesystem:
+      chunks_directory: /tmp/loki/chunks
+      rules_directory: /tmp/loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+limits_config:
+  # Strict mTLS rejects Loki's unauthenticated metric-aggregation callback.
+  # Keep pattern detection but disable that callback in the enforced stage.
+  metric_aggregation_enabled: {{ 'true' if monitoring_loki_stage == 'optional' else 'false' }}
+  enable_multi_variant_queries: true
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+pattern_ingester:
+  enabled: true
+{% if monitoring_loki_stage == 'optional' %}
+  metric_aggregation:
+    loki_address: localhost:{{ monitoring_loki_port }}
+{% endif %}
+
+ruler:
+  alertmanager_url: http://localhost:9093
+
+frontend:
+  encoding: protobuf

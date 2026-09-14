@@ -1,0 +1,23 @@
+---
+- name: Update operating-system CA trust
+  ansible.builtin.command: /usr/sbin/update-ca-certificates
+  changed_when: true
+  listen: update operating-system CA trust
+
+- name: Restart nftables
+  ansible.builtin.systemd_service:
+    name: nftables
+    state: restarted
+  listen: restart nftables
+
+- name: Restart Loki
+  ansible.builtin.systemd_service:
+    name: loki
+    state: restarted
+  listen: restart Loki
+
+- name: Restart Alloy
+  ansible.builtin.systemd_service:
+    name: alloy
+    state: restarted
+  listen: restart Alloy

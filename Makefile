@@ -11,8 +11,9 @@ ARGO_APP ?= ledger
 ARGO_SERVER ?= argocd.brownrook.net
 export ARGO_APP ARGO_SERVER
 ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
+MONITORING_GITOPS ?= ./scripts/monitoring_gitops.sh
 
-.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply
+.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
@@ -22,6 +23,7 @@ help:
 	@echo "Operations:  status enrich-products"
 	@echo "Deployment:  deploy-k3s k3s-config-check k3s-config-apply (uses .env.k3s)"
 	@echo "PostgreSQL:  postgres-config-check postgres-config-apply postgres-password-rotate"
+	@echo "Monitoring:  monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply"
 
 docs-build:
 	$(MKDOCS) build --strict
@@ -46,6 +48,15 @@ k3s-config-check:
 
 k3s-config-apply:
 	@$(PYTHON) scripts/k3s_runtime_config.py --apply
+
+monitoring-gitops-syntax:
+	@$(MONITORING_GITOPS) syntax
+
+monitoring-gitops-check:
+	@$(MONITORING_GITOPS) check
+
+monitoring-gitops-apply:
+	@$(MONITORING_GITOPS) apply
 
 deploy-k3s: postgres-config-check k3s-config-check
 	@argocd app get "$(ARGO_APP)" --server "$(ARGO_SERVER)" --grpc-web >/dev/null

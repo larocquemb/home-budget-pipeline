@@ -1,0 +1,8 @@
+all:
+  children:
+    monitoring:
+      hosts:
+        monitoring-production:
+          ansible_host: 192.168.2.202
+          ansible_user: paul
+          ansible_connection: paramiko
