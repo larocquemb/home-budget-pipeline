@@ -544,6 +544,8 @@
     url_username: "{{ monitoring_grafana_admin_user }}"
     url_password: "{{ monitoring_grafana_admin_password }}"
     force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
     return_content: true
     status_code: [200, 404]
   register: monitoring_grafana_datasource
@@ -599,6 +601,8 @@
     url_username: "{{ monitoring_grafana_admin_user }}"
     url_password: "{{ monitoring_grafana_admin_password }}"
     force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
     body_format: json
     body: "{{ monitoring_grafana_datasource_payload }}"
     status_code: 200
@@ -615,6 +619,8 @@
     url_username: "{{ monitoring_grafana_admin_user }}"
     url_password: "{{ monitoring_grafana_admin_password }}"
     force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
     body_format: json
     body: "{{ monitoring_grafana_datasource_payload }}"
     status_code: 200
@@ -651,6 +657,8 @@
     url_username: "{{ monitoring_grafana_admin_user }}"
     url_password: "{{ monitoring_grafana_admin_password }}"
     force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
     return_content: true
     status_code: 200
   register: monitoring_grafana_health
