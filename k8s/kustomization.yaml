@@ -16,4 +16,4 @@ resources:
 
 images:
   - name: ghcr.io/larocquemb/home-budget-pipeline
-    newTag: afa43d0400a6ebbeba5c7dc6fdd54297bb0859ae
+    newTag: f37a1d4c697105b57e1092929952fef30f291efe
