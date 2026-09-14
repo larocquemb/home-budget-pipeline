@@ -110,6 +110,7 @@
   become: false
   delegate_to: localhost
   run_once: true
+  check_mode: false
   changed_when: false
   register: monitoring_alloy_permission_checks
   no_log: true
@@ -128,7 +129,6 @@
   become: false
   delegate_to: localhost
   run_once: true
-  no_log: true
 
 - name: Verify controller permission to reconcile the TLS Secret
   ansible.builtin.command:
@@ -151,6 +151,7 @@
   become: false
   delegate_to: localhost
   run_once: true
+  check_mode: false
   changed_when: false
   register: monitoring_admin_permission_checks
   no_log: true
@@ -169,7 +170,6 @@
   become: false
   delegate_to: localhost
   run_once: true
-  no_log: true
 
 - name: Read root CA for the Kubernetes Secret
   ansible.builtin.slurp:
