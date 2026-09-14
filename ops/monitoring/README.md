@@ -16,6 +16,14 @@ configuration:
 - The `fluent-bit-loki-tls` Secret is reconciled from external files, but the
   Fluent Bit overlay remains opt-in.
 
+The role also keeps Loki at `info` log level and installs a journald drop-in
+that caps persistent service logs at 256 MiB, reserves 1 GiB of filesystem
+headroom, bounds individual journal files, and rate-limits bursts. These
+guardrails prevent diagnostic logging from consuming the monitoring LXC's
+memory, storage, and write endurance. Applying the role does not delete
+existing journal history; any `journalctl --vacuum-*` cleanup is a separate,
+explicit operator action.
+
 ## External inputs
 
 Copy the data-free environment example and set absolute paths:
@@ -69,6 +77,19 @@ health are tested. Secret-bearing tasks use Ansible's `no_log` protection.
 
 Running `make monitoring-gitops-check` and then
 `make monitoring-gitops-apply` again should report no configuration drift.
+
+After an apply, verify the effective limits and current footprint without
+printing log contents:
+
+```sh
+ssh paul@192.168.2.202 \
+  'systemd-analyze cat-config systemd/journald.conf | grep -E "^(SystemMaxUse|SystemKeepFree|SystemMaxFileSize|RuntimeMaxUse|MaxRetentionSec|RateLimitIntervalSec|RateLimitBurst)="'
+ssh paul@192.168.2.202 'journalctl --disk-usage'
+```
+
+Reducing an already oversized journal is intentionally not automated because
+it deletes retained operational history. After review, an operator can run
+`sudo journalctl --vacuum-size=256M` on the monitoring host.
 
 ## mTLS stages and rollback
 

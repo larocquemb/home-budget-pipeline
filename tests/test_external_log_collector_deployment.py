@@ -102,3 +102,43 @@ def test_grafana_datasource_template_requires_verified_client_tls():
 
 def test_exported_kubeconfigs_are_ignored():
     assert "*.kubeconfig" in (ROOT / ".gitignore").read_text().splitlines()
+
+
+def test_monitoring_role_bounds_loki_and_journald_output():
+    defaults = yaml.safe_load(
+        (
+            ROOT
+            / "ops/monitoring/roles/monitoring/defaults/main.yml"
+        ).read_text()
+    )
+    loki = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/loki-config.yml.j2"
+    ).read_text()
+    journal = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/journald-monitoring.conf.j2"
+    ).read_text()
+    tasks = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/tasks/main.yml"
+    ).read_text()
+    handlers = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/handlers/main.yml"
+    ).read_text()
+
+    assert defaults["monitoring_loki_log_level"] == "info"
+    assert "log_level: {{ monitoring_loki_log_level }}" in loki
+    assert "log_level: debug" not in loki
+    assert defaults["monitoring_journal_system_max_use"] == "256M"
+    assert defaults["monitoring_journal_runtime_max_use"] == "64M"
+    assert defaults["monitoring_journal_rate_limit_burst"] == 5000
+    assert "SystemMaxUse={{ monitoring_journal_system_max_use }}" in journal
+    assert "SystemKeepFree={{ monitoring_journal_system_keep_free }}" in journal
+    assert "MaxRetentionSec={{ monitoring_journal_max_retention }}" in journal
+    assert "RateLimitBurst={{ monitoring_journal_rate_limit_burst }}" in journal
+    assert "dest: /etc/systemd/journald.conf.d/monitoring-limits.conf" in tasks
+    assert "notify: restart journald" in tasks
+    assert "name: systemd-journald" in handlers
+    assert "listen: restart journald" in handlers
