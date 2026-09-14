@@ -9,10 +9,11 @@ while this page records what was observed.
 ## Status
 
 The production topology, mandatory Loki mTLS, Grafana access, Pod replacement,
-Loki outage, and one collector-restart trial were verified on 2026-09-14. The
-comparison is not final. A live receipt-worker event, multiline traceback,
-Kubernetes API interruption, repeated restart trials, sustained resource use,
-and network use remain to be measured.
+Loki outage, one collector-restart trial, and a live receipt-worker event were
+verified on 2026-09-14. KAN-86 was accepted as complete after both collection
+methods returned the same live application event through Grafana. The broader
+benchmark tests listed below were deliberately deferred and are not required
+for this functional-verification scope.
 
 ## Test environment
 
@@ -46,6 +47,7 @@ is not accepted as a command-line argument or stored in Git.
 | Test | Fluent Bit | Kubernetes API and Alloy | Observation |
 | --- | --- | --- | --- |
 | Initial dual delivery | Probe present | Probe present | Grafana returned both `collection` values |
+| Live receipt-worker event | Exact terminal event present | Exact terminal event present | Both paths returned the same receipt hash and `status=review_required` through Grafana |
 | Application Pod replacement | 46 old-Pod and 50 replacement-Pod records | 46 old-Pod and 50 replacement-Pod records | Exact counts for both Pod identities |
 | Loki outage and recovery | 269/269 unique, no gaps or duplicates | 269/269 unique, no gaps or duplicates | Exact sequence sets matched after recovery |
 | Collector restart | 166/167 unique, sequence 114 missing, no duplicates | 167/167 unique, no gaps or duplicates | One Fluent Bit record gap in this trial |
@@ -130,6 +132,20 @@ temporarily lacked Alloy's final sequence 166, but that record appeared on the
 settled query. The final observation is therefore one Fluent Bit gap and no
 Alloy gaps or duplicates in this single trial.
 
+## Live receipt-worker event
+
+During a real OCR reprocessing run, the worker emitted a terminal event for
+receipt hash
+`0774172aab99fddba9b689b7b62b23db7ac0f23ae263d79c7bcfb8f2227cbc96`
+with `status=review_required`. A Grafana datasource-proxy query filtered on the
+`receipt-worker` container, exact hash, and exact status. Grafana returned the
+same event from Pod `receipt-worker-65888f8744-tf226` in both the `fluent-bit`
+and `kubernetes-api` collections. The API-collected form retained a trailing
+newline; the application message content otherwise matched exactly.
+
+This proves that both paths can carry and search a real application terminal
+event through the user-facing Grafana query path, not only synthetic probes.
+
 ## Security and operational comparison
 
 | Dimension | Fluent Bit node agent | External Alloy API collector |
@@ -153,6 +169,8 @@ certificate rotation for this deployment.
 
 - Both paths deliver useful, bounded Kubernetes metadata and remain searchable
   with application identifiers kept in message content.
+- Both paths returned the same real `receipt-worker` terminal event when
+  filtered by its exact receipt hash and `status=review_required` in Grafana.
 - Both paths recovered an exact record set after the controlled Loki outage.
 - Both paths followed an application Pod replacement without loss in the
   measured window.
@@ -164,19 +182,23 @@ certificate rotation for this deployment.
 - Method B satisfies the stated vendor boundary; Method A does not when
   in-cluster software or node-log access is prohibited.
 
-For BrownRook-managed clusters, the final recommendation remains open pending
-repeated restart, multiline, sustained-load, and API-interruption results. For
-vendor-managed clusters that prohibit agents, the Kubernetes API path is the
-only tested design that satisfies the installation boundary, subject to the
-vendor providing the required API access and retention behavior.
+Both methods are operationally viable for BrownRook-managed clusters based on
+the functional checks in this comparison. This story does not select one as
+the preferred managed-cluster collector because the deferred benchmark work is
+needed for that decision. For vendor-managed clusters that prohibit agents,
+the Kubernetes API path is the only tested design that satisfies the
+installation boundary, subject to the vendor providing the required API access
+and retention behavior.
 
-## Remaining tests
+## Deferred tests
 
-1. Locate a real `receipt-worker` event through both collections and verify an
-   exact receipt hash and `status=review_required` search.
-2. Emit and compare a Python multiline traceback.
-3. Repeat collector restarts enough times to estimate loss and recovery delay.
-4. Interrupt Kubernetes API access and compare continued collection behavior.
-5. Run a synchronized sustained-load window and capture CPU, memory, storage,
+The following measurements were left for future work and did not block closing
+KAN-86 after the agreed Grafana verification:
+
+1. Emit and compare a Python multiline traceback.
+2. Repeat collector restarts enough times to estimate loss and recovery delay.
+3. Interrupt Kubernetes API access and compare continued collection behavior.
+4. Run a synchronized sustained-load window and capture CPU, memory, storage,
    network, delivery latency, and completeness from aligned counters.
-6. Record the final BrownRook-managed-cluster recommendation.
+5. Select a preferred collector for BrownRook-managed clusters if that decision
+   becomes necessary.
