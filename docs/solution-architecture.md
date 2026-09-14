@@ -105,6 +105,20 @@ delivery safe. The consumer acknowledges a message only after the database
 result or a retry/dead-letter transfer is durable. See the
 [RabbitMQ design](rabbitmq-receipt-design.md) for those boundaries in detail.
 
+## Observability boundary
+
+Production can collect the same `home-budget` stdout/stderr through two
+independent paths: an in-cluster Fluent Bit DaemonSet reading node CRI files and
+an external Grafana Alloy service reading the Kubernetes `pods/log` API. Both
+write to Loki using separate private-CA client identities and distinguish their
+copies with `collection="fluent-bit"` or `collection="kubernetes-api"`.
+
+The [Kubernetes log collection design](log-forwarding-design.md) documents the
+topology, vendor boundary, mTLS identities, failure semantics, label contract,
+GitOps ownership, and comparison method. The
+[log forwarding runbook](log-forwarding.md) contains deployment and recovery
+commands.
+
 ## Persistence boundaries
 
 | Component | Stores | Role |
