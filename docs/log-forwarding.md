@@ -184,13 +184,13 @@ make monitoring-gitops-check
 make monitoring-gitops-apply
 ```
 
-The committed `optional` stage exactly describes the current safe checkpoint:
-Loki remains on loopback with `VerifyClientCertIfGiven`, while Alloy and Grafana
-already use their dedicated identities. The playbook also reconciles the
-Fluent Bit TLS Secret with a controller-only Kubernetes credential. Switching
-`monitoring_loki_stage` to `enforced` is a reviewed Git change that binds Loki
-to the LAN listener and selects `RequireAndVerifyClientCert`; do that only as
-part of the Fluent Bit overlay rollout.
+The `optional` stage is the safe bootstrap and rollback checkpoint: Loki stays
+on loopback with `VerifyClientCertIfGiven`, while Alloy and Grafana use their
+dedicated identities. The playbook also reconciles the Fluent Bit TLS Secret
+with a controller-only Kubernetes credential. The committed `enforced` stage
+binds Loki to the firewall-restricted LAN listener and selects
+`RequireAndVerifyClientCert`; apply it only as part of the Fluent Bit overlay
+rollout.
 
 The full input contract, ordering, idempotency behavior, and rollback are in
 the [monitoring automation README](https://github.com/larocquemb/home-budget-pipeline/tree/main/ops/monitoring).
