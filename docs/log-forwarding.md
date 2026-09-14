@@ -3,7 +3,9 @@
 This is the deployment and recovery runbook. See the
 [Kubernetes log collection design](log-forwarding-design.md) for the production
 topology, trust boundaries, label contract, failure semantics, GitOps ownership,
-and comparison method.
+and comparison method. See the
+[Kubernetes log collection comparison](log-collection-comparison.md) for
+measured production results and remaining tests.
 
 Two independent collectors observe the same application stdout/stderr during
 the KAN-86 production comparison.
@@ -551,6 +553,14 @@ probe from both paths. The common contract includes `namespace`, `pod`,
 `container`, `node`, `job`, and `collection`; `app` and `service` are present
 where the workload supplies a mapped application label, while Fluent Bit
 supplies a container fallback. Delete the probe Pod after verification.
+
+For probes containing a monotonically increasing `sequence=N`, use the
+committed analyzer to report each path's range, unique and duplicate counts,
+missing sequences, and records present in only one collection:
+
+```sh
+scripts/compare_log_collection_probe.sh PROBE_MARKER 1h
+```
 
 ## Rotation and rollback
 

@@ -12,8 +12,9 @@ ARGO_SERVER ?= argocd.brownrook.net
 export ARGO_APP ARGO_SERVER
 ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 MONITORING_GITOPS ?= ./scripts/monitoring_gitops.sh
+LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
 
-.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply
+.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
@@ -23,7 +24,7 @@ help:
 	@echo "Operations:  status enrich-products"
 	@echo "Deployment:  deploy-k3s k3s-config-check k3s-config-apply (uses .env.k3s)"
 	@echo "PostgreSQL:  postgres-config-check postgres-config-apply postgres-password-rotate"
-	@echo "Monitoring:  monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply"
+	@echo "Monitoring:  monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare"
 
 docs-build:
 	$(MKDOCS) build --strict
@@ -57,6 +58,10 @@ monitoring-gitops-check:
 
 monitoring-gitops-apply:
 	@$(MONITORING_GITOPS) apply
+
+log-collection-compare:
+	@test -n "$(MARKER)" || (echo "Usage: make log-collection-compare MARKER=NAME [SINCE=1h]" >&2; exit 2)
+	@$(LOG_COLLECTION_COMPARE) "$(MARKER)" "$(if $(SINCE),$(SINCE),1h)"
 
 deploy-k3s: postgres-config-check k3s-config-check
 	@argocd app get "$(ARGO_APP)" --server "$(ARGO_SERVER)" --grpc-web >/dev/null

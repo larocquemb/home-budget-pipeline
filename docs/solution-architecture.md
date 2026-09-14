@@ -117,7 +117,9 @@ The [Kubernetes log collection design](log-forwarding-design.md) documents the
 topology, vendor boundary, mTLS identities, failure semantics, label contract,
 GitOps ownership, and comparison method. The
 [log forwarding runbook](log-forwarding.md) contains deployment and recovery
-commands.
+commands, and the
+[comparison results](log-collection-comparison.md) keep measured behavior
+separate from intended behavior.
 
 ## Persistence boundaries
 
