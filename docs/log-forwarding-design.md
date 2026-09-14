@@ -274,10 +274,12 @@ both paths and record it with the results.
 On 2026-09-14, the production probe `KAN86_DUAL_COLLECTOR_PROBE` was returned
 through enforced mTLS in both `collection="fluent-bit"` and
 `collection="kubernetes-api"`. Argo was healthy, the Fluent Bit DaemonSet was
-fully rolled out, the namespace RBAC boundary passed, and the final monitoring
-check reported zero drift. Restart, outage, sustained-resource, and live
-receipt-event measurements remain comparison work; no final preference should
-be inferred from the initial delivery proof alone.
+fully rolled out, the namespace RBAC boundary passed, Grafana's datasource
+proxy returned both collections through its separately stored mTLS identity,
+and the final monitoring check reported zero drift. Restart, outage,
+sustained-resource, and live receipt-event measurements remain comparison
+work; no final preference should be inferred from the initial delivery proof
+alone.
 
 ## Decision rule
 

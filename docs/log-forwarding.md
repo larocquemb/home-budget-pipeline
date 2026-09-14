@@ -529,11 +529,28 @@ curl --fail --silent --show-error --get \
   https://monitoring.idc.brownrook.net:3100/loki/api/v1/query_range
 ```
 
-Both LogQL queries in Grafana Explore must return the same probe line. The
-common contract includes `namespace`, `pod`, `container`, `node`, `job`, and
-`collection`; `app` and `service` are present where the workload supplies a
-mapped application label, while Fluent Bit supplies a container fallback.
-Delete the probe Pod after verification.
+Those direct requests prove Loki accepted the Alloy identity and indexed both
+paths. From the Mac, make the same query through Grafana's datasource proxy to
+exercise the separate CA and client identity stored in Grafana. `curl` prompts
+for the Grafana administrator password, keeping it out of shell history:
+
+```sh
+curl --fail --silent --show-error --user admin \
+  --cacert "$HOME/brownrook-ca/root/root_ca.crt" \
+  --get \
+  --data-urlencode 'query={namespace="home-budget"} |= "DUAL_COLLECTOR_PROBE_"' \
+  --data-urlencode 'since=30m' \
+  --data-urlencode 'limit=20' \
+  'https://grafana.idc.brownrook.net/api/datasources/proxy/uid/cfy4qg8i178jkb/loki/api/v1/query_range' \
+  | jq -e '{status, collections: ([.data.result[].stream.collection] | unique)}
+```
+
+The result must have `status: success` and list both `fluent-bit` and
+`kubernetes-api`. The same LogQL expression in Grafana Explore must return the
+probe from both paths. The common contract includes `namespace`, `pod`,
+`container`, `node`, `job`, and `collection`; `app` and `service` are present
+where the workload supplies a mapped application label, while Fluent Bit
+supplies a container fallback. Delete the probe Pod after verification.
 
 ## Rotation and rollback
 
