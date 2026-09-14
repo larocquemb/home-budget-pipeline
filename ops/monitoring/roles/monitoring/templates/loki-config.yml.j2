@@ -6,7 +6,7 @@ server:
   http_listen_port: {{ monitoring_loki_port }}
   grpc_listen_address: 127.0.0.1
   grpc_listen_port: 9096
-  log_level: debug
+  log_level: {{ monitoring_loki_log_level }}
   grpc_server_max_concurrent_streams: 1000
   tls_min_version: VersionTLS12
   http_tls_config:

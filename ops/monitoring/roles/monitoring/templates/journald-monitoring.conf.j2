@@ -1,0 +1,11 @@
+# Managed by ops/monitoring/site.yml.
+
+[Journal]
+SystemMaxUse={{ monitoring_journal_system_max_use }}
+SystemKeepFree={{ monitoring_journal_system_keep_free }}
+SystemMaxFileSize={{ monitoring_journal_system_max_file_size }}
+RuntimeMaxUse={{ monitoring_journal_runtime_max_use }}
+MaxRetentionSec={{ monitoring_journal_max_retention }}
+Compress=yes
+RateLimitIntervalSec={{ monitoring_journal_rate_limit_interval }}
+RateLimitBurst={{ monitoring_journal_rate_limit_burst }}

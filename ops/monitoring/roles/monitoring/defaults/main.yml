@@ -30,7 +30,17 @@ monitoring_fluent_bit_key_source: >-
   {{ monitoring_pki_dir }}/leafs/fluent-bit-loki-client/fluent-bit-loki-client.key
 
 monitoring_loki_config_path: /etc/loki/config.yml
+monitoring_loki_log_level: info
 monitoring_tls_dir: /etc/monitoring/tls
 monitoring_alloy_dir: /etc/alloy
 monitoring_system_root_ca_path: /usr/local/share/ca-certificates/brown-rook-root-ca.crt
 monitoring_grafana_secret_marker: /var/lib/grafana/.home-budget-loki-datasource.sha256
+
+# Bound local service-log churn independently of Loki's application log level.
+monitoring_journal_system_max_use: 256M
+monitoring_journal_system_keep_free: 1G
+monitoring_journal_system_max_file_size: 32M
+monitoring_journal_runtime_max_use: 64M
+monitoring_journal_max_retention: 7day
+monitoring_journal_rate_limit_interval: 30s
+monitoring_journal_rate_limit_burst: 5000
