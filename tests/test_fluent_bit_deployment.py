@@ -120,6 +120,9 @@ def test_local_overlay_routes_fluent_bit_to_disposable_loki():
     assert config["LOKI_TLS_VHOST"] == "loki"
     assert config["LOKI_CLUSTER"] == "kind-home-budget-logging"
     assert config["LOKI_ENVIRONMENT"] == "local"
-    assert resources[("Endpoints", "loki-local")]["subsets"][0]["addresses"] == [
-        {"ip": "192.0.2.1"}
-    ]
+    endpoint_slice = resources[("EndpointSlice", "loki-local")]
+    assert endpoint_slice["metadata"]["labels"]["kubernetes.io/service-name"] == (
+        "loki-local"
+    )
+    assert endpoint_slice["addressType"] == "IPv4"
+    assert endpoint_slice["endpoints"][0]["addresses"] == ["192.0.2.1"]
