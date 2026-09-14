@@ -3,7 +3,9 @@
 This document defines the production design for comparing an in-cluster
 Fluent Bit agent with an external Grafana Alloy Kubernetes API collector. For
 deployment, certificate rotation, validation commands, and rollback, see the
-[Kubernetes log forwarding runbook](log-forwarding.md).
+[Kubernetes log forwarding runbook](log-forwarding.md). Measured outcomes are
+recorded separately in the
+[Kubernetes log collection comparison](log-collection-comparison.md).
 
 ## Scope and design goals
 

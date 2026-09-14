@@ -58,6 +58,7 @@ nav:
   - Operations:
       - Build and deployment: operations-runbook.md
       - Kubernetes log design: log-forwarding-design.md
+      - Kubernetes log comparison: log-collection-comparison.md
       - Kubernetes log runbook: log-forwarding.md
       - Troubleshooting: troubleshooting.md
       - Network access: private-networking.md
