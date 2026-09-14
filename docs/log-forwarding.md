@@ -1,8 +1,14 @@
 # Kubernetes log forwarding
 
-Two independent collectors can observe the same application stdout/stderr:
+This is the deployment and recovery runbook. See the
+[Kubernetes log collection design](log-forwarding-design.md) for the production
+topology, trust boundaries, label contract, failure semantics, GitOps ownership,
+and comparison method.
 
-Method B is the current production path:
+Two independent collectors observe the same application stdout/stderr during
+the KAN-86 production comparison.
+
+Method B is the vendor-compatible path:
 
 ```text
 home-budget Pods -> Kubernetes API (TLS) -> external Alloy -> Loki (TLS) -> Grafana
@@ -14,7 +20,7 @@ Kubernetes API and writes them to the existing Loki instance on the monitoring
 host. This is the vendor-compatible path because it installs nothing in the
 application cluster.
 
-Method A is an opt-in overlay for BrownRook-managed clusters:
+Method A is active through an opt-in overlay for BrownRook-managed clusters:
 
 ```text
 home-budget Pods -> Fluent Bit DaemonSet -> Loki -> Grafana
@@ -523,9 +529,11 @@ curl --fail --silent --show-error --get \
   https://monitoring.idc.brownrook.net:3100/loki/api/v1/query_range
 ```
 
-Both LogQL queries in Grafana Explore must return the same probe line with its
-`namespace`, `pod`, `container`, `node`, `app`, `service`, `job`, and
-`collection` labels. Delete the probe Pod after verification.
+Both LogQL queries in Grafana Explore must return the same probe line. The
+common contract includes `namespace`, `pod`, `container`, `node`, `job`, and
+`collection`; `app` and `service` are present where the workload supplies a
+mapped application label, while Fluent Bit supplies a container fallback.
+Delete the probe Pod after verification.
 
 ## Rotation and rollback
 
