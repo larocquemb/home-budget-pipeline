@@ -32,4 +32,5 @@ monitoring_fluent_bit_key_source: >-
 monitoring_loki_config_path: /etc/loki/config.yml
 monitoring_tls_dir: /etc/monitoring/tls
 monitoring_alloy_dir: /etc/alloy
+monitoring_system_root_ca_path: /usr/local/share/ca-certificates/brown-rook-root-ca.crt
 monitoring_grafana_secret_marker: /var/lib/grafana/.home-budget-loki-datasource.sha256

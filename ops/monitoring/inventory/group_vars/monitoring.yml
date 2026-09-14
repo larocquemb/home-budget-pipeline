@@ -12,6 +12,6 @@ monitoring_kubernetes_namespace: home-budget
 monitoring_kubernetes_admin_context: brownrook-k3s1
 monitoring_fluent_bit_secret_name: fluent-bit-loki-tls
 
-monitoring_grafana_url: http://127.0.0.1:3000
+monitoring_grafana_url: https://grafana.idc.brownrook.net
 monitoring_grafana_datasource_uid: cfy4qg8i178jkb
 monitoring_grafana_datasource_name: loki
