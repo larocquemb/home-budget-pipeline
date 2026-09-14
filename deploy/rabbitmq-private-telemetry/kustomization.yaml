@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../rabbitmq-private-logging
+  - ../opentelemetry
+patches:
+  - path: receipt-worker-telemetry-patch.yaml

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from .. import telemetry
 from . import ingest as scan
 from .parallel_ingest import parse_scans_parallel, persist_evidence_first
 
@@ -246,7 +247,7 @@ def _mark_failed(conn, candidate: ReceiptCandidate, root: Path, ingest_schema: s
         )
 
 
-def process_candidate(
+def _process_candidate(
     conn,
     candidate: ReceiptCandidate,
     root: Path,
@@ -321,6 +322,7 @@ def process_candidate(
             if len(receipts) != 1:
                 raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
             receipt = receipts[0]
+            telemetry.adopt_run_uuid((getattr(receipt, "ocr_run", None) or {}).get("run_uuid"))
             if verify_source and (
                 receipt.source_sha256 != candidate.source_sha256
                 or scan.sha256_file(candidate.path) != candidate.source_sha256
@@ -351,6 +353,42 @@ def process_candidate(
             _mark_failed(conn, candidate, root, ingest_schema, exc)
             conn.commit()
             raise
+
+
+def process_candidate(
+    conn,
+    candidate: ReceiptCandidate,
+    root: Path,
+    cache_dir: Path,
+    *,
+    workers: int = 1,
+    ingest_schema: str = "ingest",
+    budget_schema: str = "budget",
+    refresh_ocr_cache: bool = False,
+    max_attempts: int | None = None,
+    verify_source: bool = False,
+    reprocess_request_id: str | None = None,
+    progress: Callable[[str], None] = lambda message: None,
+) -> str:
+    """Trace one atomic receipt attempt without changing its DB semantics."""
+    reference = _source_reference(candidate, root)
+    with telemetry.receipt_process(reference, candidate.source_sha256) as receipt_trace:
+        status = _process_candidate(
+            conn,
+            candidate,
+            root,
+            cache_dir,
+            workers=workers,
+            ingest_schema=ingest_schema,
+            budget_schema=budget_schema,
+            refresh_ocr_cache=refresh_ocr_cache,
+            max_attempts=max_attempts,
+            verify_source=verify_source,
+            reprocess_request_id=reprocess_request_id,
+            progress=progress,
+        )
+        receipt_trace.finish(status)
+        return status
 
 
 def process_backlog(

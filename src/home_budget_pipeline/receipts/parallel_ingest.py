@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .. import telemetry
 from . import ingest as scan
 from receipt_datetime import date_part, extract_transaction_datetime
 from receipt_evidence import attach_evidence, find_match, resolve_merchant_alias, upsert_evidence
@@ -309,9 +310,9 @@ def _order_ocr_passes(passes: list[dict]) -> None:
     ))
 
 
-def _assign_ocr_pass_keys(passes: list[dict]) -> str:
+def _assign_ocr_pass_keys(passes: list[dict], run_uuid: str | None = None) -> str:
     """Assign the composite (run_uuid, pass_id) identity for one OCR run."""
-    run_uuid = str(uuid.uuid4())
+    run_uuid = run_uuid or str(uuid.uuid4())
     for pass_id, item in enumerate(passes, start=1):
         item["run_uuid"] = run_uuid
         item["pass_id"] = pass_id
@@ -327,27 +328,49 @@ def _read_or_create_pages(
 ) -> tuple[list[str], bool]:
     cache_path = _cache_path(cache_dir, source_reference, source_sha256)
     legacy_cache_path = cache_dir / f"{source_sha256}.json"
-    if not refresh:
-        for candidate in dict.fromkeys((cache_path, legacy_cache_path)):
-            try:
-                data = json.loads(candidate.read_text(encoding="utf-8"))
-                pages = _cached_pages(data)
-                if _cache_metadata(data).get("source_sha256") == source_sha256 and pages is not None:
-                    return pages, True
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
-                continue
+    with telemetry.span("receipt.cache.lookup", {"receipt.cache.refresh": refresh}) as cache_span:
+        if not refresh:
+            for candidate in dict.fromkeys((cache_path, legacy_cache_path)):
+                try:
+                    data = json.loads(candidate.read_text(encoding="utf-8"))
+                    pages = _cached_pages(data)
+                    metadata = _cache_metadata(data)
+                    if metadata.get("source_sha256") == source_sha256 and pages is not None:
+                        cache_span.set_attribute("receipt.cache.hit", True)
+                        telemetry.adopt_run_uuid(metadata.get("run_uuid"))
+                        if metadata.get("run_uuid"):
+                            cache_span.set_attribute("run_uuid", metadata["run_uuid"])
+                        return pages, True
+                except (FileNotFoundError, json.JSONDecodeError, OSError):
+                    continue
+        cache_span.set_attribute("receipt.cache.hit", False)
 
     started = time.perf_counter()
     ocr_passes: list[dict] = []
-    pages = scan.extract_page_text(path, ocr_passes)
+    run_uuid = telemetry.current_run_uuid() or str(uuid.uuid4())
+    telemetry.adopt_run_uuid(run_uuid)
+    pages = scan.extract_page_text(path, ocr_passes, run_uuid=run_uuid)
     _order_ocr_passes(ocr_passes)
     text_extracted = time.perf_counter()
+    geometry_pass_id = len(ocr_passes) + 1
+    geometry_span = telemetry.start_ocr_pass({
+        "run_uuid": run_uuid,
+        "pass_id": geometry_pass_id,
+        "ocr.engine": "tesseract",
+        "ocr.engine.type": "layout_ocr",
+        "ocr.dpi": 300,
+        "ocr.psm": "6",
+        "ocr.variant": "geometry",
+    })
     layout_pages = scan.extract_page_layout(path, pages)
+    geometry_completed_at = time.time_ns()
     layout_extracted = time.perf_counter()
     geometry_seconds = round(layout_extracted - text_extracted, 3)
     geometry_line_count = sum(len(page) for page in layout_pages)
-    ocr_passes.append({
+    geometry_metric = {
         "schema_version": 1,
+        "run_uuid": run_uuid,
+        "pass_id": geometry_pass_id,
         "page_number": None,
         "engine": "tesseract",
         "engine_type": "layout_ocr",
@@ -377,8 +400,10 @@ def _read_or_create_pages(
         "engine_options": {"psm": "6"},
         "usage": {},
         "provenance": {},
-    })
-    run_uuid = _assign_ocr_pass_keys(ocr_passes)
+    }
+    ocr_passes.append(geometry_metric)
+    telemetry.record_ocr_pass_completion(geometry_span, geometry_metric)
+    telemetry.finish_ocr_pass(geometry_span, geometry_metric, geometry_completed_at)
     cache_pages = _cache_layout_pages(layout_pages)
     plain_text = scan.merge_page_text([
         "\n".join(_line_texts(page["lines"]))
@@ -424,34 +449,35 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
         refresh,
         source_reference,
     )
-    text = scan.merge_page_text(pages)
-    subtotal, tax, total = scan.extract_totals(text)
-    total = reconcile_total_from_text(text, total)
-    filename_date, filename_merchant, filename_total = scan.receipt_info_from_filename(path)
-    if total is None:
-        total = filename_total
-    payment = extract_payment_provenance(text)
-    transaction_datetime = extract_transaction_datetime(text)
-    transaction_date = date_part(transaction_datetime) or scan.extract_date(text) or filename_date
-    reference = source_reference
+    with telemetry.span("receipt.parsing", {"receipt.cache.hit": cache_hit}):
+        text = scan.merge_page_text(pages)
+        subtotal, tax, total = scan.extract_totals(text)
+        total = reconcile_total_from_text(text, total)
+        filename_date, filename_merchant, filename_total = scan.receipt_info_from_filename(path)
+        if total is None:
+            total = filename_total
+        payment = extract_payment_provenance(text)
+        transaction_datetime = extract_transaction_datetime(text)
+        transaction_date = date_part(transaction_datetime) or scan.extract_date(text) or filename_date
+        reference = source_reference
 
-    receipt = scan.ScannedReceipt(
-        path=str(path),
-        source_reference=reference,
-        source_sha256=source_sha256,
-        merchant=scan.prefer_filename_merchant(scan.extract_merchant(text), filename_merchant),
-        transaction_date=transaction_date,
-        receipt_id=scan.extract_receipt_id(text),
-        subtotal=subtotal,
-        tax=tax,
-        total=total,
-        payment_method=payment.payment_method,
-        card_last4=payment.card_last4,
-        items=scan.normalize_item_signs(scan.extract_items(text), total),
-        page_text=list(pages),
-        ocr_layout=_structured_layout(_cache_path(cache_dir, source_reference, source_sha256)),
-        text=text,
-    )
+        receipt = scan.ScannedReceipt(
+            path=str(path),
+            source_reference=reference,
+            source_sha256=source_sha256,
+            merchant=scan.prefer_filename_merchant(scan.extract_merchant(text), filename_merchant),
+            transaction_date=transaction_date,
+            receipt_id=scan.extract_receipt_id(text),
+            subtotal=subtotal,
+            tax=tax,
+            total=total,
+            payment_method=payment.payment_method,
+            card_last4=payment.card_last4,
+            items=scan.normalize_item_signs(scan.extract_items(text), total),
+            page_text=list(pages),
+            ocr_layout=_structured_layout(_cache_path(cache_dir, source_reference, source_sha256)),
+            text=text,
+        )
     receipt.ocr_run = _ocr_run_metadata(_cache_path(cache_dir, source_reference, source_sha256))
     receipt.transaction_datetime = transaction_datetime
     receipt.worker_pid = os.getpid()
@@ -567,22 +593,31 @@ def persist_evidence_first(
     stats = {"matched": 0, "ambiguous": 0, "new": 0}
 
     for receipt in receipts:
-        receipt.merchant = resolve_merchant_alias(conn, receipt.merchant, schema)
-        evidence_id = upsert_evidence(conn, receipt, schema, evidence_type="scanned")
+        attributes = {
+            "run_uuid": (getattr(receipt, "ocr_run", None) or {}).get("run_uuid"),
+            "receipt.extraction_status": getattr(receipt, "extraction_status", None),
+        }
+        with telemetry.span("receipt.persistence", {**attributes, "receipt.persistence.phase": "evidence"}):
+            receipt.merchant = resolve_merchant_alias(conn, receipt.merchant, schema)
+            evidence_id = upsert_evidence(conn, receipt, schema, evidence_type="scanned")
         if replace_existing:
-            with conn.cursor() as cur:
-                cur.execute(f"SELECT expense_pk FROM {schema}.receipt_evidence WHERE id = %s", (evidence_id,))
-                existing_expense_pk = cur.fetchone()[0]
+            with telemetry.span("receipt.reconciliation", {**attributes, "receipt.reprocess": True}):
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT expense_pk FROM {schema}.receipt_evidence WHERE id = %s", (evidence_id,))
+                    existing_expense_pk = cur.fetchone()[0]
             if existing_expense_pk is not None:
-                expense_pk = scan.upsert_receipt(conn, receipt, schema)
-                _persist_transaction_datetime(conn, receipt, schema)
-                attach_evidence(conn, evidence_id, expense_pk, schema)
+                with telemetry.span("receipt.persistence", {**attributes, "receipt.persistence.phase": "canonical"}):
+                    expense_pk = scan.upsert_receipt(conn, receipt, schema)
+                    _persist_transaction_datetime(conn, receipt, schema)
+                    attach_evidence(conn, evidence_id, expense_pk, schema)
                 stats["matched"] += 1
                 continue
-        match = find_match(conn, receipt, schema)
+        with telemetry.span("receipt.reconciliation", attributes):
+            match = find_match(conn, receipt, schema)
 
         if match.disposition == "matched" and match.expense_pk is not None:
-            attach_evidence(conn, evidence_id, match.expense_pk, schema)
+            with telemetry.span("receipt.persistence", {**attributes, "receipt.persistence.phase": "attachment"}):
+                attach_evidence(conn, evidence_id, match.expense_pk, schema)
             stats["matched"] += 1
             continue
 
@@ -590,9 +625,10 @@ def persist_evidence_first(
             stats["ambiguous"] += 1
             continue
 
-        expense_pk = scan.upsert_receipt(conn, receipt, schema)
-        _persist_transaction_datetime(conn, receipt, schema)
-        attach_evidence(conn, evidence_id, expense_pk, schema)
+        with telemetry.span("receipt.persistence", {**attributes, "receipt.persistence.phase": "canonical"}):
+            expense_pk = scan.upsert_receipt(conn, receipt, schema)
+            _persist_transaction_datetime(conn, receipt, schema)
+            attach_evidence(conn, evidence_id, expense_pk, schema)
         stats["new"] += 1
 
     return stats

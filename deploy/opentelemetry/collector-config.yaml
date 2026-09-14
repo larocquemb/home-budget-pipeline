@@ -1,0 +1,73 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  file_storage:
+    directory: /var/lib/otelcol/storage
+    create_directory: true
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        tls:
+          cert_file: /var/run/otel/server/tls.crt
+          key_file: /var/run/otel/server/tls.key
+          client_ca_file: /var/run/otel/server/ca.crt
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 384
+    spike_limit_mib: 96
+  tail_sampling:
+    decision_wait: ${env:OTEL_TAIL_SAMPLING_DECISION_WAIT}
+    num_traces: 2000
+    expected_new_traces_per_sec: 10
+    decision_cache:
+      sampled_cache_size: 10000
+      non_sampled_cache_size: 10000
+    policies:
+      - name: retain-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: configured-baseline
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${env:OTEL_TAIL_SAMPLING_PERCENTAGE}
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 512
+
+exporters:
+  otlp/backend:
+    endpoint: ${env:OTEL_BACKEND_ENDPOINT}
+    tls:
+      ca_file: /var/run/otel/backend/ca.crt
+      cert_file: /var/run/otel/backend/tls.crt
+      key_file: /var/run/otel/backend/tls.key
+      server_name_override: ${env:OTEL_BACKEND_SERVER_NAME}
+    sending_queue:
+      enabled: true
+      storage: file_storage
+      queue_size: 2048
+      num_consumers: 4
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0s
+
+service:
+  extensions: [health_check, file_storage]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [otlp/backend]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/backend]
