@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: receipt-worker
+  namespace: home-budget
+spec:
+  template:
+    spec:
+      containers:
+        - name: receipt-worker
+          env:
+            - name: HOME_BUDGET_TELEMETRY_ENABLED
+              value: "true"
+            - name: HOME_BUDGET_STRUCTURED_LOGS
+              value: "true"
+            - name: OTEL_SERVICE_NAME
+              value: home-budget-receipt-worker
+            - name: OTEL_SERVICE_VERSION
+              value: "0.1.0"
+            - name: OTEL_DEPLOYMENT_ENVIRONMENT
+              value: production
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: https://otel-collector.home-budget.svc.cluster.local:4317
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: "false"
+            - name: OTEL_EXPORTER_OTLP_CERTIFICATE
+              value: /var/run/otel/client/ca.crt
+            - name: OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE
+              value: /var/run/otel/client/tls.crt
+            - name: OTEL_EXPORTER_OTLP_CLIENT_KEY
+              value: /var/run/otel/client/tls.key
+            - name: OTEL_TRACES_SAMPLER
+              value: parentbased_always_on
+            - name: OTEL_BSP_SCHEDULE_DELAY
+              value: "1000"
+            - name: OTEL_BSP_MAX_QUEUE_SIZE
+              value: "2048"
+            - name: OTEL_BSP_MAX_EXPORT_BATCH_SIZE
+              value: "256"
+            - name: OTEL_BSP_EXPORT_TIMEOUT
+              value: "5000"
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: "5000"
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: K8S_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: K8S_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: K8S_CONTAINER_NAME
+              value: receipt-worker
+          volumeMounts:
+            - name: telemetry-client-tls
+              mountPath: /var/run/otel/client
+              readOnly: true
+      volumes:
+        - name: telemetry-client-tls
+          secret:
+            secretName: receipt-telemetry-client-tls
+            defaultMode: 0440

@@ -118,6 +118,12 @@ reconciled from the Git-controlled `ops/monitoring` Ansible playbook with
 `make monitoring-gitops-check` and `make monitoring-gitops-apply`; all secret
 inputs stay outside Git.
 
+Receipt traces and metrics are available through the opt-in
+`deploy/rabbitmq-private-telemetry` overlay. It adds an mTLS OpenTelemetry
+Collector without changing the default deployment path. See
+[Receipt-processing OpenTelemetry](opentelemetry.md) for PKI inputs,
+configuration, deployment, live correlation, failure testing, and rollback.
+
 ## Commit and pull request
 
 ```bash

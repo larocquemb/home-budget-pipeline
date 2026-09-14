@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: home-budget
+resources:
+  - collector.yaml
+configMapGenerator:
+  - name: otel-collector-config
+    files:
+      - collector.yaml=collector-config.yaml

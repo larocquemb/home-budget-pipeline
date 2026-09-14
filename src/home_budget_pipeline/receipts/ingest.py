@@ -33,8 +33,10 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
+from uuid import uuid4
 
+from .. import telemetry
 from payment_card_lookup import resolve_owner_from_db
 from receipt_payment import extract_payment_provenance
 
@@ -510,15 +512,84 @@ def _ocr_pass_metric(candidate: OCRCandidate, *, page: int, variant: str, second
     }
 
 
-def _ocr_pdf_pages(path: Path, pass_metrics: Optional[List[dict]] = None) -> List[str]:
+def _run_traced_ocr_pass(
+    operation: Callable[[], OCRCandidate],
+    pass_metrics: List[dict] | None,
+    *,
+    run_uuid: str,
+    page: int,
+    engine: str,
+    dpi: int,
+    psm: str,
+    variant: str,
+) -> tuple[OCRCandidate, tuple[Any, dict, int] | None]:
+    """Run one engine pass and keep its span open for consensus attributes."""
+    if pass_metrics is None:
+        return operation(), None
+    pass_id = len(pass_metrics) + 1
+    pass_span = telemetry.start_ocr_pass({
+        "run_uuid": run_uuid,
+        "pass_id": pass_id,
+        "receipt.page.number": page,
+        "ocr.engine": engine,
+        "ocr.dpi": dpi,
+        "ocr.psm": psm,
+        "ocr.variant": variant,
+    })
+    started = time.perf_counter()
+    try:
+        candidate = operation()
+    except BaseException as exc:
+        metric = {
+            **_ocr_pass_metric(
+                OCRCandidate("", (), dpi, psm, engine, "failed", type(exc).__name__),
+                page=page,
+                variant=variant,
+                seconds=time.perf_counter() - started,
+            ),
+            "run_uuid": run_uuid,
+            "pass_id": pass_id,
+        }
+        pass_metrics.append(metric)
+        telemetry.record_ocr_pass_completion(pass_span, metric)
+        telemetry.finish_ocr_pass(pass_span, metric)
+        raise
+    completed_at = time.time_ns()
+    metric = {
+        **_ocr_pass_metric(
+            candidate,
+            page=page,
+            variant=variant,
+            seconds=time.perf_counter() - started,
+        ),
+        "run_uuid": run_uuid,
+        "pass_id": pass_id,
+    }
+    pass_metrics.append(metric)
+    telemetry.record_ocr_pass_completion(pass_span, metric)
+    return candidate, (pass_span, metric, completed_at)
+
+
+def _ocr_pdf_pages(
+    path: Path,
+    pass_metrics: Optional[List[dict]] = None,
+    *,
+    run_uuid: str | None = None,
+) -> List[str]:
     try:
         import pypdfium2 as pdfium  # type: ignore
     except Exception:
         return []
     pages: List[str] = []
+    selected_run_uuid = run_uuid or telemetry.current_run_uuid() or str(uuid4())
+    unfinished_passes: list[tuple[Any, dict, int]] = []
     doc = pdfium.PdfDocument(str(path))
+    page_span = None
     try:
         for idx in range(len(doc)):
+            page_span = telemetry.start_operation(
+                "receipt.page.processing", {"receipt.page.number": idx + 1},
+            )
             candidates: List[OCRCandidate] = []
             # Resolution changes the apparent shape of thermal-printer glyphs,
             # so evaluate every DPI/layout combination instead of assuming the
@@ -533,25 +604,35 @@ def _ocr_pdf_pages(path: Path, pass_metrics: Optional[List[dict]] = None) -> Lis
                     try:
                         image.save(tmp_path)
                         for psm in OCR_PAGE_SEGMENTATION_MODES:
-                            started = time.perf_counter()
-                            candidate = _run_tesseract_candidate(tmp_path, dpi=dpi, psm=psm)
+                            candidate, tracked = _run_traced_ocr_pass(
+                                lambda: _run_tesseract_candidate(tmp_path, dpi=dpi, psm=psm),
+                                pass_metrics,
+                                run_uuid=selected_run_uuid,
+                                page=idx + 1,
+                                engine="tesseract",
+                                dpi=dpi,
+                                psm=psm,
+                                variant=variant,
+                            )
                             candidates.append(candidate)
-                            if pass_metrics is not None:
-                                pass_metrics.append(_ocr_pass_metric(
-                                    candidate, page=idx + 1, variant=variant,
-                                    seconds=time.perf_counter() - started,
-                                ))
+                            if tracked is not None:
+                                unfinished_passes.append(tracked)
                     finally:
                         tmp_path.unlink(missing_ok=True)
                 if dpi == 200 and _paddle_ocr_enabled():
-                    started = time.perf_counter()
-                    candidate = _run_paddle_candidate(raw_image, dpi=dpi)
+                    candidate, tracked = _run_traced_ocr_pass(
+                        lambda: _run_paddle_candidate(raw_image, dpi=dpi),
+                        pass_metrics,
+                        run_uuid=selected_run_uuid,
+                        page=idx + 1,
+                        engine="paddle",
+                        dpi=dpi,
+                        psm="paddle",
+                        variant="raw",
+                    )
                     candidates.append(candidate)
-                    if pass_metrics is not None:
-                        pass_metrics.append(_ocr_pass_metric(
-                            candidate, page=idx + 1, variant="raw",
-                            seconds=time.perf_counter() - started,
-                        ))
+                    if tracked is not None:
+                        unfinished_passes.append(tracked)
             # A single high-resolution structured pass recovers small final
             # glyphs (for example, a trailing "c") without multiplying every
             # expensive DPI/layout/preprocessing combination.
@@ -560,24 +641,36 @@ def _ocr_pdf_pages(path: Path, pass_metrics: Optional[List[dict]] = None) -> Lis
                 tmp_path = Path(tmp.name)
             try:
                 high_detail_image.save(tmp_path)
-                started = time.perf_counter()
-                candidate = _run_tesseract_candidate(
-                    tmp_path, dpi=OCR_HIGH_DETAIL_DPI, psm=OCR_HIGH_DETAIL_PSM,
+                candidate, tracked = _run_traced_ocr_pass(
+                    lambda: _run_tesseract_candidate(
+                        tmp_path, dpi=OCR_HIGH_DETAIL_DPI, psm=OCR_HIGH_DETAIL_PSM,
+                    ),
+                    pass_metrics,
+                    run_uuid=selected_run_uuid,
+                    page=idx + 1,
+                    engine="tesseract",
+                    dpi=OCR_HIGH_DETAIL_DPI,
+                    psm=OCR_HIGH_DETAIL_PSM,
+                    variant="high_detail",
                 )
                 candidates.append(candidate)
-                if pass_metrics is not None:
-                    pass_metrics.append(_ocr_pass_metric(
-                        candidate, page=idx + 1, variant="high_detail",
-                        seconds=time.perf_counter() - started,
-                    ))
+                if tracked is not None:
+                    unfinished_passes.append(tracked)
             finally:
                 tmp_path.unlink(missing_ok=True)
-            best_text = _line_consensus_text(candidates)
-            for candidate in sorted(candidates, key=lambda item: _ocr_supplement_score(item.text), reverse=True):
-                best_text = _supplement_missing_receipt_summary(best_text, candidate.text)
-            if pass_metrics is not None:
-                page_metrics = pass_metrics[-len(candidates):]
+            page_tracked = unfinished_passes[-len(candidates):] if pass_metrics is not None else []
+            with telemetry.span("receipt.consensus.selection", {"receipt.page.number": idx + 1}) as consensus_span:
+                best_text = _line_consensus_text(candidates)
+                for candidate in sorted(candidates, key=lambda item: _ocr_supplement_score(item.text), reverse=True):
+                    best_text = _supplement_missing_receipt_summary(best_text, candidate.text)
                 base = _select_ocr_candidate(candidates)
+                consensus_span.set_attribute(
+                    "ocr.selected.engine", base.engine,
+                )
+                consensus_span.set_attribute("ocr.selected.dpi", base.dpi)
+                consensus_span.set_attribute("ocr.selected.psm", base.psm)
+            if pass_metrics is not None:
+                page_metrics = [metric for _, metric, _ in page_tracked]
                 consensus_lines = [line for line in best_text.splitlines() if line]
                 for candidate, metric in zip(candidates, page_metrics):
                     metric["selected_base"] = candidate is base
@@ -590,8 +683,21 @@ def _ocr_pdf_pages(path: Path, pass_metrics: Optional[List[dict]] = None) -> Lis
                     metric["consensus_coverage_ratio"] = ratio
                     metric["quality"]["consensus_line_coverage"] = coverage
                     metric["quality"]["consensus_coverage_ratio"] = ratio
+                for tracked in page_tracked:
+                    telemetry.finish_ocr_pass(*tracked)
+                    unfinished_passes.remove(tracked)
             pages.append(best_text)
+            telemetry.finish_operation(
+                page_span, {"receipt.page.status": "completed"},
+            )
+            page_span = None
+    except BaseException as exc:
+        if page_span is not None:
+            telemetry.finish_operation(page_span, {"receipt.page.status": "failed"}, exc)
+        raise
     finally:
+        for tracked in unfinished_passes:
+            telemetry.finish_ocr_pass(*tracked)
         doc.close()
     return pages
 
@@ -625,7 +731,12 @@ def _supplement_missing_receipt_summary(primary: str, alternative: str) -> str:
     return primary + (("\n" + "\n".join(additions)) if additions else "")
 
 
-def extract_page_text(path: Path, pass_metrics: Optional[List[dict]] = None) -> List[str]:
+def extract_page_text(
+    path: Path,
+    pass_metrics: Optional[List[dict]] = None,
+    *,
+    run_uuid: str | None = None,
+) -> List[str]:
     if path.suffix.lower() == ".pdf":
         embedded_pages: List[str] = []
         image_based = False
@@ -637,7 +748,7 @@ def extract_page_text(path: Path, pass_metrics: Optional[List[dict]] = None) -> 
         except Exception:
             pass
         if image_based or not any(page.strip() for page in embedded_pages):
-            ocr_pages = _ocr_pdf_pages(path, pass_metrics)
+            ocr_pages = _ocr_pdf_pages(path, pass_metrics, run_uuid=run_uuid)
             if ocr_pages:
                 selected: List[str] = []
                 for idx in range(max(len(embedded_pages), len(ocr_pages))):

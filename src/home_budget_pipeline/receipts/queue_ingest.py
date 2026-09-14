@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import Event
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
+from .. import telemetry
 from . import backlog_ingest as backlog
 from .message import MAX_ATTEMPTS, InvalidReceiptMessage, ReceiptMessage
 from .parallel_ingest import has_ocr_cache
@@ -301,9 +302,14 @@ def process_message(message: ReceiptMessage, args) -> str:
     conn = backlog.scan._db_connect(args.db_dsn)
     try:
         if message.version == 3:
-            return rebuild_cache_message(
-                conn, message, root, Path(args.ocr_cache).expanduser().resolve(), args.budget_schema,
-            )
+            with telemetry.receipt_process(
+                message.source_reference, message.source_sha256,
+            ) as receipt_trace:
+                status = rebuild_cache_message(
+                    conn, message, root, Path(args.ocr_cache).expanduser().resolve(), args.budget_schema,
+                )
+                receipt_trace.finish(status)
+                return status
         return backlog.process_candidate(
             conn, backlog.ReceiptCandidate(path, message.source_sha256),
             root, Path(args.ocr_cache).expanduser().resolve(),
@@ -389,7 +395,8 @@ def add_arguments(parser, mode: str) -> None:
 
 
 def run(args) -> int:
-    logging.basicConfig(level=logging.INFO)
+    telemetry.configure_logging()
+    telemetry.configure_telemetry()
     # Keep the CLI focused on receipt outcomes. Pika's connection workflow logs
     # every socket and AMQP shutdown transition at INFO, which obscures them.
     logging.getLogger("pika").setLevel(logging.WARNING)
@@ -439,6 +446,7 @@ def run(args) -> int:
     finally:
         if connection.is_open:
             connection.close()
+        telemetry.shutdown_telemetry()
     return 0
 
 
