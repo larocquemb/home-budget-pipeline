@@ -443,7 +443,7 @@
     src: loki-config.yml.j2
     dest: "{{ monitoring_loki_config_path }}"
     owner: root
-    group: loki
+    group: monitoring-tls
     mode: "0640"
     backup: true
     validate: /usr/bin/loki -config.file=%s -verify-config
@@ -628,8 +628,8 @@
   ansible.builtin.copy:
     content: "{{ monitoring_grafana_secure_revision }}\n"
     dest: "{{ monitoring_grafana_secret_marker }}"
-    owner: grafana
-    group: grafana
+    owner: root
+    group: root
     mode: "0600"
   when:
     - not ansible_check_mode
