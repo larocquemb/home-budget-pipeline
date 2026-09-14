@@ -87,8 +87,40 @@ chmod 600 "$kubeconfig"
   -f "$compose_file" \
   up -d
 
+loki_container=$("$compose" \
+  -p home-budget-local-logging \
+  -f "$compose_file" \
+  ps -q loki)
+loki_ip=$(docker inspect \
+  --format '{{with index .NetworkSettings.Networks "kind"}}{{.IPAddress}}{{end}}' \
+  "$loki_container")
+if ! [[ "$loki_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Could not determine Loki's address on the Kind network." >&2
+  exit 1
+fi
+
+kubectl --context "$kube_context" -n "$namespace" create secret generic \
+  fluent-bit-loki-tls \
+  --type=kubernetes.io/tls \
+  --from-file="ca.crt=$state_dir/tls/ca.crt" \
+  --from-file="tls.crt=$state_dir/tls/fluent-bit-client.crt" \
+  --from-file="tls.key=$state_dir/tls/fluent-bit-client.key" \
+  --dry-run=client -o yaml \
+  | kubectl --context "$kube_context" apply -f -
+
+kubectl --context "$kube_context" apply \
+  -k "$root_dir/deploy/local-logging/fluent-bit"
+kubectl --context "$kube_context" -n "$namespace" patch endpoints loki-local \
+  --type=merge \
+  -p "{\"subsets\":[{\"addresses\":[{\"ip\":\"$loki_ip\"}],\"ports\":[{\"name\":\"https\",\"port\":3100}]}]}" \
+  >/dev/null
+kubectl --context "$kube_context" -n "$namespace" rollout restart \
+  daemonset/fluent-bit
+kubectl --context "$kube_context" -n "$namespace" rollout status \
+  daemonset/fluent-bit --timeout=180s
+
 echo
-echo "Local Method B logging environment is starting."
+echo "Local Method A and Method B logging environment is starting."
 echo "Run: make dev-logging-test"
 echo "Grafana: http://localhost:13000 (admin / local-only)"
 echo "Alloy:   http://localhost:12345"

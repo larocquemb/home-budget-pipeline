@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: home-budget
+data:
+  LOKI_HOST: loki-local.home-budget.svc.cluster.local
+  LOKI_PORT: "3100"
+  LOKI_TLS_VHOST: loki
+  LOKI_CLUSTER: kind-home-budget-logging
+  LOKI_ENVIRONMENT: local

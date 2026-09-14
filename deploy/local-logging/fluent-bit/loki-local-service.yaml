@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki-local
+  namespace: home-budget
+spec:
+  ports:
+    - name: https
+      port: 3100
+      targetPort: 3100
+---
+# local_logging_up.sh replaces this documentation-only address with the Loki
+# container's current address on the disposable Kind Docker network.
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: loki-local
+  namespace: home-budget
+subsets:
+  - addresses:
+      - ip: 192.0.2.1
+    ports:
+      - name: https
+        port: 3100
