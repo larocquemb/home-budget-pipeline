@@ -13,6 +13,9 @@ services:
       - ../../.local-logging/tls:/etc/loki/tls:ro
     tmpfs:
       - /loki:mode=1777
+    networks:
+      - default
+      - kind
 
   alloy:
     image: grafana/alloy:v1.19.0

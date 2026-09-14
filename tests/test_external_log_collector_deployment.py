@@ -55,10 +55,49 @@ def test_external_alloy_uses_kubernetes_api_and_verified_loki_tls():
     assert 'cluster     = "brownrook-k3s1"' in config
     assert 'url = "https://127.0.0.1:3100/loki/api/v1/push"' in config
     assert 'ca_file     = "/etc/alloy/brown-rook-root-ca.crt"' in config
+    assert 'cert_file   = "/etc/alloy/loki-client.crt"' in config
+    assert 'key_file    = "/etc/alloy/loki-client.key"' in config
     assert 'server_name = "monitoring.idc.brownrook.net"' in config
     assert 'min_version = "TLS12"' in config
     assert "insecure_skip_verify" not in config
     assert "wal {\n    enabled = true" in config
+
+
+def test_loki_listener_requires_private_ca_client_certificates():
+    config = yaml.safe_load(
+        (ROOT / "deploy/external-logging/loki-tls-config.example.yaml").read_text()
+    )["server"]
+
+    assert config["http_listen_address"] == "0.0.0.0"
+    assert config["tls_min_version"] == "VersionTLS12"
+    assert config["http_tls_config"]["client_auth_type"] == (
+        "RequireAndVerifyClientCert"
+    )
+    assert config["http_tls_config"]["client_ca_file"].endswith(
+        "brown-rook-client-ca.crt"
+    )
+
+
+def test_grafana_datasource_template_requires_verified_client_tls():
+    datasource = yaml.safe_load(
+        (
+            ROOT
+            / "deploy/external-logging/grafana-datasource.example.yaml"
+        ).read_text()
+    )["datasources"][0]
+
+    assert datasource["url"] == "https://monitoring.idc.brownrook.net:3100"
+    assert datasource["jsonData"] == {
+        "tlsAuth": True,
+        "tlsAuthWithCACert": True,
+        "tlsSkipVerify": False,
+        "serverName": "monitoring.idc.brownrook.net",
+    }
+    assert set(datasource["secureJsonData"]) == {
+        "tlsCACert",
+        "tlsClientCert",
+        "tlsClientKey",
+    }
 
 
 def test_exported_kubeconfigs_are_ignored():

@@ -14,6 +14,7 @@ def test_local_stack_keeps_alloy_outside_kind_and_uses_verified_tls():
 
     assert set(services) == {"alloy", "grafana", "loki"}
     assert alloy["networks"] == ["default", "kind"]
+    assert services["loki"]["networks"] == ["default", "kind"]
     assert "alloy" not in (LOCAL / "kustomization.yaml").read_text()
     assert services["loki"]["ports"] == ["127.0.0.1:13100:3100"]
     assert services["grafana"]["ports"] == ["127.0.0.1:13000:3000"]
@@ -69,6 +70,19 @@ def test_local_scripts_are_pinned_to_the_disposable_context():
     assert "${cluster_name}-control-plane:6443" in up_script
     assert "get secrets" in test_script
     assert "LOCAL_LOG_PROBE_" in test_script
+    assert "wait_for_query kubernetes-api" in test_script
+    assert "wait_for_query fluent-bit" in test_script
+    assert "daemonset/fluent-bit" in up_script + test_script
+
+
+def test_local_tls_generator_creates_a_fluent_bit_client_identity():
+    script = (ROOT / "scripts" / "generate_local_logging_tls.sh").read_text()
+    extension = (LOCAL / "loki-client-ext.cnf").read_text()
+
+    assert "fluent-bit-client.crt" in script
+    assert "fluent-bit-client.key" in script
+    assert "-purpose sslclient" in script
+    assert "extendedKeyUsage = clientAuth" in extension
 
 
 def test_local_generated_credentials_and_certificates_are_ignored():

@@ -41,6 +41,8 @@ fi
 
 kubectl --context "$kube_context" -n "$namespace" rollout status \
   deployment/home-budget-local --timeout=120s
+kubectl --context "$kube_context" -n "$namespace" rollout status \
+  daemonset/fluent-bit --timeout=120s
 
 reader="system:serviceaccount:${namespace}:external-log-reader"
 kubectl --context "$kube_context" auth can-i \
@@ -72,28 +74,39 @@ if ! kubectl --context "$kube_context" -n "$namespace" logs \
   exit 1
 fi
 
-query="{cluster=\"kind-home-budget-logging\",namespace=\"home-budget\",app=\"home-budget-local\"} |= \"$probe\""
-found=0
-for _ in $(seq 1 30); do
-  if curl --fail --silent --show-error --get \
-    --cacert "$ca_file" \
-    --data-urlencode "query=$query" \
-    --data-urlencode 'limit=20' \
-    https://localhost:13100/loki/api/v1/query_range | grep -Fq "$probe"; then
-    found=1
-    break
+wait_for_query() {
+  local collection=$1
+  local query="{cluster=\"kind-home-budget-logging\",namespace=\"home-budget\",app=\"home-budget-local\",collection=\"$collection\"} |= \"$probe\""
+  local found=0
+
+  for _ in $(seq 1 30); do
+    if curl --fail --silent --show-error --get \
+      --cacert "$ca_file" \
+      --data-urlencode "query=$query" \
+      --data-urlencode 'limit=20' \
+      https://localhost:13100/loki/api/v1/query_range | grep -Fq "$probe"; then
+      found=1
+      break
+    fi
+    sleep 2
+  done
+
+  if test "$found" -ne 1; then
+    echo "Loki did not return $probe through $collection within 60 seconds." >&2
+    echo "Inspect collectors with: make dev-logging-status" >&2
+    echo "Alloy/Loki logs: make dev-logging-logs" >&2
+    echo "Fluent Bit logs: kubectl --context $kube_context -n $namespace logs daemonset/fluent-bit" >&2
+    "$compose" -p home-budget-local-logging \
+      -f "$compose_file" ps >&2
+    exit 1
   fi
-  sleep 2
-done
 
-if test "$found" -ne 1; then
-  echo "Loki did not return $probe within 60 seconds." >&2
-  echo "Inspect Alloy and Loki with: make dev-logging-logs" >&2
-  "$compose" -p home-budget-local-logging \
-    -f "$compose_file" ps >&2
-  exit 1
-fi
+  echo "PASS: collection=$collection returned $probe"
+  echo "LogQL: $query"
+}
 
-echo "PASS: $probe was emitted by home-budget and returned by Loki over TLS."
+wait_for_query kubernetes-api
+wait_for_query fluent-bit
+
+echo "PASS: the same home-budget event reached Loki through both collectors over TLS."
 echo "Grafana: http://localhost:13000 (admin / local-only)"
-echo "LogQL: $query"
