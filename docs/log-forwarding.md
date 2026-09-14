@@ -448,8 +448,21 @@ node:
 ```sh
 kubectl kustomize deploy/rabbitmq-private-logging \
   | rg -n 'kind: DaemonSet|name: fluent-bit|monitoring.idc.brownrook.net'
+```
 
-argocd app set ledger --path deploy/rabbitmq-private-logging --grpc-web
+The `ledger` Application is managed by the `brownrook-root` app-of-apps. Its
+source path is declared in
+`brownrook-infra/kubernetes/gitops/apps/ledger-app.yaml`. Change that manifest's
+`spec.source.path` to `deploy/rabbitmq-private-logging`, merge it to the
+infrastructure repository's `main` branch, and let the parent reconcile it.
+Do not use `argocd app set` for this change: parent self-healing restores the
+Git-declared value. After the parent has reconciled, confirm the path and sync
+the workload:
+
+```sh
+argocd app wait brownrook-root --sync --health --timeout 600 --grpc-web
+argocd app get ledger --grpc-web -o json \
+  | jq -e '.spec.source.path == "deploy/rabbitmq-private-logging"'
 argocd app sync ledger --grpc-web
 argocd app wait ledger --sync --health --timeout 600 --grpc-web
 ```
@@ -530,11 +543,16 @@ Removing the service account, Role, and RoleBinding is a separate Git change.
 Loki and Grafana remain available through Method A, and Kubernetes container
 logs remain available through `kubectl logs`.
 
-To disable Method A without changing application workloads, restore the current
-Argo CD overlay and remove its TLS Secret after the DaemonSet is gone:
+To disable Method A without changing application workloads, change
+`brownrook-infra/kubernetes/gitops/apps/ledger-app.yaml` back to
+`deploy/rabbitmq-private` and merge that reviewed infrastructure change. After
+the parent reconciles the child Application, sync it and remove the TLS Secret
+only after the DaemonSet is gone:
 
 ```sh
-argocd app set ledger --path deploy/rabbitmq-private --grpc-web
+argocd app wait brownrook-root --sync --health --timeout 600 --grpc-web
+argocd app get ledger --grpc-web -o json \
+  | jq -e '.spec.source.path == "deploy/rabbitmq-private"'
 argocd app sync ledger --grpc-web
 argocd app wait ledger --sync --health --timeout 600 --grpc-web
 kubectl --context brownrook-k3s1 -n home-budget \

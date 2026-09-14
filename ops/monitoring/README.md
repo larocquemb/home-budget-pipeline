@@ -81,12 +81,15 @@ monitoring_loki_stage: enforced
 The enforced stage binds Loki to `0.0.0.0`, requires a verified client certificate,
 and disables Loki's unauthenticated experimental metric-aggregation callback.
 The firewall remains the independent allowlist. Before applying this stage,
-point the Argo CD `ledger` application at
-`deploy/rabbitmq-private-logging`; after the playbook succeeds, sync the
-application and verify the Fluent Bit DaemonSet as described in
+change `spec.source.path` for the Argo CD `ledger` Application in
+`brownrook-infra/kubernetes/gitops/apps/ledger-app.yaml` to
+`deploy/rabbitmq-private-logging`. The `brownrook-root` parent self-heals the
+child Application from that repository, so a direct `argocd app set` override
+will be reverted. After the playbook succeeds, let the parent reconcile, sync
+the application, and verify the Fluent Bit DaemonSet as described in
 `docs/log-forwarding.md`.
 
-Rollback is a reviewed change to `optional`, followed by an apply; then point
-Argo CD back at `deploy/rabbitmq-private`, and sync. Ansible's timestamped file
-backups provide a host-local emergency recovery path, but Git is the normal
-source of truth.
+Rollback is a reviewed change to `optional`, followed by an apply; then change
+the parent-owned Application manifest back to `deploy/rabbitmq-private`, merge,
+and sync. Ansible's timestamped file backups provide a host-local emergency
+recovery path, but Git is the normal source of truth.
