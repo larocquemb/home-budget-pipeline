@@ -6,14 +6,13 @@ nftables, the Grafana Loki datasource, and the Kubernetes Fluent Bit TLS Secret
 shape. Certificate private keys, Grafana credentials, kubeconfigs, and CA
 private keys remain outside Git.
 
-The committed `monitoring_loki_stage: optional` state matches the current safe
-production checkpoint:
+The committed `monitoring_loki_stage: enforced` state is the final comparison
+configuration:
 
-- Loki listens only on `127.0.0.1:3100`.
-- Loki validates a client certificate when one is offered but still permits a
-  client without one.
+- Loki listens on `0.0.0.0:3100` so the K3s node can reach it.
+- Loki requires a client certificate signed by the Brown Rook CA.
 - Alloy and Grafana use their dedicated verified client identities.
-- nftables already permits only loopback and the approved K3s node on port 3100.
+- nftables permits only loopback and the approved K3s node on port 3100.
 - The `fluent-bit-loki-tls` Secret is reconciled from external files, but the
   Fluent Bit overlay remains opt-in.
 
@@ -71,23 +70,23 @@ health are tested. Secret-bearing tasks use Ansible's `no_log` protection.
 Running `make monitoring-gitops-check` and then
 `make monitoring-gitops-apply` again should report no configuration drift.
 
-## Mandatory-mTLS cutover
+## mTLS stages and rollback
 
-The final comparison state is a small reviewed Git change:
+The final comparison state is selected with:
 
 ```yaml
 monitoring_loki_stage: enforced
 ```
 
-That change binds Loki to `0.0.0.0`, requires a verified client certificate,
+The enforced stage binds Loki to `0.0.0.0`, requires a verified client certificate,
 and disables Loki's unauthenticated experimental metric-aggregation callback.
-The firewall remains the independent allowlist. Before applying the change,
+The firewall remains the independent allowlist. Before applying this stage,
 point the Argo CD `ledger` application at
 `deploy/rabbitmq-private-logging`; after the playbook succeeds, sync the
 application and verify the Fluent Bit DaemonSet as described in
 `docs/log-forwarding.md`.
 
-Rollback is the reverse reviewed change: restore `optional`, apply it, point
+Rollback is a reviewed change to `optional`, followed by an apply; then point
 Argo CD back at `deploy/rabbitmq-private`, and sync. Ansible's timestamped file
 backups provide a host-local emergency recovery path, but Git is the normal
 source of truth.

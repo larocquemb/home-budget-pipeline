@@ -1,7 +1,6 @@
-# This is the safe checkpoint currently running in production. It verifies
-# certificates when clients offer them but keeps Loki bound to loopback.
-# Change to "enforced" in a reviewed commit only after Fluent Bit is deployed.
-monitoring_loki_stage: optional
+# Final comparison state: Loki requires a verified client identity on loopback
+# and on the nftables-restricted LAN listener. Restore "optional" for rollback.
+monitoring_loki_stage: enforced
 
 monitoring_loki_hostname: monitoring.idc.brownrook.net
 monitoring_loki_port: 3100
