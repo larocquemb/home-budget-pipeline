@@ -11,14 +11,18 @@ spec:
 ---
 # local_logging_up.sh replaces this documentation-only address with the Loki
 # container's current address on the disposable Kind Docker network.
-apiVersion: v1
-kind: Endpoints
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
 metadata:
   name: loki-local
   namespace: home-budget
-subsets:
+  labels:
+    kubernetes.io/service-name: loki-local
+addressType: IPv4
+endpoints:
   - addresses:
-      - ip: 192.0.2.1
-    ports:
-      - name: https
-        port: 3100
+      - 192.0.2.1
+ports:
+  - name: https
+    protocol: TCP
+    port: 3100

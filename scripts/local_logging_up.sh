@@ -110,10 +110,20 @@ kubectl --context "$kube_context" -n "$namespace" create secret generic \
 
 kubectl --context "$kube_context" apply \
   -k "$root_dir/deploy/local-logging/fluent-bit"
-kubectl --context "$kube_context" -n "$namespace" patch endpoints loki-local \
+kubectl --context "$kube_context" -n "$namespace" patch endpointslice loki-local \
   --type=merge \
-  -p "{\"subsets\":[{\"addresses\":[{\"ip\":\"$loki_ip\"}],\"ports\":[{\"name\":\"https\",\"port\":3100}]}]}" \
+  -p "{\"endpoints\":[{\"addresses\":[\"$loki_ip\"]}]}" \
   >/dev/null
+
+# Remove the pre-EndpointSlice resource left by older local environments without
+# asking kubectl to resolve the deprecated resource type (which emits a warning).
+legacy_loki_endpoint="/api/v1/namespaces/$namespace/endpoints/loki-local"
+if kubectl --context "$kube_context" get --raw "$legacy_loki_endpoint" \
+  >/dev/null 2>&1; then
+  kubectl --context "$kube_context" delete --raw "$legacy_loki_endpoint" \
+    >/dev/null 2>&1
+fi
+
 kubectl --context "$kube_context" -n "$namespace" rollout restart \
   daemonset/fluent-bit
 kubectl --context "$kube_context" -n "$namespace" rollout status \

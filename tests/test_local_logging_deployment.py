@@ -73,6 +73,9 @@ def test_local_scripts_are_pinned_to_the_disposable_context():
     assert "wait_for_query kubernetes-api" in test_script
     assert "wait_for_query fluent-bit" in test_script
     assert "daemonset/fluent-bit" in up_script + test_script
+    assert "patch endpointslice loki-local" in up_script
+    assert 'delete --raw "$legacy_loki_endpoint"' in up_script
+    assert "patch endpoints loki-local" not in up_script
 
 
 def test_local_tls_generator_creates_a_fluent_bit_client_identity():
