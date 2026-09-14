@@ -1,0 +1,24 @@
+#!/usr/sbin/nft -f
+# Managed by ops/monitoring/site.yml. Local edits will be replaced.
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority filter; policy accept;
+
+        iifname "lo" tcp dport {{ monitoring_loki_port }} accept comment "Loki host-local clients"
+{% for source in monitoring_loki_allowed_ipv4_sources %}
+        ip saddr {{ source }} tcp dport {{ monitoring_loki_port }} accept comment "Loki approved client"
+{% endfor %}
+        tcp dport {{ monitoring_loki_port }} drop comment "Reject other Loki clients"
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

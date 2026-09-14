@@ -148,6 +148,7 @@ sobeys_receipt_items_categorized.xlsx
 .receipt-test/
 .dev-certs/
 .local-logging/
+.monitoring/
 .ocr_cache/
 scanned_receipts_report.json
 *_scanned_receipts_report.json
@@ -156,3 +157,4 @@ scanned_receipts_report.json
 k8s/*-secret.yaml
 k8s/secret.yaml
 *.kubeconfig
+.env.monitoring

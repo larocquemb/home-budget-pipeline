@@ -1,0 +1,8 @@
+---
+- name: Reconcile external Kubernetes logging
+  hosts: monitoring
+  become: true
+  gather_facts: false
+
+  roles:
+    - role: monitoring

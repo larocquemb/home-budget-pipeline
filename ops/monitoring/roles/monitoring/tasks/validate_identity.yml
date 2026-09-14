@@ -1,0 +1,69 @@
+---
+- name: Verify certificate chain for {{ monitoring_identity.name }}
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - verify
+      - -CAfile
+      - "{{ monitoring_root_ca_source }}"
+      - -untrusted
+      - "{{ monitoring_intermediate_ca_source }}"
+      - -purpose
+      - "{{ monitoring_identity.purpose }}"
+      - "{{ monitoring_identity.cert }}"
+  become: false
+  delegate_to: localhost
+  changed_when: false
+
+- name: Check certificate lifetime for {{ monitoring_identity.name }}
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -checkend
+      - "604800"
+      - -noout
+      - -in
+      - "{{ monitoring_identity.cert }}"
+  become: false
+  delegate_to: localhost
+  changed_when: false
+
+- name: Read certificate public key for {{ monitoring_identity.name }}
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ monitoring_identity.cert }}"
+      - -pubkey
+      - -noout
+  become: false
+  delegate_to: localhost
+  changed_when: false
+  register: monitoring_certificate_public_key
+  no_log: true
+
+- name: Read private-key public key for {{ monitoring_identity.name }}
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - pkey
+      - -in
+      - "{{ monitoring_identity.key }}"
+      - -pubout
+  become: false
+  delegate_to: localhost
+  changed_when: false
+  register: monitoring_private_key_public_key
+  no_log: true
+
+- name: Confirm certificate and key match for {{ monitoring_identity.name }}
+  ansible.builtin.assert:
+    that:
+      - monitoring_certificate_public_key.stdout == monitoring_private_key_public_key.stdout
+    fail_msg: "{{ monitoring_identity.name }} certificate does not match its private key"
+    quiet: true
+  become: false
+  delegate_to: localhost
+  no_log: true

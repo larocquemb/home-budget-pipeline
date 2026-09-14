@@ -1,0 +1,17 @@
+# This is the safe checkpoint currently running in production. It verifies
+# certificates when clients offer them but keeps Loki bound to loopback.
+# Change to "enforced" in a reviewed commit only after Fluent Bit is deployed.
+monitoring_loki_stage: optional
+
+monitoring_loki_hostname: monitoring.idc.brownrook.net
+monitoring_loki_port: 3100
+monitoring_loki_allowed_ipv4_sources:
+  - 192.168.2.230/32
+
+monitoring_kubernetes_namespace: home-budget
+monitoring_kubernetes_admin_context: brownrook-k3s1
+monitoring_fluent_bit_secret_name: fluent-bit-loki-tls
+
+monitoring_grafana_url: http://127.0.0.1:3000
+monitoring_grafana_datasource_uid: cfy4qg8i178jkb
+monitoring_grafana_datasource_name: loki

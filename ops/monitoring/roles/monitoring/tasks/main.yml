@@ -1,0 +1,663 @@
+---
+- name: Validate controller inputs
+  ansible.builtin.assert:
+    that:
+      - monitoring_loki_stage in ['optional', 'enforced']
+      - monitoring_pki_dir | length > 0
+      - monitoring_alloy_kubeconfig | length > 0
+      - monitoring_admin_kubeconfig | length > 0
+      - monitoring_grafana_admin_password | length > 0
+    fail_msg: >-
+      Set MONITORING_PKI_DIR, MONITORING_ALLOY_KUBECONFIG,
+      MONITORING_ADMIN_KUBECONFIG, and MONITORING_GRAFANA_ADMIN_PASSWORD; the
+      wrapper prompts for the password.
+    quiet: true
+  become: false
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Define external input files
+  ansible.builtin.set_fact:
+    monitoring_external_inputs:
+      - {label: root CA, path: "{{ monitoring_root_ca_source }}", private: false}
+      - {label: intermediate CA, path: "{{ monitoring_intermediate_ca_source }}", private: false}
+      - {label: monitoring certificate, path: "{{ monitoring_server_cert_source }}", private: false}
+      - {label: monitoring key, path: "{{ monitoring_server_key_source }}", private: true}
+      - {label: Alloy certificate, path: "{{ monitoring_alloy_cert_source }}", private: false}
+      - {label: Alloy key, path: "{{ monitoring_alloy_key_source }}", private: true}
+      - {label: Grafana certificate, path: "{{ monitoring_grafana_cert_source }}", private: false}
+      - {label: Grafana key, path: "{{ monitoring_grafana_key_source }}", private: true}
+      - {label: Fluent Bit certificate, path: "{{ monitoring_fluent_bit_cert_source }}", private: false}
+      - {label: Fluent Bit key, path: "{{ monitoring_fluent_bit_key_source }}", private: true}
+      - {label: Alloy reader kubeconfig, path: "{{ monitoring_alloy_kubeconfig }}", private: true}
+      - {label: Kubernetes admin kubeconfig, path: "{{ monitoring_admin_kubeconfig }}", private: true}
+  become: false
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Inspect external input files
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+  loop: "{{ monitoring_external_inputs }}"
+  loop_control:
+    label: "{{ item.label }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  register: monitoring_external_input_stats
+  no_log: true
+
+- name: Require present, regular, protected external inputs
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - not item.item.private or item.stat.mode in ['0400', '0600']
+    fail_msg: >-
+      {{ item.item.label }} is missing, is not a regular file, or its private
+      permissions are not 0400/0600.
+    quiet: true
+  loop: "{{ monitoring_external_input_stats.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Validate external certificate identities
+  ansible.builtin.include_tasks: validate_identity.yml
+  loop:
+    - name: monitoring server
+      cert: "{{ monitoring_server_cert_source }}"
+      key: "{{ monitoring_server_key_source }}"
+      purpose: sslserver
+    - name: Alloy client
+      cert: "{{ monitoring_alloy_cert_source }}"
+      key: "{{ monitoring_alloy_key_source }}"
+      purpose: sslclient
+    - name: Grafana client
+      cert: "{{ monitoring_grafana_cert_source }}"
+      key: "{{ monitoring_grafana_key_source }}"
+      purpose: sslclient
+    - name: Fluent Bit client
+      cert: "{{ monitoring_fluent_bit_cert_source }}"
+      key: "{{ monitoring_fluent_bit_key_source }}"
+      purpose: sslclient
+  loop_control:
+    loop_var: monitoring_identity
+
+- name: Verify Alloy reader permission boundary
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ monitoring_alloy_kubeconfig }}"
+      - --namespace
+      - "{{ monitoring_kubernetes_namespace }}"
+      - auth
+      - can-i
+      - "{{ item.verb }}"
+      - "{{ item.resource }}"
+  loop:
+    - {verb: list, resource: pods, expected: "yes"}
+    - {verb: get, resource: pods/log, expected: "yes"}
+    - {verb: get, resource: secrets, expected: "no"}
+  loop_control:
+    label: "{{ item.verb }} {{ item.resource }} = {{ item.expected }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  changed_when: false
+  register: monitoring_alloy_permission_checks
+  no_log: true
+
+- name: Confirm Alloy reader remains least privilege
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim == item.item.expected
+    fail_msg: >-
+      Alloy reader permission mismatch for {{ item.item.verb }}
+      {{ item.item.resource }}; expected {{ item.item.expected }}.
+    quiet: true
+  loop: "{{ monitoring_alloy_permission_checks.results }}"
+  loop_control:
+    label: "{{ item.item.verb }} {{ item.item.resource }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Verify controller permission to reconcile the TLS Secret
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ monitoring_admin_kubeconfig }}"
+      - --context
+      - "{{ monitoring_kubernetes_admin_context }}"
+      - --namespace
+      - "{{ monitoring_kubernetes_namespace }}"
+      - auth
+      - can-i
+      - "{{ item }}"
+      - secrets
+  loop:
+    - get
+    - create
+    - patch
+  become: false
+  delegate_to: localhost
+  run_once: true
+  changed_when: false
+  register: monitoring_admin_permission_checks
+  no_log: true
+
+- name: Confirm controller can reconcile the TLS Secret
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim == 'yes'
+    fail_msg: >-
+      The {{ monitoring_kubernetes_admin_context }} controller credential
+      cannot {{ item.item }} Secrets in {{ monitoring_kubernetes_namespace }}.
+    quiet: true
+  loop: "{{ monitoring_admin_permission_checks.results }}"
+  loop_control:
+    label: "{{ item.item }} secrets"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Read root CA for the Kubernetes Secret
+  ansible.builtin.slurp:
+    src: "{{ monitoring_root_ca_source }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  register: monitoring_root_ca_data
+  no_log: true
+
+- name: Read Fluent Bit certificate for the Kubernetes Secret
+  ansible.builtin.slurp:
+    src: "{{ monitoring_fluent_bit_cert_source }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  register: monitoring_fluent_bit_cert_data
+  no_log: true
+
+- name: Read Fluent Bit key for the Kubernetes Secret
+  ansible.builtin.slurp:
+    src: "{{ monitoring_fluent_bit_key_source }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  register: monitoring_fluent_bit_key_data
+  no_log: true
+
+- name: Build the in-memory Fluent Bit Secret
+  ansible.builtin.set_fact:
+    monitoring_fluent_bit_secret:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ monitoring_fluent_bit_secret_name }}"
+        namespace: "{{ monitoring_kubernetes_namespace }}"
+      type: kubernetes.io/tls
+      data:
+        ca.crt: "{{ monitoring_root_ca_data.content }}"
+        tls.crt: "{{ monitoring_fluent_bit_cert_data.content }}"
+        tls.key: "{{ monitoring_fluent_bit_key_data.content }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  no_log: true
+
+- name: Check the Fluent Bit Secret for drift
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --context
+      - "{{ monitoring_kubernetes_admin_context }}"
+      - --namespace
+      - "{{ monitoring_kubernetes_namespace }}"
+      - diff
+      - --filename=-
+    stdin: "{{ monitoring_fluent_bit_secret | to_json }}"
+  environment:
+    KUBECONFIG: "{{ monitoring_admin_kubeconfig }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  check_mode: false
+  register: monitoring_secret_diff
+  failed_when: monitoring_secret_diff.rc not in [0, 1]
+  changed_when: monitoring_secret_diff.rc == 1
+  when: ansible_check_mode
+  no_log: true
+
+- name: Reconcile the Fluent Bit Secret
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --context
+      - "{{ monitoring_kubernetes_admin_context }}"
+      - --namespace
+      - "{{ monitoring_kubernetes_namespace }}"
+      - apply
+      - --filename=-
+    stdin: "{{ monitoring_fluent_bit_secret | to_json }}"
+  environment:
+    KUBECONFIG: "{{ monitoring_admin_kubeconfig }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  check_mode: false
+  register: monitoring_secret_apply
+  changed_when: "'unchanged' not in monitoring_secret_apply.stdout"
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Inspect required monitoring-host commands
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /usr/bin/alloy
+    - /usr/bin/loki
+    - /usr/sbin/nft
+    - /usr/sbin/update-ca-certificates
+  register: monitoring_command_stats
+
+- name: Require installed host services
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.executable
+    fail_msg: "Required command is not installed: {{ item.item }}"
+    quiet: true
+  loop: "{{ monitoring_command_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Create shared monitoring TLS group
+  ansible.builtin.group:
+    name: monitoring-tls
+    system: true
+    state: present
+
+- name: Grant services access to the monitoring server key
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: monitoring-tls
+    append: true
+  loop:
+    - loki
+    - grafana
+
+- name: Create monitoring TLS directory
+  ansible.builtin.file:
+    path: "{{ monitoring_tls_dir }}"
+    state: directory
+    owner: root
+    group: monitoring-tls
+    mode: "0750"
+
+- name: Install monitoring server certificate
+  ansible.builtin.copy:
+    src: "{{ monitoring_server_cert_source }}"
+    dest: "{{ monitoring_tls_dir }}/monitoring.fullchain.crt"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: restart Loki
+
+- name: Install monitoring server key
+  ansible.builtin.copy:
+    src: "{{ monitoring_server_key_source }}"
+    dest: "{{ monitoring_tls_dir }}/monitoring.key"
+    owner: root
+    group: monitoring-tls
+    mode: "0640"
+    backup: true
+  notify: restart Loki
+  no_log: true
+
+- name: Install Loki client CA
+  ansible.builtin.copy:
+    src: "{{ monitoring_root_ca_source }}"
+    dest: "{{ monitoring_tls_dir }}/brown-rook-client-ca.crt"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: restart Loki
+
+- name: Install Brown Rook CA in operating-system trust
+  ansible.builtin.copy:
+    src: "{{ monitoring_root_ca_source }}"
+    dest: /usr/local/share/ca-certificates/brown-rook-root-ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: update operating-system CA trust
+
+- name: Create Alloy configuration directory
+  ansible.builtin.file:
+    path: "{{ monitoring_alloy_dir }}"
+    state: directory
+    owner: root
+    group: alloy
+    mode: "0750"
+
+- name: Install Alloy Kubernetes credential
+  ansible.builtin.copy:
+    src: "{{ monitoring_alloy_kubeconfig }}"
+    dest: "{{ monitoring_alloy_dir }}/home-budget.kubeconfig"
+    owner: root
+    group: alloy
+    mode: "0640"
+    backup: true
+  notify: restart Alloy
+  no_log: true
+
+- name: Install Alloy root CA
+  ansible.builtin.copy:
+    src: "{{ monitoring_root_ca_source }}"
+    dest: "{{ monitoring_alloy_dir }}/brown-rook-root-ca.crt"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: restart Alloy
+
+- name: Install Alloy client certificate
+  ansible.builtin.copy:
+    src: "{{ monitoring_alloy_cert_source }}"
+    dest: "{{ monitoring_alloy_dir }}/loki-client.crt"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: restart Alloy
+
+- name: Install Alloy client key
+  ansible.builtin.copy:
+    src: "{{ monitoring_alloy_key_source }}"
+    dest: "{{ monitoring_alloy_dir }}/loki-client.key"
+    owner: root
+    group: alloy
+    mode: "0640"
+    backup: true
+  notify: restart Alloy
+  no_log: true
+
+- name: Install validated Alloy configuration
+  ansible.builtin.copy:
+    src: "{{ monitoring_repo_root }}/deploy/external-logging/config.alloy"
+    dest: "{{ monitoring_alloy_dir }}/config.alloy"
+    owner: root
+    group: alloy
+    mode: "0640"
+    backup: true
+    validate: /usr/bin/alloy validate %s
+  notify: restart Alloy
+
+- name: Keep Grafana's Loki hostname on loopback
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^[^#]*[[:space:]]{{ monitoring_loki_hostname | regex_escape }}([[:space:]]|$)"
+    line: "127.0.0.1 {{ monitoring_loki_hostname }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable nftables before changing its policy
+  ansible.builtin.systemd_service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: Install validated nftables policy
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+    validate: /usr/sbin/nft --check --file %s
+  notify: restart nftables
+
+- name: Install validated Loki configuration
+  ansible.builtin.template:
+    src: loki-config.yml.j2
+    dest: "{{ monitoring_loki_config_path }}"
+    owner: root
+    group: loki
+    mode: "0640"
+    backup: true
+    validate: /usr/bin/loki -config.file=%s -verify-config
+  notify: restart Loki
+
+- name: Enable Loki and Alloy
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - loki
+    - alloy
+
+- name: Activate validated host changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for authenticated Loki readiness
+  ansible.builtin.uri:
+    url: "https://{{ monitoring_loki_hostname }}:{{ monitoring_loki_port }}/ready"
+    ca_path: "{{ monitoring_alloy_dir }}/brown-rook-root-ca.crt"
+    client_cert: "{{ monitoring_alloy_dir }}/loki-client.crt"
+    client_key: "{{ monitoring_alloy_dir }}/loki-client.key"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_loki_ready
+  retries: 12
+  delay: 5
+  until: monitoring_loki_ready.status == 200
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Probe Loki without a client identity
+  ansible.builtin.uri:
+    url: "https://{{ monitoring_loki_hostname }}:{{ monitoring_loki_port }}/ready"
+    ca_path: "{{ monitoring_alloy_dir }}/brown-rook-root-ca.crt"
+    validate_certs: true
+    status_code: 200
+  register: monitoring_loki_anonymous_probe
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Verify the selected client-authentication stage
+  ansible.builtin.assert:
+    that:
+      - >-
+        (monitoring_loki_stage == 'optional' and monitoring_loki_anonymous_probe.status == 200)
+        or
+        (monitoring_loki_stage == 'enforced' and monitoring_loki_anonymous_probe.status != 200)
+    fail_msg: "Loki client-authentication behavior does not match {{ monitoring_loki_stage }}"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Read Grafana client certificate
+  ansible.builtin.slurp:
+    src: "{{ monitoring_grafana_cert_source }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  register: monitoring_grafana_cert_data
+  no_log: true
+
+- name: Read Grafana client key
+  ansible.builtin.slurp:
+    src: "{{ monitoring_grafana_key_source }}"
+  become: false
+  delegate_to: localhost
+  run_once: true
+  register: monitoring_grafana_key_data
+  no_log: true
+
+- name: Calculate Grafana secure-input revision
+  ansible.builtin.set_fact:
+    monitoring_grafana_secure_revision: >-
+      {{ ([monitoring_root_ca_data.content, monitoring_grafana_cert_data.content,
+            monitoring_grafana_key_data.content] | join(':')) | hash('sha256') }}
+  no_log: true
+
+- name: Inspect Grafana secure-input marker
+  ansible.builtin.stat:
+    path: "{{ monitoring_grafana_secret_marker }}"
+  register: monitoring_grafana_marker_stat
+
+- name: Read Grafana secure-input marker
+  ansible.builtin.slurp:
+    src: "{{ monitoring_grafana_secret_marker }}"
+  when: monitoring_grafana_marker_stat.stat.exists
+  register: monitoring_grafana_marker_data
+  no_log: true
+
+- name: Read Grafana Loki datasource
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/datasources/uid/{{ monitoring_grafana_datasource_uid }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_datasource
+  check_mode: false
+  no_log: true
+
+- name: Determine whether Grafana datasource needs reconciliation
+  ansible.builtin.set_fact:
+    monitoring_grafana_datasource_needs_update: >-
+      {{
+        monitoring_grafana_datasource.status != 200
+        or monitoring_grafana_datasource.json.name | default('') != monitoring_grafana_datasource_name
+        or monitoring_grafana_datasource.json.type | default('') != 'loki'
+        or monitoring_grafana_datasource.json.access | default('') != 'proxy'
+        or monitoring_grafana_datasource.json.url | default('') != 'https://' ~ monitoring_loki_hostname ~ ':' ~ monitoring_loki_port
+        or (monitoring_grafana_datasource.json.isDefault | default(true))
+        or not (monitoring_grafana_datasource.json.jsonData.tlsAuth | default(false))
+        or not (monitoring_grafana_datasource.json.jsonData.tlsAuthWithCACert | default(false))
+        or (monitoring_grafana_datasource.json.jsonData.tlsSkipVerify | default(true))
+        or monitoring_grafana_datasource.json.jsonData.serverName | default('') != monitoring_loki_hostname
+        or not (monitoring_grafana_datasource.json.secureJsonFields.tlsCACert | default(false))
+        or not (monitoring_grafana_datasource.json.secureJsonFields.tlsClientCert | default(false))
+        or not (monitoring_grafana_datasource.json.secureJsonFields.tlsClientKey | default(false))
+        or ((monitoring_grafana_marker_data.content | default('') | b64decode | trim)
+            != monitoring_grafana_secure_revision)
+      }}
+  no_log: true
+
+- name: Define Grafana Loki datasource payload
+  ansible.builtin.set_fact:
+    monitoring_grafana_datasource_payload:
+      uid: "{{ monitoring_grafana_datasource_uid }}"
+      name: "{{ monitoring_grafana_datasource_name }}"
+      type: loki
+      access: proxy
+      url: "https://{{ monitoring_loki_hostname }}:{{ monitoring_loki_port }}"
+      isDefault: false
+      jsonData:
+        tlsAuth: true
+        tlsAuthWithCACert: true
+        tlsSkipVerify: false
+        serverName: "{{ monitoring_loki_hostname }}"
+      secureJsonData:
+        tlsCACert: "{{ monitoring_root_ca_data.content | b64decode }}"
+        tlsClientCert: "{{ monitoring_grafana_cert_data.content | b64decode }}"
+        tlsClientKey: "{{ monitoring_grafana_key_data.content | b64decode }}"
+  no_log: true
+
+- name: Create Grafana Loki datasource
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/api/datasources"
+    method: POST
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: "{{ monitoring_grafana_datasource_payload }}"
+    status_code: 200
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_datasource.status == 404
+  no_log: true
+
+- name: Update Grafana Loki datasource
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/datasources/uid/{{ monitoring_grafana_datasource_uid }}
+    method: PUT
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: "{{ monitoring_grafana_datasource_payload }}"
+    status_code: 200
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_datasource.status == 200
+    - monitoring_grafana_datasource_needs_update
+  no_log: true
+
+- name: Record reconciled Grafana secure-input revision
+  ansible.builtin.copy:
+    content: "{{ monitoring_grafana_secure_revision }}\n"
+    dest: "{{ monitoring_grafana_secret_marker }}"
+    owner: grafana
+    group: grafana
+    mode: "0600"
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_datasource_needs_update
+  no_log: true
+
+- name: Report pending Grafana datasource reconciliation in check mode
+  ansible.builtin.debug:
+    msg: Grafana Loki datasource would be reconciled.
+  when:
+    - ansible_check_mode
+    - monitoring_grafana_datasource_needs_update
+
+- name: Verify Grafana Loki datasource health
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/datasources/uid/{{ monitoring_grafana_datasource_uid }}/health
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_health
+  when: not ansible_check_mode
+  check_mode: false
+  no_log: true
+
+- name: Confirm Grafana can query Loki
+  ansible.builtin.assert:
+    that:
+      - monitoring_grafana_health.json.status == 'OK'
+    fail_msg: Grafana could not connect to Loki with its client identity.
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true
