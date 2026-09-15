@@ -12,6 +12,12 @@ table inet filter {
         ip saddr {{ source }} tcp dport {{ monitoring_loki_port }} accept comment "Loki approved client"
 {% endfor %}
         tcp dport {{ monitoring_loki_port }} drop comment "Reject other Loki clients"
+
+        iifname "lo" tcp dport {{ monitoring_otel_port }} accept comment "OTLP host-local clients"
+{% for source in monitoring_otel_allowed_ipv4_sources %}
+        ip saddr {{ source }} tcp dport {{ monitoring_otel_port }} accept comment "OTLP approved client"
+{% endfor %}
+        tcp dport {{ monitoring_otel_port }} drop comment "Reject other OTLP clients"
     }
 
     chain forward {

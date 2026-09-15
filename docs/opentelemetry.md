@@ -138,31 +138,25 @@ The two OTLP hops use separate identities:
 | `otel-collector-backend-tls` | backend CA plus Collector client certificate/key | Collector exporter |
 | `otel-backend` | backend `host:port` and verified server name | Collector exporter |
 
+The external Alloy OTLP receiver also uses the dedicated
+`otel-backend-server` identity. Its certificate covers
+`monitoring.idc.brownrook.net`; the private key exists only in the external PKI
+directory and on the monitoring host.
+
 The Collector server certificate must cover
 `otel-collector.home-budget.svc.cluster.local`; both client certificates need
 the TLS `clientAuth` extended key usage. Keep CA signing keys and leaf private
-keys outside Git. The repository's
+keys outside Git. Store the four identities under the paths documented in
+`ops/monitoring/README.md`. The repository's
 [`secrets.example.yaml`](https://github.com/larocquemb/home-budget-pipeline/blob/main/deploy/opentelemetry/secrets.example.yaml)
 documents shape only.
 
-Create or rotate each TLS Secret directly from protected files. For example:
-
-```bash
-kubectl --context brownrook-k3s1 -n home-budget create secret generic \
-  receipt-telemetry-client-tls \
-  --from-file=ca.crt=/protected/collector-ca.crt \
-  --from-file=tls.crt=/protected/receipt-worker.crt \
-  --from-file=tls.key=/protected/receipt-worker.key \
-  --dry-run=client -o yaml | \
-kubectl --context brownrook-k3s1 apply -f -
-```
-
-Repeat with the filenames and Secret names in the table. Create `otel-backend`
-without placing values in shell history, or reconcile it from the external
-secret workflow used by the environment. Restrict all private input files to
-mode `0400` or `0600`. After rotating any TLS Secret, restart both the receipt
-worker and Collector deployments so their gRPC clients and servers load the
-new certificate material.
+The `ops/monitoring` playbook validates these protected files, installs the
+external server identity, and reconciles all four Kubernetes Secrets without
+printing their contents. Restrict every private input file to mode `0400` or
+`0600`. After rotating a telemetry identity, apply the playbook and restart the
+receipt worker and Collector deployments so their gRPC clients and servers load
+the new certificate material.
 
 ## Deploy
 
@@ -173,7 +167,9 @@ kubectl kustomize deploy/rabbitmq-private-telemetry >/tmp/ledger-telemetry.yaml
 kubectl apply --dry-run=server -f /tmp/ledger-telemetry.yaml
 ```
 
-After all four Secrets exist and the backend OTLP receiver is healthy, change
+First run `make monitoring-gitops-check`, `make monitoring-gitops-apply`, and a
+second check. After all four Secrets exist and the backend OTLP receiver is
+healthy, change
 the parent-owned Argo CD `ledger` Application path in
 `brownrook-infra/kubernetes/gitops/apps/ledger-app.yaml` from
 `deploy/rabbitmq-private-logging` to

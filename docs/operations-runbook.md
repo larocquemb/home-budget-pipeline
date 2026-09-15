@@ -113,8 +113,9 @@ verified TLS delivery to Loki. The opt-in Method A overlay adds a node-level
 Fluent Bit DaemonSet for side-by-side comparison without changing application
 logging. See [Kubernetes log forwarding](log-forwarding.md) for credential and
 mTLS provisioning, local dual-path tests, rollout, validation, metrics, rotation,
-and rollback procedures. The monitoring host and Fluent Bit TLS Secret are
-reconciled from the Git-controlled `ops/monitoring` Ansible playbook with
+and rollback procedures. The monitoring host, its Loki and Tempo services, and
+the Kubernetes logging and telemetry TLS Secrets are reconciled from the
+Git-controlled `ops/monitoring` Ansible playbook with
 `make monitoring-gitops-check` and `make monitoring-gitops-apply`; all secret
 inputs stay outside Git.
 

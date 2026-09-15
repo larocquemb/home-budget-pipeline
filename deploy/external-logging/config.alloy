@@ -126,3 +126,81 @@ loki.write "monitoring_tls" {
     enabled = true
   }
 }
+
+// Receive application metrics and traces from the in-cluster Collector. Alloy
+// is the only network-facing OTLP endpoint; the client CA makes the listener
+// require a Brown Rook client identity.
+otelcol.receiver.otlp "home_budget" {
+  grpc {
+    endpoint          = "0.0.0.0:4317"
+    max_recv_msg_size = "4MiB"
+
+    tls {
+      cert_file     = "/etc/alloy/otel-server.crt"
+      key_file      = "/etc/alloy/otel-server.key"
+      client_ca_file = "/etc/alloy/brown-rook-root-ca.crt"
+      min_version   = "TLS 1.2"
+    }
+  }
+
+  output {
+    metrics = [otelcol.processor.memory_limiter.home_budget.input]
+    traces  = [otelcol.processor.memory_limiter.home_budget.input]
+  }
+}
+
+otelcol.processor.memory_limiter "home_budget" {
+  check_interval = "1s"
+  limit          = "256MiB"
+  spike_limit    = "64MiB"
+
+  output {
+    metrics = [otelcol.processor.batch.home_budget.input]
+    traces  = [otelcol.processor.batch.home_budget.input]
+  }
+}
+
+otelcol.processor.batch "home_budget" {
+  timeout             = "1s"
+  send_batch_size     = 256
+  send_batch_max_size = 512
+
+  output {
+    metrics = [otelcol.exporter.prometheus.home_budget.input]
+    traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// Prometheus's write receiver is bound to loopback, so only local Alloy can
+// submit application metrics.
+otelcol.exporter.prometheus "home_budget" {
+  forward_to = [prometheus.remote_write.local_prometheus.receiver]
+}
+
+prometheus.remote_write "local_prometheus" {
+  endpoint {
+    url = "http://127.0.0.1:9090/api/v1/write"
+  }
+
+  queue_config {
+    capacity             = 2048
+    max_samples_per_send = 512
+    max_shards           = 2
+  }
+}
+
+// Tempo's ingest listener is loopback-only. Keep this exporter synchronous so
+// failures propagate to the Collector's persistent sending queue.
+otelcol.exporter.otlp "tempo" {
+  sending_queue {
+    enabled = false
+  }
+
+  client {
+    endpoint = "127.0.0.1:14317"
+
+    tls {
+      insecure = true
+    }
+  }
+}
