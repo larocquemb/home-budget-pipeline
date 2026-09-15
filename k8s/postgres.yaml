@@ -48,8 +48,15 @@ spec:
               mountPath: /schema
       containers:
         - name: postgres
-          image: postgres:17
+          image: ghcr.io/larocquemb/home-budget-postgres:18.6-oidc-7b6565afbc56bc8abcb75939d28c898377a10f00
           imagePullPolicy: IfNotPresent
+          args:
+            - -c
+            - oauth_validator_libraries=pg_oidc_validator
+            - -c
+            - pg_oidc_validator.authn_field=oid
+            - -c
+            - pg_oidc_validator.audience=$(POSTGRES_OAUTH_AUDIENCE)
           ports:
             - name: postgres
               containerPort: 5432
@@ -57,8 +64,11 @@ spec:
             - secretRef:
                 name: postgres-secret
           env:
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_OAUTH_AUDIENCE
+              valueFrom:
+                secretKeyRef:
+                  name: ledger-oauth2-proxy-secret
+                  key: OAUTH2_PROXY_CLIENT_ID
           readinessProbe:
             exec:
               command:
@@ -87,14 +97,22 @@ spec:
               cpu: "1"
               memory: 1Gi
           volumeMounts:
-            - name: postgres-data
-              mountPath: /var/lib/postgresql/data
+            # PostgreSQL 18 stores versioned data below this parent directory.
+            # Use a fresh claim instead of attaching the PostgreSQL 17 volume.
+            - name: postgres18-data
+              mountPath: /var/lib/postgresql
             - name: postgres-init
               mountPath: /docker-entrypoint-initdb.d
               readOnly: true
       volumes:
         - name: postgres-init
           emptyDir: {}
+        - name: postgres18-data
+          persistentVolumeClaim:
+            claimName: postgres18-data
+  # Keep the legacy claim template in place because this field is immutable on
+  # the live StatefulSet. It is intentionally not mounted by the PostgreSQL 18
+  # pod, preserving postgres-data-postgres-0 as a PostgreSQL 17 rollback copy.
   volumeClaimTemplates:
     - metadata:
         name: postgres-data
@@ -105,3 +123,16 @@ spec:
         resources:
           requests:
             storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres18-data
+  namespace: home-budget
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi

@@ -718,7 +718,7 @@ Internet / LAN
 K3s
     -> Ledger web
     -> oauth2-proxy
-    -> PostgreSQL StatefulSet + persistent volume
+    -> PostgreSQL 18 OAuth-capable StatefulSet + persistent volume
     -> receipt processor CronJob
     -> product enrichment CronJob template
     -> shared receipt data and OCR cache PVC
@@ -728,9 +728,13 @@ The optional `deploy/rabbitmq` overlay changes the receipt CronJob to a
 publisher and adds RabbitMQ plus a receipt-worker Deployment. Private-LAN
 variants are documented in the [network access guide](docs/private-networking.md).
 
-A fresh PostgreSQL persistent volume automatically receives the staged schema,
-category catalogue, analytics views, and supporting processing tables during
-initialization.
+A fresh PostgreSQL 18 persistent volume automatically receives the staged
+schema, category catalogue, analytics views, and supporting processing tables
+during initialization. The K3s deployment uses the pinned Brown Rook
+PostgreSQL 18.6 image with `pg_oidc_validator`; password-authenticated workload
+connections remain supported. The PostgreSQL 18 claim is intentionally distinct
+from the retained PostgreSQL 17 claim, and no database data is migrated between
+them.
 
 The PostgreSQL persistent volume is intentionally independent from Argo application synchronization. Running:
 
