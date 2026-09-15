@@ -77,20 +77,23 @@ monitoring_system_root_ca_path: /usr/local/share/ca-certificates/brown-rook-root
 monitoring_grafana_secret_marker: /var/lib/grafana/.home-budget-loki-datasource.sha256
 monitoring_grafana_prometheus_provisioning_path: >-
   /etc/grafana/provisioning/datasources/home-budget-prometheus.yml
-monitoring_grafana_dashboard_provisioning_path: >-
+monitoring_grafana_legacy_dashboard_provisioning_path: >-
   /etc/grafana/provisioning/dashboards/home-budget.yml
-monitoring_grafana_dashboard_dir: /var/lib/grafana/dashboards/home-budget
-monitoring_grafana_dashboard_path: >-
-  /var/lib/grafana/dashboards/home-budget/receipt-telemetry.json
-monitoring_grafana_ocr_dashboard_path: >-
-  /var/lib/grafana/dashboards/home-budget/ocr-performance.json
-monitoring_grafana_public_demo_dashboard_path: >-
-  /var/lib/grafana/dashboards/home-budget/public-live-demo.json
+monitoring_grafana_legacy_dashboard_dir: /var/lib/grafana/dashboards/home-budget
+monitoring_grafana_api_namespace: default
+monitoring_grafana_home_budget_folder_uid: home-budget
+monitoring_grafana_home_budget_folder_title: Home Budget
+monitoring_grafana_brown_rook_folder_uid: brown-rook
+monitoring_grafana_brown_rook_folder_title: Brown Rook
 monitoring_grafana_systemd_override_dir: >-
   /etc/systemd/system/grafana-server.service.d
+monitoring_grafana_port: 3000
+monitoring_grafana_public_proxy_ipv4_sources: []
 monitoring_grafana_public_demo_enabled: true
 monitoring_grafana_public_demo_annotations_enabled: false
 monitoring_grafana_public_demo_time_selection_enabled: false
+monitoring_grafana_public_demo_external_url: "{{ monitoring_grafana_url }}"
+monitoring_grafana_public_demo_access_token: ""
 
 # Bound local service-log churn independently of Loki's application log level.
 monitoring_journal_system_max_use: 256M

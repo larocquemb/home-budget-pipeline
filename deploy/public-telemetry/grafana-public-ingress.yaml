@@ -1,0 +1,115 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-public
+  namespace: home-budget
+spec:
+  ports:
+    - name: http
+      port: 3000
+      protocol: TCP
+      targetPort: 3000
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: grafana-public
+  namespace: home-budget
+  labels:
+    kubernetes.io/service-name: grafana-public
+addressType: IPv4
+ports:
+  - name: http
+    protocol: TCP
+    port: 3000
+endpoints:
+  - addresses:
+      - 192.168.2.210
+    conditions:
+      ready: true
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: telemetry-idc-brownrook-com-tls
+  namespace: home-budget
+spec:
+  secretName: telemetry-idc-brownrook-com-tls
+  issuerRef:
+    name: letsencrypt-prod-route53
+    kind: ClusterIssuer
+  dnsNames:
+    - telemetry.idc.brownrook.com
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: grafana-public-security
+  namespace: home-budget
+spec:
+  headers:
+    contentTypeNosniff: true
+    referrerPolicy: no-referrer
+    customResponseHeaders:
+      X-Robots-Tag: noindex, nofollow
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: grafana-public-rate-limit
+  namespace: home-budget
+spec:
+  rateLimit:
+    average: 30
+    period: 1s
+    burst: 100
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana-public
+  namespace: home-budget
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: >-
+      home-budget-grafana-public-security@kubernetescrd,
+      home-budget-grafana-public-rate-limit@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - telemetry.idc.brownrook.com
+      secretName: telemetry-idc-brownrook-com-tls
+  rules:
+    - host: telemetry.idc.brownrook.com
+      http:
+        paths:
+          - path: /public-dashboards
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana-public
+                port:
+                  number: 3000
+          - path: /bootdata
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana-public
+                port:
+                  number: 3000
+          - path: /public
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana-public
+                port:
+                  number: 3000
+          - path: /api/public/dashboards
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana-public
+                port:
+                  number: 3000

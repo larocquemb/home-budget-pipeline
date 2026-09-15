@@ -31,4 +31,8 @@ monitoring_grafana_receipt_dashboard_uid: home-budget-receipt-telemetry
 monitoring_grafana_receipt_dashboard_revision: kan-88-v2
 monitoring_grafana_ocr_dashboard_uid: home-budget-ocr-performance
 monitoring_grafana_public_demo_dashboard_uid: brown-rook-live-telemetry
-monitoring_grafana_public_demo_dashboard_revision: kan-119-v1
+monitoring_grafana_public_demo_dashboard_revision: kan-119-v2
+monitoring_grafana_public_demo_external_url: https://telemetry.idc.brownrook.com
+monitoring_grafana_public_demo_access_token: "08396daff846416b806d71cd965a6c6e"
+monitoring_grafana_public_proxy_ipv4_sources:
+  - 192.168.2.230/32

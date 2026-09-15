@@ -667,14 +667,6 @@
     validate: /usr/bin/promtool check config %s
   notify: restart Prometheus
 
-- name: Create Grafana home-budget dashboard directory
-  ansible.builtin.file:
-    path: "{{ monitoring_grafana_dashboard_dir }}"
-    state: directory
-    owner: root
-    group: grafana
-    mode: "0750"
-
 - name: Create Grafana systemd override directory
   ansible.builtin.file:
     path: "{{ monitoring_grafana_systemd_override_dir }}"
@@ -687,6 +679,7 @@
   ansible.builtin.copy:
     content: |
       [Service]
+      Environment="GF_SERVER_HTTP_ADDR=0.0.0.0"
       Environment="GF_AUTH_ANONYMOUS_ENABLED=false"
       Environment="GF_PUBLIC_DASHBOARDS_ENABLED=true"
     dest: "{{ monitoring_grafana_systemd_override_dir }}/home-budget-public-demo.conf"
@@ -700,46 +693,6 @@
   ansible.builtin.template:
     src: grafana-prometheus-datasource.yml.j2
     dest: "{{ monitoring_grafana_prometheus_provisioning_path }}"
-    owner: root
-    group: grafana
-    mode: "0640"
-    backup: true
-  notify: restart Grafana
-
-- name: Provision Grafana home-budget dashboard provider
-  ansible.builtin.template:
-    src: grafana-dashboard-provider.yml.j2
-    dest: "{{ monitoring_grafana_dashboard_provisioning_path }}"
-    owner: root
-    group: grafana
-    mode: "0640"
-    backup: true
-  notify: restart Grafana
-
-- name: Install Grafana receipt telemetry dashboard
-  ansible.builtin.template:
-    src: grafana-receipt-telemetry-dashboard.json.j2
-    dest: "{{ monitoring_grafana_dashboard_path }}"
-    owner: root
-    group: grafana
-    mode: "0640"
-    backup: true
-  notify: restart Grafana
-
-- name: Install Grafana OCR performance dashboard
-  ansible.builtin.template:
-    src: grafana-ocr-performance-dashboard.json.j2
-    dest: "{{ monitoring_grafana_ocr_dashboard_path }}"
-    owner: root
-    group: grafana
-    mode: "0640"
-    backup: true
-  notify: restart Grafana
-
-- name: Install sanitized Grafana public live-demo dashboard
-  ansible.builtin.template:
-    src: grafana-public-live-demo-dashboard.json.j2
-    dest: "{{ monitoring_grafana_public_demo_dashboard_path }}"
     owner: root
     group: grafana
     mode: "0640"
@@ -1421,62 +1374,15 @@
   check_mode: false
   no_log: true
 
-- name: Read provisioned Grafana receipt dashboard
-  ansible.builtin.uri:
-    url: >-
-      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_receipt_dashboard_uid }}
-    method: GET
-    url_username: "{{ monitoring_grafana_admin_user }}"
-    url_password: "{{ monitoring_grafana_admin_password }}"
-    force_basic_auth: true
-    ca_path: "{{ monitoring_system_root_ca_path }}"
-    validate_certs: true
-    return_content: true
-    status_code: [200, 404]
-  register: monitoring_grafana_receipt_dashboard
-  check_mode: false
-  no_log: true
-
-- name: Read provisioned Grafana OCR dashboard
-  ansible.builtin.uri:
-    url: >-
-      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_ocr_dashboard_uid }}
-    method: GET
-    url_username: "{{ monitoring_grafana_admin_user }}"
-    url_password: "{{ monitoring_grafana_admin_password }}"
-    force_basic_auth: true
-    ca_path: "{{ monitoring_system_root_ca_path }}"
-    validate_certs: true
-    return_content: true
-    status_code: [200, 404]
-  register: monitoring_grafana_ocr_dashboard
-  check_mode: false
-  no_log: true
-
-- name: Read provisioned Grafana public live-demo dashboard
-  ansible.builtin.uri:
-    url: >-
-      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_public_demo_dashboard_uid }}
-    method: GET
-    url_username: "{{ monitoring_grafana_admin_user }}"
-    url_password: "{{ monitoring_grafana_admin_password }}"
-    force_basic_auth: true
-    ca_path: "{{ monitoring_system_root_ca_path }}"
-    validate_certs: true
-    return_content: true
-    status_code: [200, 404]
-  register: monitoring_grafana_public_demo_dashboard
-  check_mode: false
-  no_log: true
-
-- name: Determine whether Grafana provisioning needs activation
+- name: Determine whether Grafana Prometheus datasource needs activation
   ansible.builtin.set_fact:
-    monitoring_grafana_provisioning_needs_activation: >-
+    monitoring_grafana_prometheus_provisioning_needs_activation: >-
       {{
         monitoring_grafana_prometheus_datasource.status != 200
         or monitoring_grafana_prometheus_datasource.json.name | default('')
            != monitoring_grafana_prometheus_datasource_name
-        or monitoring_grafana_prometheus_datasource.json.type | default('') != 'prometheus'
+        or monitoring_grafana_prometheus_datasource.json.type | default('')
+           != 'prometheus'
         or monitoring_grafana_prometheus_datasource.json.url | default('')
            != 'http://127.0.0.1:9090'
         or monitoring_grafana_tempo_datasource_uid not in
@@ -1484,59 +1390,360 @@
             | default([])
             | selectattr('name', 'equalto', 'trace_id')
             | map(attribute='datasourceUid') | list)
-        or monitoring_grafana_receipt_dashboard.status != 200
-        or monitoring_grafana_receipt_dashboard.json.dashboard.title | default('')
-           != 'Home Budget Receipt Telemetry'
-        or monitoring_grafana_receipt_dashboard.json.dashboard.panels | default([])
-           | length != 10
-        or monitoring_grafana_receipt_dashboard_revision not in
-           (monitoring_grafana_receipt_dashboard.json.dashboard.tags | default([]))
-        or monitoring_grafana_ocr_dashboard.status != 200
-        or monitoring_grafana_ocr_dashboard.json.dashboard.title | default('')
-           != 'Home Budget OCR Performance'
-        or monitoring_grafana_ocr_dashboard.json.dashboard.panels | default([])
-           | length != 8
-        or monitoring_grafana_receipt_dashboard_revision not in
-           (monitoring_grafana_ocr_dashboard.json.dashboard.tags | default([]))
-        or monitoring_grafana_public_demo_dashboard.status != 200
-        or monitoring_grafana_public_demo_dashboard.json.dashboard.title | default('')
-           != 'Brown Rook Live Receipt Processing'
-        or monitoring_grafana_public_demo_dashboard.json.dashboard.panels | default([])
-           | length != 8
-        or monitoring_grafana_public_demo_dashboard_revision not in
-           (monitoring_grafana_public_demo_dashboard.json.dashboard.tags | default([]))
       }}
   no_log: true
 
-- name: Report pending Grafana provisioning activation in check mode
+- name: Report pending Grafana Prometheus datasource activation in check mode
   ansible.builtin.debug:
-    msg: Grafana Prometheus datasource and private/public telemetry dashboards would be activated.
+    msg: Grafana Prometheus datasource would be activated from its provisioned definition.
   when:
     - ansible_check_mode
-    - monitoring_grafana_provisioning_needs_activation
+    - monitoring_grafana_prometheus_provisioning_needs_activation
 
-- name: Restart Grafana when installed provisioning is not active
+- name: Restart Grafana when its provisioned Prometheus datasource is not active
   ansible.builtin.systemd_service:
     name: grafana-server
     state: restarted
   when:
     - not ansible_check_mode
-    - monitoring_grafana_provisioning_needs_activation
+    - monitoring_grafana_prometheus_provisioning_needs_activation
 
-- name: Wait for Grafana after provisioning activation
+- name: Wait for Grafana after Prometheus datasource activation
   ansible.builtin.uri:
     url: "{{ monitoring_grafana_url }}/api/health"
     ca_path: "{{ monitoring_system_root_ca_path }}"
     validate_certs: true
     return_content: true
     status_code: 200
-  register: monitoring_grafana_provisioning_ready
+  register: monitoring_grafana_prometheus_provisioning_ready
   retries: 12
   delay: 5
-  until: monitoring_grafana_provisioning_ready.status == 200
+  until: monitoring_grafana_prometheus_provisioning_ready.status == 200
   changed_when: false
   check_mode: false
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_prometheus_provisioning_needs_activation
+
+- name: Read native Grafana folders
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/apis/folder.grafana.app/v1/namespaces/{{ monitoring_grafana_api_namespace }}/folders
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_folder_list
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Adopt existing Grafana folder identities by title
+  ansible.builtin.set_fact:
+    monitoring_grafana_home_budget_folder_uid_effective: >-
+      {{
+        (monitoring_grafana_folder_list.json.items | default([])
+         | selectattr('spec.title', 'equalto', monitoring_grafana_home_budget_folder_title)
+         | map(attribute='metadata.name') | list | first)
+        | default(monitoring_grafana_home_budget_folder_uid, true)
+      }}
+    monitoring_grafana_brown_rook_folder_uid_effective: >-
+      {{
+        (monitoring_grafana_folder_list.json.items | default([])
+         | selectattr('spec.title', 'equalto', monitoring_grafana_brown_rook_folder_title)
+         | map(attribute='metadata.name') | list | first)
+        | default(monitoring_grafana_brown_rook_folder_uid, true)
+      }}
+  no_log: true
+
+- name: Inspect legacy Grafana dashboard files before native migration
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ monitoring_grafana_legacy_dashboard_provisioning_path }}"
+    - "{{ monitoring_grafana_legacy_dashboard_dir }}"
+  register: monitoring_grafana_legacy_dashboard_files
+  changed_when: false
+  check_mode: false
+
+- name: Determine whether legacy Grafana dashboard cleanup is required
+  ansible.builtin.set_fact:
+    monitoring_grafana_legacy_dashboard_cleanup_required: >-
+      {{
+        monitoring_grafana_legacy_dashboard_files.results
+        | selectattr('stat.exists') | list | length > 0
+      }}
+
+- name: Report pending legacy Grafana dashboard migration in check mode
+  ansible.builtin.debug:
+    msg: >-
+      Grafana would be stopped briefly while classic file provisioning is
+      removed. The same dashboard UIDs would then be recreated through the
+      native v2 API; an existing external-share token remains associated with
+      its dashboard UID.
+  when:
+    - ansible_check_mode
+    - monitoring_grafana_legacy_dashboard_cleanup_required
+
+- name: Stop Grafana before removing classic dashboard provisioning
+  ansible.builtin.systemd_service:
+    name: grafana-server
+    state: stopped
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_legacy_dashboard_cleanup_required
+
+- name: Remove classic Grafana dashboard provisioning
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ monitoring_grafana_legacy_dashboard_provisioning_path }}"
+    - "{{ monitoring_grafana_legacy_dashboard_dir }}"
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_legacy_dashboard_cleanup_required
+
+- name: Start Grafana without classic dashboard provisioning
+  ansible.builtin.systemd_service:
+    name: grafana-server
+    state: started
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_legacy_dashboard_cleanup_required
+
+- name: Wait for Grafana after removing classic dashboard provisioning
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/api/health"
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_native_migration_ready
+  retries: 12
+  delay: 5
+  until: monitoring_grafana_native_migration_ready.status == 200
+  changed_when: false
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_legacy_dashboard_cleanup_required
+
+- name: Define native Grafana folder resources
+  ansible.builtin.set_fact:
+    monitoring_grafana_folder_resources:
+      - label: Home Budget
+        resource:
+          apiVersion: folder.grafana.app/v1
+          kind: Folder
+          metadata:
+            name: "{{ monitoring_grafana_home_budget_folder_uid_effective }}"
+          spec:
+            title: "{{ monitoring_grafana_home_budget_folder_title }}"
+      - label: Brown Rook
+        resource:
+          apiVersion: folder.grafana.app/v1
+          kind: Folder
+          metadata:
+            name: "{{ monitoring_grafana_brown_rook_folder_uid_effective }}"
+          spec:
+            title: "{{ monitoring_grafana_brown_rook_folder_title }}"
+
+- name: Read reconciled native Grafana folders
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/apis/folder.grafana.app/v1/namespaces/{{ monitoring_grafana_api_namespace }}/folders/{{ item.resource.metadata.name }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  loop: "{{ monitoring_grafana_folder_resources }}"
+  loop_control:
+    label: "{{ item.label }}"
+  register: monitoring_grafana_folders_current
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Create missing native Grafana folders
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/apis/folder.grafana.app/v1/namespaces/{{ monitoring_grafana_api_namespace }}/folders
+    method: POST
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    body_format: json
+    body: "{{ item.item.resource }}"
+    status_code: 201
+  loop: "{{ monitoring_grafana_folders_current.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - not ansible_check_mode
+    - item.status == 404
+  no_log: true
+
+- name: Update changed native Grafana folders
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/apis/folder.grafana.app/v1/namespaces/{{ monitoring_grafana_api_namespace }}/folders/{{ item.item.resource.metadata.name }}
+    method: PUT
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    body_format: json
+    body:
+      apiVersion: folder.grafana.app/v1
+      kind: Folder
+      metadata:
+        name: "{{ item.item.resource.metadata.name }}"
+        resourceVersion: "{{ item.json.metadata.resourceVersion }}"
+        annotations: {}
+      spec: "{{ item.item.resource.spec }}"
+    status_code: 200
+  loop: "{{ monitoring_grafana_folders_current.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - not ansible_check_mode
+    - item.status == 200
+    - >-
+      item.json.spec != item.item.resource.spec
+      or (item.json.metadata.annotations | default({})).get('grafana.app/managedBy', '')
+         == 'classic-file-provisioning'
+  no_log: true
+
+- name: Report pending native Grafana folder reconciliation in check mode
+  ansible.builtin.debug:
+    msg: "Grafana folder {{ item.item.label }} would be reconciled through the folder v1 API."
+  loop: "{{ monitoring_grafana_folders_current.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - ansible_check_mode
+    - >-
+      item.status == 404
+      or item.json.spec != item.item.resource.spec
+      or (item.json.metadata.annotations | default({})).get('grafana.app/managedBy', '')
+         == 'classic-file-provisioning'
+
+- name: Define native Grafana v2 dashboard resources
+  ansible.builtin.set_fact:
+    monitoring_grafana_dashboard_resources:
+      - label: receipt telemetry
+        resource: >-
+          {{ lookup('ansible.builtin.template', 'grafana-receipt-telemetry-dashboard.json.j2') | from_json }}
+      - label: OCR performance
+        resource: >-
+          {{ lookup('ansible.builtin.template', 'grafana-ocr-performance-dashboard.json.j2') | from_json }}
+      - label: public live demo
+        resource: >-
+          {{ lookup('ansible.builtin.template', 'grafana-public-live-demo-dashboard.json.j2') | from_json }}
+  no_log: true
+
+- name: Read native Grafana v2 dashboards
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/apis/dashboard.grafana.app/v2/namespaces/{{ monitoring_grafana_api_namespace }}/dashboards/{{ item.resource.metadata.name }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  loop: "{{ monitoring_grafana_dashboard_resources }}"
+  loop_control:
+    label: "{{ item.label }}"
+  register: monitoring_grafana_dashboards_current
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Create missing native Grafana v2 dashboards
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/apis/dashboard.grafana.app/v2/namespaces/{{ monitoring_grafana_api_namespace }}/dashboards
+    method: POST
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    body_format: json
+    body: "{{ item.item.resource }}"
+    status_code: 201
+  loop: "{{ monitoring_grafana_dashboards_current.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - not ansible_check_mode
+    - item.status == 404
+  no_log: true
+
+- name: Update changed native Grafana v2 dashboards
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/apis/dashboard.grafana.app/v2/namespaces/{{ monitoring_grafana_api_namespace }}/dashboards/{{ item.item.resource.metadata.name }}
+    method: PUT
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    body_format: json
+    body:
+      apiVersion: dashboard.grafana.app/v2
+      kind: Dashboard
+      metadata:
+        name: "{{ item.item.resource.metadata.name }}"
+        resourceVersion: "{{ item.json.metadata.resourceVersion }}"
+        annotations: "{{ item.item.resource.metadata.annotations }}"
+      spec: "{{ item.item.resource.spec }}"
+    status_code: 200
+  loop: "{{ monitoring_grafana_dashboards_current.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - not ansible_check_mode
+    - item.status == 200
+    - >-
+      item.json.spec != item.item.resource.spec
+      or (item.json.metadata.annotations | default({})).get('grafana.app/folder', '')
+         != item.item.resource.metadata.annotations['grafana.app/folder']
+      or (item.json.metadata.annotations | default({})).get('grafana.app/managedBy', '')
+         == 'classic-file-provisioning'
+  no_log: true
+
+- name: Report pending native Grafana v2 dashboard reconciliation in check mode
+  ansible.builtin.debug:
+    msg: "Grafana v2 dashboard {{ item.item.label }} would be reconciled."
+  loop: "{{ monitoring_grafana_dashboards_current.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when:
+    - ansible_check_mode
+    - >-
+      item.status == 404
+      or item.json.spec != item.item.resource.spec
+      or (item.json.metadata.annotations | default({})).get('grafana.app/folder', '')
+         != item.item.resource.metadata.annotations['grafana.app/folder']
+      or (item.json.metadata.annotations | default({})).get('grafana.app/managedBy', '')
+         == 'classic-file-provisioning'
 
 - name: Verify provisioned Grafana Prometheus datasource
   ansible.builtin.uri:
@@ -1559,10 +1766,10 @@
   no_log: true
   when: not ansible_check_mode
 
-- name: Verify provisioned Grafana receipt dashboard
+- name: Verify native Grafana folders
   ansible.builtin.uri:
     url: >-
-      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_receipt_dashboard_uid }}
+      {{ monitoring_grafana_url }}/apis/folder.grafana.app/v1/namespaces/{{ monitoring_grafana_api_namespace }}/folders/{{ item.resource.metadata.name }}
     method: GET
     url_username: "{{ monitoring_grafana_admin_user }}"
     url_password: "{{ monitoring_grafana_admin_password }}"
@@ -1571,19 +1778,22 @@
     validate_certs: true
     return_content: true
     status_code: [200, 404]
-  register: monitoring_grafana_dashboard_verified
+  loop: "{{ monitoring_grafana_folder_resources }}"
+  loop_control:
+    label: "{{ item.label }}"
+  register: monitoring_grafana_folders_verified
   retries: 6
   delay: 5
-  until: monitoring_grafana_dashboard_verified.status == 200
+  until: monitoring_grafana_folders_verified.status == 200
   changed_when: false
   check_mode: false
   no_log: true
   when: not ansible_check_mode
 
-- name: Verify provisioned Grafana OCR dashboard
+- name: Verify native Grafana v2 dashboards
   ansible.builtin.uri:
     url: >-
-      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_ocr_dashboard_uid }}
+      {{ monitoring_grafana_url }}/apis/dashboard.grafana.app/v2/namespaces/{{ monitoring_grafana_api_namespace }}/dashboards/{{ item.resource.metadata.name }}
     method: GET
     url_username: "{{ monitoring_grafana_admin_user }}"
     url_password: "{{ monitoring_grafana_admin_password }}"
@@ -1592,37 +1802,54 @@
     validate_certs: true
     return_content: true
     status_code: [200, 404]
-  register: monitoring_grafana_ocr_dashboard_verified
+  loop: "{{ monitoring_grafana_dashboard_resources }}"
+  loop_control:
+    label: "{{ item.label }}"
+  register: monitoring_grafana_dashboards_verified
   retries: 6
   delay: 5
-  until: monitoring_grafana_ocr_dashboard_verified.status == 200
+  until: monitoring_grafana_dashboards_verified.status == 200
   changed_when: false
   check_mode: false
   no_log: true
   when: not ansible_check_mode
 
-- name: Verify provisioned Grafana public live-demo dashboard
-  ansible.builtin.uri:
-    url: >-
-      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_public_demo_dashboard_uid }}
-    method: GET
-    url_username: "{{ monitoring_grafana_admin_user }}"
-    url_password: "{{ monitoring_grafana_admin_password }}"
-    force_basic_auth: true
-    ca_path: "{{ monitoring_system_root_ca_path }}"
-    validate_certs: true
-    return_content: true
-    status_code: [200, 404]
-  register: monitoring_grafana_public_demo_dashboard_verified
-  retries: 6
-  delay: 5
-  until: monitoring_grafana_public_demo_dashboard_verified.status == 200
-  changed_when: false
-  check_mode: false
-  no_log: true
+- name: Confirm native Grafana folders
+  ansible.builtin.assert:
+    that:
+      - item.status == 200
+      - item.json.apiVersion == 'folder.grafana.app/v1'
+      - item.json.kind == 'Folder'
+      - item.json.spec == item.item.resource.spec
+      - "'grafana.app/managedBy' not in (item.json.metadata.annotations | default({}))"
+    fail_msg: "Grafana folder {{ item.item.label }} did not reconcile through the native API."
+    quiet: true
+  loop: "{{ monitoring_grafana_folders_verified.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
   when: not ansible_check_mode
+  no_log: true
 
-- name: Confirm Grafana provisioned telemetry resources
+- name: Confirm native Grafana v2 dashboards
+  ansible.builtin.assert:
+    that:
+      - item.status == 200
+      - item.json.apiVersion == 'dashboard.grafana.app/v2'
+      - item.json.kind == 'Dashboard'
+      - item.json.spec == item.item.resource.spec
+      - >-
+        item.json.metadata.annotations['grafana.app/folder']
+        == item.item.resource.metadata.annotations['grafana.app/folder']
+      - "'grafana.app/managedBy' not in (item.json.metadata.annotations | default({}))"
+    fail_msg: "Grafana v2 dashboard {{ item.item.label }} did not reconcile."
+    quiet: true
+  loop: "{{ monitoring_grafana_dashboards_verified.results }}"
+  loop_control:
+    label: "{{ item.item.label }}"
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Confirm Grafana telemetry resources
   ansible.builtin.assert:
     that:
       - monitoring_grafana_prometheus_verified.json.url == 'http://127.0.0.1:9090'
@@ -1631,28 +1858,7 @@
         (monitoring_grafana_prometheus_verified.json.jsonData.exemplarTraceIdDestinations
          | selectattr('name', 'equalto', 'trace_id')
          | map(attribute='datasourceUid') | list)
-      - >-
-        monitoring_grafana_dashboard_verified.json.dashboard.title
-        == 'Home Budget Receipt Telemetry'
-      - >-
-        monitoring_grafana_receipt_dashboard_revision in
-        monitoring_grafana_dashboard_verified.json.dashboard.tags
-      - >-
-        monitoring_grafana_ocr_dashboard_verified.json.dashboard.title
-        == 'Home Budget OCR Performance'
-      - >-
-        monitoring_grafana_receipt_dashboard_revision in
-        monitoring_grafana_ocr_dashboard_verified.json.dashboard.tags
-      - >-
-        monitoring_grafana_public_demo_dashboard_verified.json.dashboard.title
-        == 'Brown Rook Live Receipt Processing'
-      - >-
-        monitoring_grafana_public_demo_dashboard_verified.json.dashboard.templating.list
-        | length == 0
-      - >-
-        monitoring_grafana_public_demo_dashboard_revision in
-        monitoring_grafana_public_demo_dashboard_verified.json.dashboard.tags
-    fail_msg: Grafana did not activate the provisioned Prometheus datasource and private/public telemetry dashboards.
+    fail_msg: Grafana did not activate the Prometheus datasource.
     quiet: true
   when: not ansible_check_mode
   no_log: true
@@ -1706,6 +1912,7 @@
 - name: Define Grafana external-sharing payload
   ansible.builtin.set_fact:
     monitoring_grafana_public_demo_share_payload:
+      accessToken: "{{ monitoring_grafana_public_demo_access_token }}"
       isEnabled: "{{ monitoring_grafana_public_demo_enabled | bool }}"
       annotationsEnabled: "{{ monitoring_grafana_public_demo_annotations_enabled | bool }}"
       timeSelectionEnabled: "{{ monitoring_grafana_public_demo_time_selection_enabled | bool }}"
@@ -1806,6 +2013,9 @@
        == monitoring_grafana_public_demo_annotations_enabled | bool
     and monitoring_grafana_public_demo_share_verified.json.timeSelectionEnabled | bool
        == monitoring_grafana_public_demo_time_selection_enabled | bool
+    and (monitoring_grafana_public_demo_access_token | length == 0
+         or monitoring_grafana_public_demo_share_verified.json.accessToken
+            == monitoring_grafana_public_demo_access_token)
   changed_when: false
   check_mode: false
   no_log: true
@@ -1816,27 +2026,35 @@
 - name: Verify the public live-demo route without Grafana credentials
   ansible.builtin.uri:
     url: >-
-      {{ monitoring_grafana_url }}/public-dashboards/{{ monitoring_grafana_public_demo_share_verified.json.accessToken }}
+      {{ monitoring_grafana_public_demo_external_url }}/public-dashboards/{{ monitoring_grafana_public_demo_share_verified.json.accessToken }}
     method: GET
-    ca_path: "{{ monitoring_system_root_ca_path }}"
     validate_certs: true
     follow_redirects: all
     return_content: false
     status_code: 200
+  become: false
+  delegate_to: localhost
   changed_when: false
   check_mode: false
   when:
     - not ansible_check_mode
     - monitoring_grafana_public_demo_enabled
 
-- name: Verify ordinary Grafana APIs still require authentication
+- name: Verify ordinary Grafana routes are absent from the public hostname
   ansible.builtin.uri:
-    url: "{{ monitoring_grafana_url }}/api/search"
+    url: "{{ monitoring_grafana_public_demo_external_url }}{{ item }}"
     method: GET
-    ca_path: "{{ monitoring_system_root_ca_path }}"
     validate_certs: true
     follow_redirects: none
-    status_code: [401, 403]
+    status_code: 404
+  become: false
+  delegate_to: localhost
+  loop:
+    - /
+    - /login
+    - /explore
+    - /api/health
+    - /api/search
   changed_when: false
   check_mode: false
   when:
@@ -1846,7 +2064,7 @@
 - name: Report the revocable Grafana public live-demo URL
   ansible.builtin.debug:
     msg: >-
-      Public live demo: {{ monitoring_grafana_url }}/public-dashboards/{{ monitoring_grafana_public_demo_share_verified.json.accessToken }}
+      Public live demo: {{ monitoring_grafana_public_demo_external_url }}/public-dashboards/{{ monitoring_grafana_public_demo_share_verified.json.accessToken }}
   when:
     - not ansible_check_mode
     - monitoring_grafana_public_demo_enabled

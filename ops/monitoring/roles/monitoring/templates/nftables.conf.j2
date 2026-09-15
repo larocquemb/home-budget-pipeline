@@ -18,6 +18,12 @@ table inet filter {
         ip saddr {{ source }} tcp dport {{ monitoring_otel_port }} accept comment "OTLP approved client"
 {% endfor %}
         tcp dport {{ monitoring_otel_port }} drop comment "Reject other OTLP clients"
+
+        iifname "lo" tcp dport {{ monitoring_grafana_port }} accept comment "Grafana host-local clients"
+{% for source in monitoring_grafana_public_proxy_ipv4_sources %}
+        ip saddr {{ source }} tcp dport {{ monitoring_grafana_port }} accept comment "Grafana approved reverse proxy"
+{% endfor %}
+        tcp dport {{ monitoring_grafana_port }} drop comment "Reject other direct Grafana clients"
     }
 
     chain forward {

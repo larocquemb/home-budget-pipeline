@@ -78,8 +78,13 @@ expressions = []
 for dashboard_path in dashboard_paths:
     rendered = re.sub(r"\{\{[^{}]+\}\}", "validation", dashboard_path.read_text())
     dashboard = json.loads(rendered)
-    for panel in dashboard["panels"]:
-        for target in panel.get("targets", []):
+    if dashboard.get("apiVersion") != "dashboard.grafana.app/v2":
+        raise ValueError(f"{dashboard_path} is not a Grafana v2 dashboard resource")
+    for element in dashboard["spec"]["elements"].values():
+        if element["kind"] != "Panel":
+            continue
+        for query in element["spec"]["data"]["spec"]["queries"]:
+            target = query["spec"]["query"]["spec"]
             expression = target.get("expr")
             if not expression:
                 continue

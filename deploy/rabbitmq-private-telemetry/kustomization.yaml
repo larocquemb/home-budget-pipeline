@@ -3,5 +3,6 @@ kind: Kustomization
 resources:
   - ../rabbitmq-private-logging
   - ../opentelemetry
+  - ../public-telemetry
 patches:
   - path: receipt-worker-telemetry-patch.yaml
