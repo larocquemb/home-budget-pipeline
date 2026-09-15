@@ -255,7 +255,7 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
 
     assert "tempo={{ monitoring_tempo_version }}" in tasks
     assert "policy_rc_d: 101" in tasks
-    assert "validate: /usr/bin/tempo --config.file=%s --config.verify" in tasks
+    assert "validate: /usr/bin/tempo --config.file=%s --config.verify=true" in tasks
     assert "- name: Wait for Tempo readiness on loopback" in tasks
     assert "- name: Wait for Prometheus readiness on loopback" in tasks
     assert "- name: Wait for Alloy OTLP listener" in tasks

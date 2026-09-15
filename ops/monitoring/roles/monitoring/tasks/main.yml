@@ -691,7 +691,7 @@
     group: root
     mode: "0644"
     backup: true
-    validate: /usr/bin/tempo --config.file=%s --config.verify
+    validate: /usr/bin/tempo --config.file=%s --config.verify=true
   notify: restart Tempo
   when: monitoring_tempo_command.stat.exists
 
