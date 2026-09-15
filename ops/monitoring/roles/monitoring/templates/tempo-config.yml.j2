@@ -1,0 +1,33 @@
+# Managed by ops/monitoring/site.yml. Local edits will be replaced.
+stream_over_http_enabled: true
+multitenancy_enabled: false
+
+server:
+  http_listen_address: {{ monitoring_tempo_http_address }}
+  http_listen_port: {{ monitoring_tempo_http_port }}
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9095
+  log_level: info
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: {{ monitoring_tempo_otlp_address }}:{{ monitoring_tempo_otlp_port }}
+
+backend_worker:
+  compaction:
+    block_retention: {{ monitoring_tempo_retention_period }}
+    compacted_block_retention: 1h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: {{ monitoring_tempo_storage_path }}/wal
+    local:
+      path: {{ monitoring_tempo_storage_path }}/blocks
+
+usage_report:
+  reporting_enabled: false

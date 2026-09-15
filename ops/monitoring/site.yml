@@ -1,8 +1,9 @@
 ---
-- name: Reconcile external Kubernetes logging
+- name: Reconcile external observability services
   hosts: monitoring
   become: true
   gather_facts: false
+  force_handlers: true
 
   roles:
     - role: monitoring

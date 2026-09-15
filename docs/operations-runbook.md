@@ -113,16 +113,20 @@ verified TLS delivery to Loki. The opt-in Method A overlay adds a node-level
 Fluent Bit DaemonSet for side-by-side comparison without changing application
 logging. See [Kubernetes log forwarding](log-forwarding.md) for credential and
 mTLS provisioning, local dual-path tests, rollout, validation, metrics, rotation,
-and rollback procedures. The monitoring host and Fluent Bit TLS Secret are
-reconciled from the Git-controlled `ops/monitoring` Ansible playbook with
+and rollback procedures. The monitoring host, its Loki and Tempo services, and
+the Kubernetes logging and telemetry TLS Secrets are reconciled from the
+Git-controlled `ops/monitoring` Ansible playbook with
 `make monitoring-gitops-check` and `make monitoring-gitops-apply`; all secret
 inputs stay outside Git.
 
 Receipt traces and metrics are available through the opt-in
 `deploy/rabbitmq-private-telemetry` overlay. It adds an mTLS OpenTelemetry
 Collector without changing the default deployment path. See
-[Receipt-processing OpenTelemetry](opentelemetry.md) for PKI inputs,
+[Receipt-processing OpenTelemetry](opentelemetry.md) for the repeatable
+Intermediate-CA YubiKey issuance and rotation ceremony, PKI inputs,
 configuration, deployment, live correlation, failure testing, and rollback.
+For initial issuance, insert the Intermediate CA YubiKey and run
+`scripts/issue_telemetry_certificates.sh` from the repository root.
 
 ## Commit and pull request
 

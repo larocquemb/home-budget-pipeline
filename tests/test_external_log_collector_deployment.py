@@ -127,7 +127,6 @@ def test_monitoring_role_bounds_loki_and_journald_output():
         ROOT
         / "ops/monitoring/roles/monitoring/handlers/main.yml"
     ).read_text()
-
     assert defaults["monitoring_loki_log_level"] == "info"
     assert "log_level: {{ monitoring_loki_log_level }}" in loki
     assert "log_level: debug" not in loki
@@ -179,3 +178,105 @@ def test_monitoring_role_uses_durable_loki_storage_with_retention():
     assert tasks.index("- name: Wait for authenticated Loki readiness") < tasks.index(
         "- name: Remove retired temporary Loki storage"
     )
+
+
+def test_monitoring_role_reconciles_mtls_telemetry_backend():
+    defaults = yaml.safe_load(
+        (
+            ROOT
+            / "ops/monitoring/roles/monitoring/defaults/main.yml"
+        ).read_text()
+    )
+    inventory = yaml.safe_load(
+        (ROOT / "ops/monitoring/inventory/group_vars/monitoring.yml").read_text()
+    )
+    alloy = (ROOT / "deploy/external-logging/config.alloy").read_text()
+    tempo = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/tempo-config.yml.j2"
+    ).read_text()
+    firewall = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/nftables.conf.j2"
+    ).read_text()
+    tasks = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/tasks/main.yml"
+    ).read_text()
+    handlers = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/handlers/main.yml"
+    ).read_text()
+    identity_validation = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/tasks/validate_identity.yml"
+    ).read_text()
+    site = yaml.safe_load((ROOT / "ops/monitoring/site.yml").read_text())
+    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+
+    assert defaults["monitoring_tempo_version"] == "3.0.3"
+    assert defaults["monitoring_tempo_storage_path"] == "/var/lib/tempo"
+    assert defaults["monitoring_tempo_retention_period"] == "336h"
+    assert "--web.listen-address=127.0.0.1:9090" in defaults[
+        "monitoring_prometheus_args"
+    ]
+    assert "--web.enable-remote-write-receiver" in defaults[
+        "monitoring_prometheus_args"
+    ]
+    assert "--enable-feature=exemplar-storage" in defaults[
+        "monitoring_prometheus_args"
+    ]
+
+    assert inventory["monitoring_otel_port"] == 4317
+    assert inventory["monitoring_otel_allowed_ipv4_sources"] == [
+        "192.168.2.230/32"
+    ]
+    assert inventory["monitoring_grafana_tempo_datasource_uid"]
+
+    assert 'otelcol.receiver.otlp "home_budget"' in alloy
+    assert 'endpoint          = "0.0.0.0:4317"' in alloy
+    assert 'client_ca_file = "/etc/alloy/brown-rook-root-ca.crt"' in alloy
+    assert 'min_version = "1.2"' in alloy
+    assert '"TLS 1.2"' not in alloy
+    assert 'otelcol.processor.memory_limiter "home_budget"' in alloy
+    assert 'otelcol.processor.batch "home_budget"' in alloy
+    assert 'otelcol.exporter.otlp "tempo"' in alloy
+    assert "sending_queue {\n    enabled = false" in alloy
+    assert 'endpoint = "127.0.0.1:14317"' in alloy
+    assert 'url = "http://127.0.0.1:9090/api/v1/write"' in alloy
+    assert "url = \"http://127.0.0.1:9090/api/v1/write\"\n\n    queue_config {" in alloy
+    assert "insecure_skip_verify" not in alloy
+
+    assert "http_listen_address: {{ monitoring_tempo_http_address }}" in tempo
+    assert "endpoint: {{ monitoring_tempo_otlp_address }}:" in tempo
+    assert "backend: local" in tempo
+    assert "backend_worker:" in tempo
+    assert "block_retention: {{ monitoring_tempo_retention_period }}" in tempo
+    assert "compactor:" not in tempo
+    assert "path: {{ monitoring_tempo_storage_path }}/wal" in tempo
+    assert "path: {{ monitoring_tempo_storage_path }}/blocks" in tempo
+
+    assert "tempo={{ monitoring_tempo_version }}" in tasks
+    assert "policy_rc_d: 101" in tasks
+    assert "validate: /usr/bin/tempo --config.file=%s --config.verify=true" in tasks
+    assert "- name: Probe Alloy OTLP listener before readiness checks" in tasks
+    assert (
+        "- name: Restart Alloy when its installed OTLP configuration is not active"
+        in tasks
+    )
+    assert "- name: Wait for Tempo readiness on loopback" in tasks
+    assert "- name: Wait for Prometheus readiness on loopback" in tasks
+    assert "- name: Wait for Alloy OTLP listener" in tasks
+    assert "monitoring_receipt_telemetry_secret_name" in tasks
+    assert "monitoring_otel_collector_server_secret_name" in tasks
+    assert "monitoring_otel_collector_backend_secret_name" in tasks
+    assert "monitoring_otel_backend_secret_name" in tasks
+    assert "tracesToLogsV2:" in tasks
+    assert "matcherRegex:" in tasks
+    assert "-checkhost" in identity_validation
+    assert "tcp dport {{ monitoring_otel_port }} drop" in firewall
+    assert "listen: restart Tempo" in handlers
+    assert "listen: restart Prometheus" in handlers
+    assert '"$RUNNER_TEMP/alloy/otel-server.key"' in ci
+    assert '"$RUNNER_TEMP/alloy/otel-server.crt"' in ci
+    assert site[0]["force_handlers"] is True

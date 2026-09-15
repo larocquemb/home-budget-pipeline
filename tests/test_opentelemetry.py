@@ -335,3 +335,19 @@ def test_project_declares_python_opentelemetry_dependencies():
     assert "opentelemetry-api>=1.44,<2" in project
     assert "opentelemetry-sdk>=1.44,<2" in project
     assert "opentelemetry-exporter-otlp-proto-grpc>=1.44,<2" in project
+
+
+def test_telemetry_secret_example_targets_managed_backend():
+    resources = list(
+        yaml.safe_load_all(
+            (ROOT / "deploy/opentelemetry/secrets.example.yaml").read_text()
+        )
+    )
+    backend = next(
+        item for item in resources if item["metadata"]["name"] == "otel-backend"
+    )
+
+    assert backend["stringData"] == {
+        "endpoint": "monitoring.idc.brownrook.net:4317",
+        "server-name": "monitoring.idc.brownrook.net",
+    }

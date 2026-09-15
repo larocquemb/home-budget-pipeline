@@ -7,10 +7,21 @@ monitoring_loki_port: 3100
 monitoring_loki_allowed_ipv4_sources:
   - 192.168.2.230/32
 
+monitoring_otel_hostname: monitoring.idc.brownrook.net
+monitoring_otel_port: 4317
+monitoring_otel_allowed_ipv4_sources:
+  - 192.168.2.230/32
+
 monitoring_kubernetes_namespace: home-budget
 monitoring_kubernetes_admin_context: brownrook-k3s1
 monitoring_fluent_bit_secret_name: fluent-bit-loki-tls
+monitoring_receipt_telemetry_secret_name: receipt-telemetry-client-tls
+monitoring_otel_collector_server_secret_name: otel-collector-server-tls
+monitoring_otel_collector_backend_secret_name: otel-collector-backend-tls
+monitoring_otel_backend_secret_name: otel-backend
 
 monitoring_grafana_url: https://grafana.idc.brownrook.net
 monitoring_grafana_datasource_uid: cfy4qg8i178jkb
 monitoring_grafana_datasource_name: loki
+monitoring_grafana_tempo_datasource_uid: home-budget-tempo
+monitoring_grafana_tempo_datasource_name: tempo

@@ -49,6 +49,8 @@ jobs:
             -subj '/CN=alloy-validation' \
             -keyout "$RUNNER_TEMP/alloy/loki-client.key" \
             -out "$RUNNER_TEMP/alloy/loki-client.crt"
+          cp "$RUNNER_TEMP/alloy/loki-client.key" "$RUNNER_TEMP/alloy/otel-server.key"
+          cp "$RUNNER_TEMP/alloy/loki-client.crt" "$RUNNER_TEMP/alloy/otel-server.crt"
           cat > "$RUNNER_TEMP/alloy/home-budget.kubeconfig" <<'EOF'
           apiVersion: v1
           kind: Config

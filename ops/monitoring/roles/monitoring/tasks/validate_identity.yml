@@ -29,6 +29,21 @@
   delegate_to: localhost
   changed_when: false
 
+- name: Verify certificate hostname for {{ monitoring_identity.name }}
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -checkhost
+      - "{{ monitoring_identity.hostname }}"
+      - -noout
+      - -in
+      - "{{ monitoring_identity.cert }}"
+  become: false
+  delegate_to: localhost
+  changed_when: false
+  when: monitoring_identity.hostname is defined
+
 - name: Read certificate public key for {{ monitoring_identity.name }}
   ansible.builtin.command:
     argv:

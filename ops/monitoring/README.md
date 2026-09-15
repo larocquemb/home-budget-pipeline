@@ -1,10 +1,10 @@
 # External monitoring desired state
 
-This directory turns the KAN-86 monitoring-host commands into a repeatable
-Ansible reconciliation. Git owns the non-secret desired state for Loki, Alloy,
-nftables, the Grafana Loki datasource, and the Kubernetes Fluent Bit TLS Secret
-shape. Certificate private keys, Grafana credentials, kubeconfigs, and CA
-private keys remain outside Git.
+This directory turns the monitoring-host commands into a repeatable Ansible
+reconciliation. Git owns the non-secret desired state for Loki, Tempo, Alloy,
+Prometheus ingestion, nftables, Grafana datasources, and the Kubernetes
+observability Secret shapes. Certificate private keys, Grafana credentials,
+kubeconfigs, and CA private keys remain outside Git.
 
 The committed `monitoring_loki_stage: enforced` state is the final comparison
 configuration:
@@ -15,6 +15,13 @@ configuration:
 - nftables permits only loopback and the approved K3s node on port 3100.
 - The `fluent-bit-loki-tls` Secret is reconciled from external files, but the
   Fluent Bit overlay remains opt-in.
+- Alloy accepts OTLP/gRPC with mTLS on `0.0.0.0:4317`; nftables admits only the
+  approved K3s node and loopback.
+- Tempo `3.0.3` runs in monolithic mode on loopback, stores traces under
+  `/var/lib/tempo`, and retains blocks for 14 days.
+- Alloy sends traces to loopback Tempo and writes converted application metrics
+  to Prometheus's loopback-only remote-write receiver.
+- Grafana owns a Tempo datasource with bidirectional trace/log navigation.
 
 The role also keeps Loki at `info` log level and installs a journald drop-in
 that caps persistent service logs at 256 MiB, reserves 1 GiB of filesystem
@@ -43,9 +50,10 @@ chmod 0600 .env.monitoring
 `external-log-reader` credential installed on the monitoring host.
 `MONITORING_ADMIN_KUBECONFIG` is a controller-only credential allowed to
 create or update `home-budget/fluent-bit-loki-tls`; it is never copied to the
-host. The playbook selects its explicit `brownrook-k3s1` context rather than
-relying on the kubeconfig's current context. Private input files and both
-kubeconfigs must be mode `0400` or `0600`.
+host. It also reconciles the three telemetry TLS Secrets and the data-only OTLP
+backend endpoint Secret. The playbook selects its explicit `brownrook-k3s1`
+context rather than relying on the kubeconfig's current context. Private input
+files and both kubeconfigs must be mode `0400` or `0600`.
 The wrapper asks for the Grafana password without storing it in a file or shell
 history.
 
@@ -58,10 +66,28 @@ leafs/monitoring/monitoring.{fullchain.crt,key}
 leafs/alloy-loki-client/alloy-loki-client.{fullchain.crt,key}
 leafs/grafana-loki-client/grafana-loki-client.{fullchain.crt,key}
 leafs/fluent-bit-loki-client/fluent-bit-loki-client.{fullchain.crt,key}
+leafs/otel-backend-server/otel-backend-server.{fullchain.crt,key}
+leafs/receipt-telemetry-client/receipt-telemetry-client.{fullchain.crt,key}
+leafs/otel-collector-server/otel-collector-server.{fullchain.crt,key}
+leafs/otel-collector-backend-client/otel-collector-backend-client.{fullchain.crt,key}
 ```
+
+`otel-backend-server` must have `serverAuth` and the
+`monitoring.idc.brownrook.net` SAN. `otel-collector-server` must have
+`serverAuth` and the `otel-collector.home-budget.svc.cluster.local` SAN. The
+receipt and Collector-backend identities must have `clientAuth`. The playbook
+checks each chain, key pair, purpose, server hostname, and minimum lifetime
+before changing either host or Kubernetes state.
 
 The CA signing keys are not playbook inputs. They remain offline or in the
 YubiKey-backed ceremony and are needed only to issue or renew certificates.
+The complete preparation, `gnutls-certtool` signing, full-chain construction,
+and verification procedure is recorded in
+[`docs/opentelemetry.md`](../../docs/opentelemetry.md#issue-or-rotate-telemetry-certificates).
+Initial issuance is automated by
+[`scripts/issue_telemetry_certificates.sh`](../../scripts/issue_telemetry_certificates.sh);
+it still requires the Intermediate CA YubiKey, PIN prompts, and physical
+touches.
 
 ## Check and apply
 
@@ -78,7 +104,7 @@ make monitoring-gitops-apply
 The playbook verifies each certificate chain, expiry window, certificate/key
 pair, and private-file mode before making changes. Config files are backed up
 and validated with their native binaries before replacement. Handlers restart
-only changed services, then authenticated Loki readiness and Grafana datasource
+only changed services, then Loki, Tempo, Prometheus, and Grafana datasource
 health are tested. Secret-bearing tasks use Ansible's `no_log` protection.
 
 Running `make monitoring-gitops-check` and then
@@ -93,6 +119,10 @@ ssh paul@192.168.2.202 \
 ssh paul@192.168.2.202 'journalctl --disk-usage'
 ssh paul@192.168.2.202 \
   'sudo du -sh /var/lib/loki; sudo test ! -e /tmp/loki'
+ssh paul@192.168.2.202 \
+  'systemctl is-active tempo alloy prometheus; sudo du -sh /var/lib/tempo'
+ssh paul@192.168.2.202 \
+  'ss -lnt | grep -E "127.0.0.1:3200|127.0.0.1:9090|:4317"'
 ```
 
 Reducing an already oversized journal is intentionally not automated because
@@ -109,7 +139,8 @@ monitoring_loki_stage: enforced
 
 The enforced stage binds Loki to `0.0.0.0`, requires a verified client certificate,
 and disables Loki's unauthenticated experimental metric-aggregation callback.
-The firewall remains the independent allowlist. Before applying this stage,
+The OTLP listener is always mTLS-only and firewall restricted; Tempo and the
+write-capable Prometheus API remain on loopback. Before applying this stage,
 change `spec.source.path` for the Argo CD `ledger` Application in
 `brownrook-infra/kubernetes/gitops/apps/ledger-app.yaml` to
 `deploy/rabbitmq-private-logging`. The `brownrook-root` parent self-heals the
@@ -122,3 +153,9 @@ Rollback is a reviewed change to `optional`, followed by an apply; then change
 the parent-owned Application manifest back to `deploy/rabbitmq-private`, merge,
 and sync. Ansible's timestamped file backups provide a host-local emergency
 recovery path, but Git is the normal source of truth.
+
+The telemetry overlay has a separate rollback: change the parent Application
+path from `deploy/rabbitmq-private-telemetry` back to
+`deploy/rabbitmq-private-logging`. Keep Tempo and its Kubernetes Secrets in
+place until any queued Collector telemetry is drained; their presence does not
+enable application telemetry by itself.
