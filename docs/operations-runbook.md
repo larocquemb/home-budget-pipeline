@@ -122,7 +122,8 @@ inputs stay outside Git.
 Receipt traces and metrics are available through the opt-in
 `deploy/rabbitmq-private-telemetry` overlay. It adds an mTLS OpenTelemetry
 Collector without changing the default deployment path. See
-[Receipt-processing OpenTelemetry](opentelemetry.md) for PKI inputs,
+[Receipt-processing OpenTelemetry](opentelemetry.md) for the repeatable
+Intermediate-CA YubiKey issuance and rotation ceremony, PKI inputs,
 configuration, deployment, live correlation, failure testing, and rollback.
 
 ## Commit and pull request

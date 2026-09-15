@@ -158,6 +158,175 @@ printing their contents. Restrict every private input file to mode `0400` or
 receipt worker and Collector deployments so their gRPC clients and servers load
 the new certificate material.
 
+### Issue or rotate telemetry certificates
+
+Perform this ceremony on the Mac with the Intermediate CA YubiKey inserted.
+The PIN is entered only at the `p11tool` or `gnutls-certtool` prompt; never put
+it in a command, environment file, log, or Git.
+
+For initial issuance, clone `fluent-bit-loki-client` for the two client
+identities. They inherit its `clientAuth` request and GnuTLS template:
+
+```zsh
+cd ~/brownrook-ca/leafs
+
+for name in receipt-telemetry-client otel-collector-backend-client; do
+  mkdir -m 0755 "$name"
+  cp fluent-bit-loki-client/fluent-bit-loki-client.cnf "$name/$name.cnf"
+  cp fluent-bit-loki-client/fluent-bit-loki-client.tmpl "$name/$name.tmpl"
+  sed -i '' "s/^CN[[:space:]]*=.*/CN = $name/" "$name/$name.cnf"
+
+  openssl genpkey \
+    -algorithm EC \
+    -pkeyopt ec_paramgen_curve:prime256v1 \
+    -out "$name/$name.key"
+  chmod 0600 "$name/$name.key"
+  openssl req -new -sha384 \
+    -config "$name/$name.cnf" \
+    -key "$name/$name.key" \
+    -out "$name/$name.csr"
+  openssl req -in "$name/$name.csr" -noout -verify
+done
+```
+
+Clone the existing `monitoring` server identity for the two server
+certificates. Change the CN and SAN in the OpenSSL request and the `dns_name`
+in the GnuTLS template:
+
+```zsh
+cd ~/brownrook-ca/leafs
+
+prepare_telemetry_server() {
+  local name="$1"
+  local dns_name="$2"
+
+  mkdir -m 0755 "$name"
+  cp monitoring/monitoring_leaf.cnf "$name/$name.cnf"
+  cp monitoring/monitoring_leaf.tmpl "$name/$name.tmpl"
+  sed -i '' \
+    -e "s/^CN[[:space:]]*=.*/CN = $dns_name/" \
+    -e "s/^DNS\\.1[[:space:]]*=.*/DNS.1 = $dns_name/" \
+    "$name/$name.cnf"
+  sed -i '' \
+    "s/^dns_name[[:space:]]*=.*/dns_name = $dns_name/" \
+    "$name/$name.tmpl"
+
+  openssl genpkey \
+    -algorithm EC \
+    -pkeyopt ec_paramgen_curve:secp384r1 \
+    -out "$name/$name.key"
+  chmod 0600 "$name/$name.key"
+  openssl req -new -sha384 \
+    -config "$name/$name.cnf" \
+    -key "$name/$name.key" \
+    -out "$name/$name.csr"
+  openssl req -in "$name/$name.csr" -noout -verify
+}
+
+prepare_telemetry_server \
+  otel-backend-server \
+  monitoring.idc.brownrook.net
+
+prepare_telemetry_server \
+  otel-collector-server \
+  otel-collector.home-budget.svc.cluster.local
+
+unset -f prepare_telemetry_server
+```
+
+Resolve the Intermediate CA private-key URI without printing it, then sign all
+four CSRs. This is the same `gnutls-certtool` ceremony used for
+`fluent-bit-loki-client`; expect a PIN prompt and YubiKey touch for each leaf:
+
+```zsh
+(
+set -eu
+cd ~/brownrook-ca
+
+INTERMEDIATE_CA_KEY_URI="$(
+  p11tool \
+    --provider /opt/homebrew/lib/libykcs11.dylib \
+    --login \
+    --list-all \
+    --only-urls |
+  grep -E 'id=%02.*type=private|type=private.*id=%02' |
+  head -n 1
+)"
+test -n "$INTERMEDIATE_CA_KEY_URI"
+
+for name in \
+  otel-backend-server \
+  receipt-telemetry-client \
+  otel-collector-server \
+  otel-collector-backend-client
+do
+  (
+    cd "leafs/$name"
+    gnutls-certtool \
+      --ask-pass \
+      --hash=SHA384 \
+      --generate-certificate \
+      --template="$name.tmpl" \
+      --load-request="$name.csr" \
+      --load-ca-certificate=../../intermediate/intermediate_ca.crt \
+      --load-ca-privkey="$INTERMEDIATE_CA_KEY_URI" \
+      --provider=/opt/homebrew/lib/libykcs11.dylib \
+      --outfile="$name.crt"
+
+    cat "$name.crt" ../../intermediate/intermediate_ca.crt \
+      >"$name.fullchain.crt"
+    chmod 0644 "$name.crt" "$name.fullchain.crt"
+  )
+done
+)
+```
+
+Verify the chains, purposes, and server names before allowing Ansible to read
+the files:
+
+```zsh
+cd ~/brownrook-ca
+
+for name in receipt-telemetry-client otel-collector-backend-client; do
+  openssl verify \
+    -CAfile root/root_ca.crt \
+    -untrusted intermediate/intermediate_ca.crt \
+    -purpose sslclient \
+    "leafs/$name/$name.crt"
+done
+
+openssl verify \
+  -CAfile root/root_ca.crt \
+  -untrusted intermediate/intermediate_ca.crt \
+  -purpose sslserver \
+  leafs/otel-backend-server/otel-backend-server.crt
+openssl x509 -checkhost monitoring.idc.brownrook.net -noout \
+  -in leafs/otel-backend-server/otel-backend-server.crt
+
+openssl verify \
+  -CAfile root/root_ca.crt \
+  -untrusted intermediate/intermediate_ca.crt \
+  -purpose sslserver \
+  leafs/otel-collector-server/otel-collector-server.crt
+openssl x509 \
+  -checkhost otel-collector.home-budget.svc.cluster.local \
+  -noout \
+  -in leafs/otel-collector-server/otel-collector-server.crt
+
+find \
+  leafs/otel-backend-server \
+  leafs/receipt-telemetry-client \
+  leafs/otel-collector-server \
+  leafs/otel-collector-backend-client \
+  -maxdepth 1 -name '*.key' -exec stat -f '%Sp %N' {} \;
+```
+
+Every verification must report `OK` or a matching hostname, and every key must
+report mode `-rw-------`. Run `make monitoring-gitops-check` next; it repeats
+these checks and also verifies certificate lifetime and certificate/key
+pairing. For renewal, prepare and verify replacement artifacts under temporary
+names before replacing the current key, certificate, and full chain together.
+
 ## Deploy
 
 First render and inspect the complete opt-in overlay:

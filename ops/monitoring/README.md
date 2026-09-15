@@ -81,6 +81,9 @@ before changing either host or Kubernetes state.
 
 The CA signing keys are not playbook inputs. They remain offline or in the
 YubiKey-backed ceremony and are needed only to issue or renew certificates.
+The complete preparation, `gnutls-certtool` signing, full-chain construction,
+and verification procedure is recorded in
+[`docs/opentelemetry.md`](../../docs/opentelemetry.md#issue-or-rotate-telemetry-certificates).
 
 ## Check and apply
 
