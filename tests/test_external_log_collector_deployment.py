@@ -211,6 +211,7 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
         ROOT
         / "ops/monitoring/roles/monitoring/tasks/validate_identity.yml"
     ).read_text()
+    site = yaml.safe_load((ROOT / "ops/monitoring/site.yml").read_text())
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
 
     assert defaults["monitoring_tempo_version"] == "3.0.3"
@@ -256,6 +257,11 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     assert "tempo={{ monitoring_tempo_version }}" in tasks
     assert "policy_rc_d: 101" in tasks
     assert "validate: /usr/bin/tempo --config.file=%s --config.verify=true" in tasks
+    assert "- name: Probe Alloy OTLP listener before readiness checks" in tasks
+    assert (
+        "- name: Restart Alloy when its installed OTLP configuration is not active"
+        in tasks
+    )
     assert "- name: Wait for Tempo readiness on loopback" in tasks
     assert "- name: Wait for Prometheus readiness on loopback" in tasks
     assert "- name: Wait for Alloy OTLP listener" in tasks
@@ -271,3 +277,4 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     assert "listen: restart Prometheus" in handlers
     assert '"$RUNNER_TEMP/alloy/otel-server.key"' in ci
     assert '"$RUNNER_TEMP/alloy/otel-server.crt"' in ci
+    assert site[0]["force_handlers"] is True

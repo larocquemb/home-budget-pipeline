@@ -3,6 +3,7 @@
   hosts: monitoring
   become: true
   gather_facts: false
+  force_handlers: true
 
   roles:
     - role: monitoring

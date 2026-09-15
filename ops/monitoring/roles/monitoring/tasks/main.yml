@@ -725,6 +725,25 @@
 - name: Activate validated host changes
   ansible.builtin.meta: flush_handlers
 
+- name: Probe Alloy OTLP listener before readiness checks
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ monitoring_otel_port }}"
+    state: started
+    timeout: 1
+  register: monitoring_alloy_otlp_probe
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Restart Alloy when its installed OTLP configuration is not active
+  ansible.builtin.systemd_service:
+    name: alloy
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - monitoring_alloy_otlp_probe.state | default('') != 'started'
+
 - name: Wait for authenticated Loki readiness
   ansible.builtin.uri:
     url: "https://{{ monitoring_loki_hostname }}:{{ monitoring_loki_port }}/ready"
