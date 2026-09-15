@@ -1446,14 +1446,14 @@
   ansible.builtin.set_fact:
     monitoring_grafana_home_budget_folder_uid_effective: >-
       {{
-        (monitoring_grafana_folder_list.json.items | default([])
+        (monitoring_grafana_folder_list.json['items'] | default([])
          | selectattr('spec.title', 'equalto', monitoring_grafana_home_budget_folder_title)
          | map(attribute='metadata.name') | list | first)
         | default(monitoring_grafana_home_budget_folder_uid, true)
       }}
     monitoring_grafana_brown_rook_folder_uid_effective: >-
       {{
-        (monitoring_grafana_folder_list.json.items | default([])
+        (monitoring_grafana_folder_list.json['items'] | default([])
          | selectattr('spec.title', 'equalto', monitoring_grafana_brown_rook_folder_title)
          | map(attribute='metadata.name') | list | first)
         | default(monitoring_grafana_brown_rook_folder_uid, true)

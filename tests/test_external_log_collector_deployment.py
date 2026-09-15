@@ -578,6 +578,8 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     assert "- name: Verify Grafana Prometheus datasource health" in tasks
     assert "- name: Confirm native Grafana v2 dashboards" in tasks
     assert "- name: Read native Grafana folders" in tasks
+    assert "monitoring_grafana_folder_list.json['items']" in tasks
+    assert "monitoring_grafana_folder_list.json.items" not in tasks
     assert "- name: Create missing native Grafana folders" in tasks
     assert "- name: Update changed native Grafana folders" in tasks
     assert "- name: Verify native Grafana v2 dashboards" in tasks
