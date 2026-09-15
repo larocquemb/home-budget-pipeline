@@ -675,6 +675,27 @@
     group: grafana
     mode: "0750"
 
+- name: Create Grafana systemd override directory
+  ansible.builtin.file:
+    path: "{{ monitoring_grafana_systemd_override_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Enforce the Grafana public-dashboard security boundary
+  ansible.builtin.copy:
+    content: |
+      [Service]
+      Environment="GF_AUTH_ANONYMOUS_ENABLED=false"
+      Environment="GF_PUBLIC_DASHBOARDS_ENABLED=true"
+    dest: "{{ monitoring_grafana_systemd_override_dir }}/home-budget-public-demo.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: restart Grafana
+
 - name: Provision Grafana Prometheus datasource
   ansible.builtin.template:
     src: grafana-prometheus-datasource.yml.j2
@@ -709,6 +730,16 @@
   ansible.builtin.template:
     src: grafana-ocr-performance-dashboard.json.j2
     dest: "{{ monitoring_grafana_ocr_dashboard_path }}"
+    owner: root
+    group: grafana
+    mode: "0640"
+    backup: true
+  notify: restart Grafana
+
+- name: Install sanitized Grafana public live-demo dashboard
+  ansible.builtin.template:
+    src: grafana-public-live-demo-dashboard.json.j2
+    dest: "{{ monitoring_grafana_public_demo_dashboard_path }}"
     owner: root
     group: grafana
     mode: "0640"
@@ -1422,6 +1453,22 @@
   check_mode: false
   no_log: true
 
+- name: Read provisioned Grafana public live-demo dashboard
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_public_demo_dashboard_uid }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_public_demo_dashboard
+  check_mode: false
+  no_log: true
+
 - name: Determine whether Grafana provisioning needs activation
   ansible.builtin.set_fact:
     monitoring_grafana_provisioning_needs_activation: >-
@@ -1451,12 +1498,19 @@
            | length != 8
         or monitoring_grafana_receipt_dashboard_revision not in
            (monitoring_grafana_ocr_dashboard.json.dashboard.tags | default([]))
+        or monitoring_grafana_public_demo_dashboard.status != 200
+        or monitoring_grafana_public_demo_dashboard.json.dashboard.title | default('')
+           != 'Brown Rook Live Receipt Processing'
+        or monitoring_grafana_public_demo_dashboard.json.dashboard.panels | default([])
+           | length != 8
+        or monitoring_grafana_public_demo_dashboard_revision not in
+           (monitoring_grafana_public_demo_dashboard.json.dashboard.tags | default([]))
       }}
   no_log: true
 
 - name: Report pending Grafana provisioning activation in check mode
   ansible.builtin.debug:
-    msg: Grafana Prometheus datasource and receipt/OCR dashboards would be activated.
+    msg: Grafana Prometheus datasource and private/public telemetry dashboards would be activated.
   when:
     - ansible_check_mode
     - monitoring_grafana_provisioning_needs_activation
@@ -1547,6 +1601,27 @@
   no_log: true
   when: not ansible_check_mode
 
+- name: Verify provisioned Grafana public live-demo dashboard
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_public_demo_dashboard_uid }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_public_demo_dashboard_verified
+  retries: 6
+  delay: 5
+  until: monitoring_grafana_public_demo_dashboard_verified.status == 200
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: not ansible_check_mode
+
 - name: Confirm Grafana provisioned telemetry resources
   ansible.builtin.assert:
     that:
@@ -1568,10 +1643,213 @@
       - >-
         monitoring_grafana_receipt_dashboard_revision in
         monitoring_grafana_ocr_dashboard_verified.json.dashboard.tags
-    fail_msg: Grafana did not activate the provisioned Prometheus datasource and receipt/OCR dashboards.
+      - >-
+        monitoring_grafana_public_demo_dashboard_verified.json.dashboard.title
+        == 'Brown Rook Live Receipt Processing'
+      - >-
+        monitoring_grafana_public_demo_dashboard_verified.json.dashboard.templating.list
+        | length == 0
+      - >-
+        monitoring_grafana_public_demo_dashboard_revision in
+        monitoring_grafana_public_demo_dashboard_verified.json.dashboard.tags
+    fail_msg: Grafana did not activate the provisioned Prometheus datasource and private/public telemetry dashboards.
     quiet: true
   when: not ansible_check_mode
   no_log: true
+
+- name: Read effective Grafana security settings
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/api/admin/settings"
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_security_settings
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Confirm only externally shared dashboards bypass authentication
+  ansible.builtin.assert:
+    that:
+      - monitoring_grafana_security_settings.json['auth.anonymous'].enabled == 'false'
+      - monitoring_grafana_security_settings.json['public_dashboards'].enabled == 'true'
+    fail_msg: >-
+      Grafana must keep global anonymous access disabled while externally
+      shared dashboards remain enabled.
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Read Grafana external-sharing state for the public live demo
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_public_demo_dashboard_uid }}/public-dashboards
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_public_demo_share
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Define Grafana external-sharing payload
+  ansible.builtin.set_fact:
+    monitoring_grafana_public_demo_share_payload:
+      isEnabled: "{{ monitoring_grafana_public_demo_enabled | bool }}"
+      annotationsEnabled: "{{ monitoring_grafana_public_demo_annotations_enabled | bool }}"
+      timeSelectionEnabled: "{{ monitoring_grafana_public_demo_time_selection_enabled | bool }}"
+      share: public
+  no_log: true
+
+- name: Report pending Grafana external sharing in check mode
+  ansible.builtin.debug:
+    msg: >-
+      Grafana external sharing for the sanitized live-demo dashboard would be
+      {{ 'enabled' if monitoring_grafana_public_demo_enabled else 'disabled' }}.
+  when:
+    - ansible_check_mode
+    - >-
+      (monitoring_grafana_public_demo_share.status == 404
+       and monitoring_grafana_public_demo_enabled)
+      or
+      (monitoring_grafana_public_demo_share.status == 200
+       and
+       (monitoring_grafana_public_demo_share.json.isEnabled | default(false) | bool
+        != monitoring_grafana_public_demo_enabled | bool
+        or monitoring_grafana_public_demo_share.json.annotationsEnabled
+           | default(true) | bool
+           != monitoring_grafana_public_demo_annotations_enabled | bool
+        or monitoring_grafana_public_demo_share.json.timeSelectionEnabled
+           | default(true) | bool
+           != monitoring_grafana_public_demo_time_selection_enabled | bool))
+
+- name: Enable external sharing for the Grafana public live demo
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_public_demo_dashboard_uid }}/public-dashboards
+    method: POST
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    body_format: json
+    body: "{{ monitoring_grafana_public_demo_share_payload }}"
+    return_content: true
+    status_code: [200, 201]
+  register: monitoring_grafana_public_demo_share_created
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_public_demo_enabled
+    - monitoring_grafana_public_demo_share.status == 404
+  no_log: true
+
+- name: Reconcile external sharing for the Grafana public live demo
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_public_demo_dashboard_uid }}/public-dashboards/{{ monitoring_grafana_public_demo_share.json.uid }}
+    method: PATCH
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    body_format: json
+    body: "{{ monitoring_grafana_public_demo_share_payload }}"
+    return_content: true
+    status_code: 200
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_public_demo_share.status == 200
+    - >-
+      monitoring_grafana_public_demo_share.json.isEnabled | default(false) | bool
+      != monitoring_grafana_public_demo_enabled | bool
+      or monitoring_grafana_public_demo_share.json.annotationsEnabled
+         | default(true) | bool
+         != monitoring_grafana_public_demo_annotations_enabled | bool
+      or monitoring_grafana_public_demo_share.json.timeSelectionEnabled
+         | default(true) | bool
+         != monitoring_grafana_public_demo_time_selection_enabled | bool
+  no_log: true
+
+- name: Verify Grafana external-sharing state for the public live demo
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_public_demo_dashboard_uid }}/public-dashboards
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_public_demo_share_verified
+  retries: 6
+  delay: 5
+  until: >-
+    monitoring_grafana_public_demo_share_verified.status == 200
+    and monitoring_grafana_public_demo_share_verified.json.isEnabled | bool
+       == monitoring_grafana_public_demo_enabled | bool
+    and monitoring_grafana_public_demo_share_verified.json.annotationsEnabled | bool
+       == monitoring_grafana_public_demo_annotations_enabled | bool
+    and monitoring_grafana_public_demo_share_verified.json.timeSelectionEnabled | bool
+       == monitoring_grafana_public_demo_time_selection_enabled | bool
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_public_demo_enabled
+
+- name: Verify the public live-demo route without Grafana credentials
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/public-dashboards/{{ monitoring_grafana_public_demo_share_verified.json.accessToken }}
+    method: GET
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    follow_redirects: all
+    return_content: false
+    status_code: 200
+  changed_when: false
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_public_demo_enabled
+
+- name: Verify ordinary Grafana APIs still require authentication
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/api/search"
+    method: GET
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    follow_redirects: none
+    status_code: [401, 403]
+  changed_when: false
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_public_demo_enabled
+
+- name: Report the revocable Grafana public live-demo URL
+  ansible.builtin.debug:
+    msg: >-
+      Public live demo: {{ monitoring_grafana_url }}/public-dashboards/{{ monitoring_grafana_public_demo_share_verified.json.accessToken }}
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_public_demo_enabled
 
 - name: Verify Grafana Prometheus datasource health
   ansible.builtin.uri:

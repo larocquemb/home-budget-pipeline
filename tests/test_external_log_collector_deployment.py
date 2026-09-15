@@ -434,6 +434,7 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     assert "grafana-dashboard-validation" in validator
     assert "grafana-receipt-telemetry-dashboard.json.j2" in validator
     assert "grafana-ocr-performance-dashboard.json.j2" in validator
+    assert "grafana-public-live-demo-dashboard.json.j2" in validator
     assert '"${queue:regex}": r"receipts\\.v1\\.work"' in validator
     assert '"$__rate_interval": "5m"' in validator
     assert '"$__range": "1h"' in validator
@@ -528,3 +529,100 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     assert "- name: Confirm Grafana provisioned telemetry resources" in tasks
     assert "- name: Verify provisioned Grafana OCR dashboard" in tasks
     assert "listen: restart Grafana" in handlers
+
+
+def test_public_live_demo_is_sanitized_and_revocable():
+    defaults = yaml.safe_load(
+        (ROOT / "ops/monitoring/roles/monitoring/defaults/main.yml").read_text()
+    )
+    inventory = yaml.safe_load(
+        (ROOT / "ops/monitoring/inventory/group_vars/monitoring.yml").read_text()
+    )
+    tasks = (ROOT / "ops/monitoring/roles/monitoring/tasks/main.yml").read_text()
+    handlers = (ROOT / "ops/monitoring/roles/monitoring/handlers/main.yml").read_text()
+
+    dashboard_text = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/"
+        "grafana-public-live-demo-dashboard.json.j2"
+    ).read_text()
+    dashboard_text = dashboard_text.replace(
+        "{{ monitoring_grafana_prometheus_datasource_uid }}",
+        "home-budget-prometheus",
+    ).replace(
+        "{{ monitoring_grafana_public_demo_dashboard_uid }}",
+        "brown-rook-live-telemetry",
+    ).replace(
+        "{{ monitoring_grafana_public_demo_dashboard_revision }}",
+        "kan-119-v1",
+    )
+    dashboard = json.loads(dashboard_text)
+
+    assert inventory["monitoring_grafana_public_demo_dashboard_uid"] == (
+        "brown-rook-live-telemetry"
+    )
+    assert inventory["monitoring_grafana_public_demo_dashboard_revision"] == (
+        "kan-119-v1"
+    )
+    assert defaults["monitoring_grafana_public_demo_enabled"] is True
+    assert defaults["monitoring_grafana_public_demo_annotations_enabled"] is False
+    assert defaults["monitoring_grafana_public_demo_time_selection_enabled"] is False
+
+    assert dashboard["uid"] == "brown-rook-live-telemetry"
+    assert dashboard["title"] == "Brown Rook Live Receipt Processing"
+    assert len(dashboard["panels"]) == 8
+    assert dashboard["templating"]["list"] == []
+    assert dashboard["annotations"]["list"] == []
+    assert dashboard["links"] == []
+    assert dashboard["refresh"] == "60s"
+    assert dashboard["time"] == {"from": "now-6h", "to": "now"}
+    assert dashboard["timepicker"]["hidden"] is True
+
+    assert all(
+        panel["datasource"] == {
+            "type": "prometheus",
+            "uid": "home-budget-prometheus",
+        }
+        for panel in dashboard["panels"]
+    )
+    assert all(
+        target.get("exemplar") is not True
+        for panel in dashboard["panels"]
+        for target in panel["targets"]
+    )
+
+    public_expressions = "\n".join(
+        target["expr"]
+        for panel in dashboard["panels"]
+        for target in panel["targets"]
+    ).lower()
+    forbidden_query_fields = {
+        "instance",
+        "service=",
+        "worker_host",
+        "queue",
+        "vhost",
+        "rabbitmq",
+        "fluentbit",
+        "otelcol",
+        "alloy",
+        "loki",
+        "tempo",
+        "trace_id",
+        "run_uuid",
+        "pass_id",
+        "receipt_hash",
+        "source_reference",
+    }
+    assert not (forbidden_query_fields & set(public_expressions.split()))
+    assert all(field not in public_expressions for field in forbidden_query_fields)
+
+    assert 'Environment="GF_AUTH_ANONYMOUS_ENABLED=false"' in tasks
+    assert 'Environment="GF_PUBLIC_DASHBOARDS_ENABLED=true"' in tasks
+    assert "daemon_reload: true" in handlers
+    assert "- name: Enable external sharing for the Grafana public live demo" in tasks
+    assert "- name: Reconcile external sharing for the Grafana public live demo" in tasks
+    assert "- name: Verify ordinary Grafana APIs still require authentication" in tasks
+    assert "annotationsEnabled:" in tasks
+    assert "timeSelectionEnabled:" in tasks
+    assert "share: public" in tasks

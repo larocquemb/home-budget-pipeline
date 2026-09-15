@@ -29,6 +29,10 @@ configuration:
 - Grafana owns Tempo and Prometheus datasources plus the provisioned
   **Home Budget Receipt Telemetry** and **Home Budget OCR Performance**
   dashboards. Logs, traces, and metric exemplars link between the datasources.
+- Grafana also owns a separate aggregate-only **Brown Rook Live Receipt
+  Processing** dashboard. Its revocable external share is passwordless, while
+  global anonymous Grafana access remains disabled. See
+  [`docs/live-telemetry-demo.md`](../../docs/live-telemetry-demo.md).
 
 The role also keeps Loki at `info` log level and installs a journald drop-in
 that caps persistent service logs at 256 MiB, reserves 1 GiB of filesystem
@@ -114,7 +118,7 @@ and validated with their native binaries before replacement. Handlers restart
 only changed services. The role also detects the interrupted-apply case where
 `/etc/default/prometheus` changed without restarting the process and repairs it
 before asserting the active remote-write and exemplar flags. Loki, Tempo,
-Prometheus rules, both Grafana dashboards, and all Grafana datasource health
+Prometheus rules, the private and public Grafana dashboards, and all Grafana datasource health
 checks must pass.
 Secret-bearing tasks use Ansible's `no_log` protection.
 
