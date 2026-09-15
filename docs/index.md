@@ -31,6 +31,8 @@ path.
   is enabled.
 - Use the [Kubernetes authentication guide](kubernetes-auth.md) for Entra ID,
   OAuth2 Proxy, ingress, and secret setup.
+- Use the [Grafana Entra SSO runbook](grafana-entra-sso.md) for operational
+  login, app-role assignment, client-secret rotation, and recovery access.
 
 The project source and contribution history are available in the
 [GitHub repository](https://github.com/larocquemb/home-budget-pipeline).

@@ -722,3 +722,51 @@ def test_public_live_demo_is_sanitized_and_revocable():
     assert "annotationsEnabled:" in tasks
     assert "timeSelectionEnabled:" in tasks
     assert "share: public" in tasks
+
+
+def test_monitoring_grafana_uses_entra_sso_with_local_recovery():
+    defaults = yaml.safe_load(
+        (ROOT / "ops/monitoring/roles/monitoring/defaults/main.yml").read_text()
+    )
+    inventory = yaml.safe_load(
+        (ROOT / "ops/monitoring/inventory/group_vars/monitoring.yml").read_text()
+    )
+    tasks = (
+        ROOT / "ops/monitoring/roles/monitoring/tasks/main.yml"
+    ).read_text()
+    wrapper = (ROOT / "scripts/monitoring_gitops.sh").read_text()
+    env_example = (ROOT / "ops/monitoring/env.example").read_text()
+
+    assert inventory["monitoring_grafana_url"] == (
+        "https://grafana.idc.brownrook.net"
+    )
+    assert inventory["monitoring_grafana_entra_tenant_id"] == (
+        "8b07f4bd-41e4-4106-8d49-00c5d79d35a2"
+    )
+    assert inventory["monitoring_grafana_entra_client_id"] == (
+        "670b17ca-a1e7-4c63-80e8-9d6a21c31fe4"
+    )
+    assert defaults["monitoring_grafana_entra_environment_path"] == (
+        "/etc/grafana/grafana-entra.env"
+    )
+    assert "MONITORING_GRAFANA_ENTRA_CLIENT_SECRET_FILE" in wrapper
+    assert "MONITORING_GRAFANA_ENTRA_CLIENT_SECRET_FILE" in env_example
+
+    secret_task = tasks.split(
+        "- name: Install Grafana Entra client secret environment", maxsplit=1
+    )[1].split("- name:", maxsplit=1)[0]
+    assert 'mode: "0640"' in secret_task
+    assert "backup: false" in secret_task
+    assert "no_log: true" in secret_task
+
+    assert 'Environment="GF_AUTH_BASIC_ENABLED=true"' in tasks
+    assert 'Environment="GF_AUTH_DISABLE_LOGIN_FORM=false"' in tasks
+    assert 'Environment="GF_AUTH_AZUREAD_ENABLED=true"' in tasks
+    assert 'Environment="GF_AUTH_AZUREAD_ROLE_ATTRIBUTE_STRICT=true"' in tasks
+    assert 'Environment="GF_AUTH_AZUREAD_ALLOW_ASSIGN_GRAFANA_ADMIN=true"' in tasks
+    assert 'Environment="GF_AUTH_AZUREAD_USE_REFRESH_TOKEN=true"' in tasks
+    assert "- name: Probe Grafana Entra login redirect" in tasks
+    assert (
+        "- name: Confirm Grafana redirects authentication to the Brown Rook Entra tenant"
+        in tasks
+    )
