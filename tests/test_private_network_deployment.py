@@ -75,5 +75,5 @@ def test_public_telemetry_route_exposes_only_shared_dashboard_endpoints():
         == {"name": "grafana-public", "port": {"number": 3000}}
         for path in ingress["spec"]["rules"][0]["http"]["paths"]
     )
-    assert endpoint_slice["endpoints"][0]["addresses"] == ["192.168.2.210"]
+    assert endpoint_slice["endpoints"][0]["addresses"] == ["192.168.2.202"]
     assert certificate["spec"]["dnsNames"] == ["telemetry.idc.brownrook.com"]
