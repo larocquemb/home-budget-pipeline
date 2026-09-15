@@ -164,6 +164,23 @@ Perform this ceremony on the Mac with the Intermediate CA YubiKey inserted.
 The PIN is entered only at the `p11tool` or `gnutls-certtool` prompt; never put
 it in a command, environment file, log, or Git.
 
+For initial issuance, run the checked-in helper from the repository root:
+
+```zsh
+scripts/issue_telemetry_certificates.sh
+```
+
+It uses `MONITORING_PKI_DIR` when set and otherwise defaults to
+`~/brownrook-ca`. The helper stages all artifacts, refuses to replace an
+existing identity directory, confirms the certificate in YubiKey slot 9C
+matches `intermediate/intermediate_ca.crt`, requests the four signatures, builds
+the full chains, and verifies their purposes, hostnames, lifetimes, key pairs,
+and permissions before installation. Use `--pki-dir PATH` or `--provider PATH`
+only when the environment differs from the documented defaults.
+
+The commands below are the manual reference implemented by the helper and are
+also the basis for a staged renewal ceremony.
+
 For initial issuance, clone `fluent-bit-loki-client` for the two client
 identities. They inherit its `clientAuth` request and GnuTLS template:
 

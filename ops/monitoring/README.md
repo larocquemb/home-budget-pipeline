@@ -84,6 +84,10 @@ YubiKey-backed ceremony and are needed only to issue or renew certificates.
 The complete preparation, `gnutls-certtool` signing, full-chain construction,
 and verification procedure is recorded in
 [`docs/opentelemetry.md`](../../docs/opentelemetry.md#issue-or-rotate-telemetry-certificates).
+Initial issuance is automated by
+[`scripts/issue_telemetry_certificates.sh`](../../scripts/issue_telemetry_certificates.sh);
+it still requires the Intermediate CA YubiKey, PIN prompts, and physical
+touches.
 
 ## Check and apply
 

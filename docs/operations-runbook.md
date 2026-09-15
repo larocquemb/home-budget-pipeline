@@ -125,6 +125,8 @@ Collector without changing the default deployment path. See
 [Receipt-processing OpenTelemetry](opentelemetry.md) for the repeatable
 Intermediate-CA YubiKey issuance and rotation ceremony, PKI inputs,
 configuration, deployment, live correlation, failure testing, and rollback.
+For initial issuance, insert the Intermediate CA YubiKey and run
+`scripts/issue_telemetry_certificates.sh` from the repository root.
 
 ## Commit and pull request
 
