@@ -46,7 +46,9 @@ boundary. The ingress applies response-security headers and a per-client rate
 limit sized for the five-session acceptance test. On the monitoring LXC,
 nftables accepts direct Grafana port 3000 connections only from loopback, the
 edge proxy, and the K3s node; other LAN clients cannot bypass the approved
-proxy paths.
+proxy paths. Grafana's single-domain redirect is disabled because this instance
+serves both the private and public hostnames; the proxy allowlist and
+host-and-path-specific routes provide the DNS-rebinding boundary instead.
 
 The three hosts have distinct roles:
 

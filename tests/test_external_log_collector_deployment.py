@@ -696,6 +696,7 @@ def test_public_live_demo_is_sanitized_and_revocable():
     assert 'Environment="GF_AUTH_ANONYMOUS_ENABLED=false"' in tasks
     assert 'Environment="GF_PUBLIC_DASHBOARDS_ENABLED=true"' in tasks
     assert 'Environment="GF_SERVER_HTTP_ADDR=0.0.0.0"' in tasks
+    assert 'Environment="GF_SERVER_ENFORCE_DOMAIN=false"' in tasks
     assert "GF_FEATURE_TOGGLES_dashboardNewLayouts" not in tasks
     assert "tcp dport {{ monitoring_grafana_port }} drop" in (
         ROOT / "ops/monitoring/roles/monitoring/templates/nftables.conf.j2"
@@ -707,6 +708,12 @@ def test_public_live_demo_is_sanitized_and_revocable():
         "- name: Verify ordinary Grafana routes are absent from the public hostname"
         in tasks
     )
+    public_route_check = tasks.split(
+        "- name: Verify the public live-demo route without Grafana credentials",
+        maxsplit=1,
+    )[1].split("- name:", maxsplit=1)[0]
+    assert "follow_redirects: none" in public_route_check
+    assert "status_code: 200" in public_route_check
     assert 'url: "{{ monitoring_grafana_public_demo_external_url }}{{ item }}"' in tasks
     assert "status_code: 404" in tasks
     for blocked_path in ("/", "/login", "/explore", "/api/health", "/api/search"):
