@@ -173,7 +173,7 @@ def test_scheduled_publication_reprocesses_deleted_cache_and_replaces_results(br
     receipt.source_reference = reference
     receipt.extraction_status = initial_status
     calls = []
-    def parse(paths, root, workers, cache_dir, refresh):
+    def parse(paths, root, workers, cache_dir, refresh, **kwargs):
         calls.append(refresh)
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text('{"rebuilt": true}')
@@ -232,7 +232,7 @@ def test_cache_rebuild_is_consumed_and_preserves_extraction_after_lost_ack(broke
     receipt = receipt_for(source)
     calls = []
     cache_file = tmp_path / "cache" / "receipt.pdf.json"
-    def parse(*args):
+    def parse(*args, **kwargs):
         calls.append(args[-1])
         cache_file.parent.mkdir(exist_ok=True)
         cache_file.write_text("cached")

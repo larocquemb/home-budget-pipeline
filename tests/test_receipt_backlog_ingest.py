@@ -143,10 +143,11 @@ def test_refresh_ocr_cache_reprocesses_completed_receipts(monkeypatch):
     monkeypatch.setattr(backlog_ingest, "plan_unprocessed_receipts", lambda *args, **kwargs: plan)
     refresh_values = []
 
-    def fake_parse(paths, root, workers, cache_dir, refresh):
+    def fake_parse(paths, root, workers, cache_dir, refresh, **kwargs):
         assert paths == [candidate.path]
+        assert kwargs == {"return_cache_hits": True}
         refresh_values.append(refresh)
-        return [SimpleNamespace(extraction_status="complete")]
+        return [SimpleNamespace(extraction_status="complete")], 0
 
     monkeypatch.setattr(backlog_ingest, "parse_scans_parallel", fake_parse)
     monkeypatch.setattr(backlog_ingest, "persist_evidence_first", lambda *args, **kwargs: None)
@@ -228,6 +229,35 @@ def test_process_backlog_records_review_required_separately(monkeypatch):
     assert summary["review_required"] == 1
     assert summary["succeeded"] == 0
     assert summary["failed"] == 0
+
+
+def test_process_backlog_records_ocr_cache_result(monkeypatch):
+    conn = FakeConn(lock=True)
+    candidate = _candidate("cached.pdf", "aaa")
+    plan = backlog_ingest.DiscoveryPlan((candidate,), (candidate,), ())
+    receipt = SimpleNamespace(extraction_status="complete")
+    cache_results = []
+    monkeypatch.setattr(
+        backlog_ingest, "plan_unprocessed_receipts", lambda *args, **kwargs: plan
+    )
+    monkeypatch.setattr(
+        backlog_ingest,
+        "parse_scans_parallel",
+        lambda *args, **kwargs: ([receipt], 1),
+    )
+    monkeypatch.setattr(
+        backlog_ingest.telemetry, "record_cache_lookup", cache_results.append
+    )
+    monkeypatch.setattr(
+        backlog_ingest, "persist_evidence_first", lambda *args, **kwargs: None
+    )
+
+    summary = backlog_ingest.process_backlog(
+        conn, Path("/receipts"), Path("/cache")
+    )
+
+    assert summary["succeeded"] == 1
+    assert cache_results == [True]
 
 
 def test_process_backlog_verbose_reports_progress_to_stderr(monkeypatch, capsys):

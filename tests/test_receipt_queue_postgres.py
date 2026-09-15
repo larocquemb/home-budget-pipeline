@@ -182,7 +182,7 @@ def test_reprocess_requests_refresh_once_each_with_independent_attempt_budgets(s
 
     receipt = receipt_for(source)
     calls = []
-    def parse(paths, root, workers, cache, refresh):
+    def parse(paths, root, workers, cache, refresh, **kwargs):
         assert paths == [source]
         calls.append(refresh)
         return [receipt]

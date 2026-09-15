@@ -37,6 +37,22 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     broker = resources["StatefulSet", "rabbitmq"]["spec"]
     assert broker["replicas"] == 1
     assert broker["volumeClaimTemplates"][0]["metadata"]["name"] == "rabbitmq-data"
+    broker_container = broker["template"]["spec"]["containers"][0]
+    assert {port["containerPort"] for port in broker_container["ports"]} >= {
+        5672, 15672, 15692,
+    }
+    service_ports = {
+        port["name"]: port["port"]
+        for port in resources["Service", "rabbitmq"]["spec"]["ports"]
+    }
+    assert service_ports["prometheus"] == 15692
+    rabbit_config = resources["ConfigMap", "rabbitmq-config"]["data"]
+    assert "rabbitmq_prometheus" in rabbit_config["enabled_plugins"]
+    assert any(
+        mount["mountPath"] == "/etc/rabbitmq/enabled_plugins"
+        and mount["subPath"] == "enabled_plugins"
+        for mount in broker_container["volumeMounts"]
+    )
     assert ("Secret", "rabbitmq-secret") not in resources
     assert ("ConfigMap", "receipt-runtime-config") not in resources
 

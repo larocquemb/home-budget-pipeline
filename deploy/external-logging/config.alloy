@@ -168,8 +168,29 @@ otelcol.processor.batch "home_budget" {
   send_batch_max_size = 512
 
   output {
-    metrics = [otelcol.exporter.prometheus.home_budget.input]
+    metrics = [otelcol.processor.transform.home_budget_metric_labels.input]
     traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// Copy only the bounded resource dimensions required by KAN-88 into metric
+// datapoints. Avoid converting every resource attribute: pod names and UIDs
+// would otherwise create a new Prometheus series on each rollout.
+otelcol.processor.transform "home_budget_metric_labels" {
+  error_mode = "ignore"
+
+  metric_statements {
+    context = "datapoint"
+    statements = [
+      `set(attributes["environment"], resource.attributes["deployment.environment.name"]) where resource.attributes["deployment.environment.name"] != nil`,
+      `set(attributes["service"], resource.attributes["service.name"]) where resource.attributes["service.name"] != nil`,
+      `set(attributes["worker_host"], resource.attributes["host.name"]) where resource.attributes["host.name"] != nil`,
+      `set(attributes["worker_host"], resource.attributes["k8s.node.name"]) where resource.attributes["k8s.node.name"] != nil`,
+    ]
+  }
+
+  output {
+    metrics = [otelcol.exporter.prometheus.home_budget.input]
   }
 }
 

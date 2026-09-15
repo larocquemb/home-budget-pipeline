@@ -1,0 +1,166 @@
+{
+  "annotations": {"list": []},
+  "description": "KAN-88 receipt, queue, and telemetry-pipeline overview with Prometheus exemplars linked to Tempo.",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {"title": "OCR performance", "type": "link", "url": "/d/{{ monitoring_grafana_ocr_dashboard_uid }}", "targetBlank": false}
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Receipt attempts / second",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"decimals": 3, "min": 0, "unit": "ops"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))"}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Receipt failure ratio",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.01}, {"color": "red", "value": 0.1}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=\"failed\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\"}[$__rate_interval])), 1e-9)"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Review-required ratio",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.15}, {"color": "red", "value": 0.25}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=\"review_required\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\"}[$__rate_interval])), 1e-9)"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "OCR cache hit ratio",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_cache_lookup_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",result=\"hit\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_cache_lookup_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\"}[$__rate_interval])), 1e-9)"}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Receipt outcomes",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "ops"}, "overrides": []},
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "", "expr": "sum by (status) (rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Receipt processing duration",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "p50", "expr": "histogram_quantile(0.50, sum by (le) (rate(brownrook_receipt_processing_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))"},
+        {"refId": "B", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(brownrook_receipt_processing_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))"}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "RabbitMQ queue depth",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "legendFormat": "", "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_ready{vhost=\"receipts\",queue=~\"${queue:regex}\"})"},
+        {"refId": "B", "editorMode": "code", "legendFormat": "", "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_unacked{vhost=\"receipts\",queue=~\"${queue:regex}\"})"}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "RabbitMQ publish, consume, ACK, retry and DLQ activity",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "ops"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "legendFormat": "published", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_exchange_messages_published_total{vhost=\"receipts\",queue=~\"${queue:regex}\"}[$__rate_interval]))"},
+        {"refId": "B", "editorMode": "code", "legendFormat": "delivered", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_messages_delivered_ack_total{vhost=\"receipts\",queue=~\"${queue:regex}\"}[$__rate_interval]))"},
+        {"refId": "C", "editorMode": "code", "legendFormat": "acked", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_messages_acked_total{vhost=\"receipts\",queue=~\"${queue:regex}\"}[$__rate_interval]))"},
+        {"refId": "D", "editorMode": "code", "legendFormat": "redelivered", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_messages_redelivered_total{vhost=\"receipts\",queue=~\"${queue:regex}\"}[$__rate_interval]))"}
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Oldest RabbitMQ message age",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "legendFormat": "", "expr": "max by (queue) (time() - rabbitmq_detailed_queue_head_message_timestamp{vhost=\"receipts\",queue=~\"${queue:regex}\"})"}
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Telemetry delivery failures, retries and buffers",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "legendFormat": "Collector failed metric points", "expr": "sum(rate(otelcol_exporter_send_failed_metric_points_total[$__rate_interval]))"},
+        {"refId": "B", "editorMode": "code", "legendFormat": "Collector failed spans", "expr": "sum(rate(otelcol_exporter_send_failed_spans_total[$__rate_interval]))"},
+        {"refId": "C", "editorMode": "code", "legendFormat": "Fluent Bit retries", "expr": "sum(rate(fluentbit_output_retries_total[$__rate_interval]))"},
+        {"refId": "D", "editorMode": "code", "legendFormat": "Fluent Bit dropped records", "expr": "sum(rate(fluentbit_output_dropped_records_total[$__rate_interval]))"},
+        {"refId": "E", "editorMode": "code", "legendFormat": "Alloy failed samples", "expr": "sum(rate(prometheus_remote_storage_samples_failed_total{job=\"alloy\",component_id=\"prometheus.remote_write.local_prometheus\"}[$__rate_interval])) or vector(0)"},
+        {"refId": "F", "editorMode": "code", "legendFormat": "Alloy pending samples", "expr": "sum(prometheus_remote_storage_samples_pending{job=\"alloy\",component_id=\"prometheus.remote_write.local_prometheus\"}) or vector(0)"},
+        {"refId": "G", "editorMode": "code", "legendFormat": "Collector queue utilization", "expr": "max(otelcol_exporter_queue_size / clamp_min(otelcol_exporter_queue_capacity, 1))"},
+        {"refId": "H", "editorMode": "code", "legendFormat": "Fluent Bit chunks in memory", "expr": "sum(fluentbit_input_storage_chunks_up)"},
+        {"refId": "I", "editorMode": "code", "legendFormat": "Alloy retried samples", "expr": "sum(rate(prometheus_remote_storage_samples_retries_total{job=\"alloy\",component_id=\"prometheus.remote_write.local_prometheus\"}[$__rate_interval])) or vector(0)"},
+        {"refId": "J", "editorMode": "code", "legendFormat": "Alloy full-queue retries", "expr": "sum(rate(prometheus_remote_storage_enqueue_retries_total{job=\"alloy\",component_id=\"prometheus.remote_write.local_prometheus\"}[$__rate_interval])) or vector(0)"},
+        {"refId": "K", "editorMode": "code", "legendFormat": "Alloy dropped samples", "expr": "sum(rate(prometheus_remote_storage_samples_dropped_total{job=\"alloy\",component_id=\"prometheus.remote_write.local_prometheus\"}[$__rate_interval])) or vector(0)"}
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": ["home-budget", "opentelemetry", "KAN-88", "{{ monitoring_grafana_receipt_dashboard_revision }}"],
+  "templating": {
+    "list": [
+      {"name": "environment", "label": "Environment", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_processed_total, environment)", "query": {"query": "label_values(brownrook_receipt_processed_total, environment)", "refId": "VariableQuery-environment"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
+      {"name": "service", "label": "Service", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_processed_total{environment=~\"${environment:regex}\"}, service)", "query": {"query": "label_values(brownrook_receipt_processed_total{environment=~\"${environment:regex}\"}, service)", "refId": "VariableQuery-service"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
+      {"name": "worker_host", "label": "Worker host", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\"}, worker_host)", "query": {"query": "label_values(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\"}, worker_host)", "refId": "VariableQuery-worker"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
+      {"name": "status", "label": "Status", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_processed_total, status)", "query": {"query": "label_values(brownrook_receipt_processed_total, status)", "refId": "VariableQuery-status"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
+      {"name": "queue", "label": "Queue", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(rabbitmq_detailed_queue_messages{vhost=\"receipts\"}, queue)", "query": {"query": "label_values(rabbitmq_detailed_queue_messages{vhost=\"receipts\"}, queue)", "refId": "VariableQuery-queue"}, "includeAll": true, "allValue": "receipts\\.v1\\..*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}}
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Home Budget Receipt Telemetry",
+  "uid": "{{ monitoring_grafana_receipt_dashboard_uid }}",
+  "version": 1
+}

@@ -39,6 +39,7 @@ _meter_provider: Any = None
 _tracer_provider: Any = None
 _receipt_counter: Any = None
 _receipt_duration: Any = None
+_cache_lookup_counter: Any = None
 _ocr_pass_counter: Any = None
 _ocr_pass_duration: Any = None
 _ocr_selected_counter: Any = None
@@ -114,7 +115,8 @@ def configure_telemetry() -> bool:
     """
     global _configured_pid, _configuration_failed_pid, _tracer
     global _meter_provider, _tracer_provider
-    global _receipt_counter, _receipt_duration, _ocr_pass_counter, _ocr_pass_duration
+    global _receipt_counter, _receipt_duration, _cache_lookup_counter
+    global _ocr_pass_counter, _ocr_pass_duration
     global _ocr_selected_counter
 
     if not _truthy("HOME_BUDGET_TELEMETRY_ENABLED"):
@@ -166,6 +168,11 @@ def configure_telemetry() -> bool:
                 "brownrook.receipt.processing.duration",
                 unit="s",
                 description="End-to-end receipt processing duration.",
+            )
+            _cache_lookup_counter = meter.create_counter(
+                "brownrook.receipt.cache.lookup",
+                unit="{lookup}",
+                description="Receipt OCR cache lookups by bounded hit or miss result.",
             )
             _ocr_pass_counter = meter.create_counter(
                 "brownrook.receipt.ocr.pass.completed",
@@ -310,6 +317,15 @@ def receipt_process(
 
 def current_run_uuid() -> str | None:
     return _run_uuid.get()
+
+
+def record_cache_lookup(cache_hit: bool) -> None:
+    """Record a cache hit or miss without attaching receipt identity."""
+    try:
+        if _cache_lookup_counter is not None:
+            _cache_lookup_counter.add(1, {"result": "hit" if cache_hit else "miss"})
+    except Exception:
+        LOG.warning("Receipt cache telemetry recording failed", exc_info=True)
 
 
 def _emit_failure_trace(

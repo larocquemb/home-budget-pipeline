@@ -110,6 +110,7 @@ env.bak/
 venv.bak/
 
 # IDE/tool state
+.vscode/
 .spyderproject
 .spyproject
 .ropeproject
@@ -149,6 +150,7 @@ sobeys_receipt_items_categorized.xlsx
 .dev-certs/
 .local-logging/
 .monitoring/
+.observability-validation.*/
 .ocr_cache/
 scanned_receipts_report.json
 *_scanned_receipts_report.json

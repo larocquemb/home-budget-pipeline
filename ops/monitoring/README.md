@@ -2,9 +2,9 @@
 
 This directory turns the monitoring-host commands into a repeatable Ansible
 reconciliation. Git owns the non-secret desired state for Loki, Tempo, Alloy,
-Prometheus ingestion, nftables, Grafana datasources, and the Kubernetes
-observability Secret shapes. Certificate private keys, Grafana credentials,
-kubeconfigs, and CA private keys remain outside Git.
+Prometheus ingestion and rules, nftables, Grafana datasources and dashboards,
+and the Kubernetes observability Secret shapes. Certificate private keys,
+Grafana credentials, kubeconfigs, and CA private keys remain outside Git.
 
 The committed `monitoring_loki_stage: enforced` state is the final comparison
 configuration:
@@ -20,8 +20,15 @@ configuration:
 - Tempo `3.0.3` runs in monolithic mode on loopback, stores traces under
   `/var/lib/tempo`, and retains blocks for 14 days.
 - Alloy sends traces to loopback Tempo and writes converted application metrics
-  to Prometheus's loopback-only remote-write receiver.
-- Grafana owns a Tempo datasource with bidirectional trace/log navigation.
+  to Prometheus's loopback-only remote-write receiver. Prometheus independently
+  scrapes Alloy's loopback `/metrics` endpoint for remote-write/WAL health.
+- The in-cluster Collector scrapes its own internal metrics plus Fluent Bit and
+  RabbitMQ queue metrics before forwarding them through the same mTLS path.
+- Prometheus loads receipt, queue, and telemetry-pipeline recording and alerting rules from
+  `/etc/prometheus/rules/home-budget.yml`.
+- Grafana owns Tempo and Prometheus datasources plus the provisioned
+  **Home Budget Receipt Telemetry** and **Home Budget OCR Performance**
+  dashboards. Logs, traces, and metric exemplars link between the datasources.
 
 The role also keeps Loki at `info` log level and installs a journald drop-in
 that caps persistent service logs at 256 MiB, reserves 1 GiB of filesystem
@@ -104,8 +111,12 @@ make monitoring-gitops-apply
 The playbook verifies each certificate chain, expiry window, certificate/key
 pair, and private-file mode before making changes. Config files are backed up
 and validated with their native binaries before replacement. Handlers restart
-only changed services, then Loki, Tempo, Prometheus, and Grafana datasource
-health are tested. Secret-bearing tasks use Ansible's `no_log` protection.
+only changed services. The role also detects the interrupted-apply case where
+`/etc/default/prometheus` changed without restarting the process and repairs it
+before asserting the active remote-write and exemplar flags. Loki, Tempo,
+Prometheus rules, both Grafana dashboards, and all Grafana datasource health
+checks must pass.
+Secret-bearing tasks use Ansible's `no_log` protection.
 
 Running `make monitoring-gitops-check` and then
 `make monitoring-gitops-apply` again should report no configuration drift.
@@ -123,7 +134,26 @@ ssh paul@192.168.2.202 \
   'systemctl is-active tempo alloy prometheus; sudo du -sh /var/lib/tempo'
 ssh paul@192.168.2.202 \
   'ss -lnt | grep -E "127.0.0.1:3200|127.0.0.1:9090|:4317"'
+ssh paul@192.168.2.202 \
+  'curl -fsS http://127.0.0.1:9090/api/v1/status/flags | jq ".data | {remote_write: .[\"web.enable-remote-write-receiver\"], features: .[\"enable-feature\"]}"'
+ssh paul@192.168.2.202 \
+  'curl -fsS http://127.0.0.1:9090/api/v1/rules | jq -r ".data.groups[].name"'
+ssh paul@192.168.2.202 \
+  'curl -fsS "http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22alloy%22%7D" | jq -r ".data.result[0].value[1]"'
+ssh paul@192.168.2.202 \
+  'curl -fsS http://127.0.0.1:12345/metrics | grep -E "^prometheus_remote_storage_(samples_failed_total|samples_dropped_total|samples_retries_total|samples_pending|enqueue_retries_total)"'
+ssh paul@192.168.2.202 \
+  'journalctl -u alloy --since "-5 minutes" --no-pager -o cat | grep -F "remote write receiver needs to be enabled" && exit 1 || true'
 ```
+
+The flags output must report remote write as `true` and include
+`exemplar-storage`; the rule groups must include `home-budget-recording` and
+`home-budget-alerts`; the Alloy `up` query must return `1`. Open Grafana and navigate to **Dashboards → Home Budget →
+Home Budget Receipt Telemetry**. Confirm the receipt, RabbitMQ, and
+telemetry-pipeline panels have data, then follow the dashboard link to **Home
+Budget OCR Performance** and exercise its engine, DPI, PSM, variant, and status
+filters. Application time-series panels request exemplars, so an exemplar
+marker opens its associated Tempo trace.
 
 Reducing an already oversized journal is intentionally not automated because
 it deletes retained operational history. After review, an operator can run
