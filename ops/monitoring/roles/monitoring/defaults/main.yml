@@ -84,6 +84,13 @@ monitoring_grafana_dashboard_path: >-
   /var/lib/grafana/dashboards/home-budget/receipt-telemetry.json
 monitoring_grafana_ocr_dashboard_path: >-
   /var/lib/grafana/dashboards/home-budget/ocr-performance.json
+monitoring_grafana_public_demo_dashboard_path: >-
+  /var/lib/grafana/dashboards/home-budget/public-live-demo.json
+monitoring_grafana_systemd_override_dir: >-
+  /etc/systemd/system/grafana-server.service.d
+monitoring_grafana_public_demo_enabled: true
+monitoring_grafana_public_demo_annotations_enabled: false
+monitoring_grafana_public_demo_time_selection_enabled: false
 
 # Bound local service-log churn independently of Loki's application log level.
 monitoring_journal_system_max_use: 256M

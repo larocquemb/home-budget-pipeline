@@ -30,3 +30,5 @@ monitoring_grafana_prometheus_datasource_name: home-budget-prometheus
 monitoring_grafana_receipt_dashboard_uid: home-budget-receipt-telemetry
 monitoring_grafana_receipt_dashboard_revision: kan-88-v2
 monitoring_grafana_ocr_dashboard_uid: home-budget-ocr-performance
+monitoring_grafana_public_demo_dashboard_uid: brown-rook-live-telemetry
+monitoring_grafana_public_demo_dashboard_revision: kan-119-v1

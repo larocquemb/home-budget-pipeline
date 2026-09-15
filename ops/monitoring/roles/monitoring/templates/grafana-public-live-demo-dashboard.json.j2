@@ -1,0 +1,129 @@
+{
+  "annotations": {"list": []},
+  "description": "Live, aggregate receipt-processing telemetry published for the Brown Rook public demonstration. No receipt content, financial data, infrastructure identity, logs, or traces are included.",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Receipts processed (last 6 hours)",
+      "description": "Aggregate completed receipt-processing attempts during the fixed public history window.",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"decimals": 0, "min": 0, "unit": "short"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(increase(brownrook_receipt_processed_total[6h])) or vector(0)"}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Successful",
+      "description": "Share of receipt-processing attempts completed successfully during the last 6 hours.",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.9}, {"color": "green", "value": 0.98}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(increase(brownrook_receipt_processed_total{status=\"succeeded\"}[6h])) / clamp_min(sum(increase(brownrook_receipt_processed_total[6h])), 1e-9) or vector(0)"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Needs review",
+      "description": "Share of receipt-processing attempts routed for review during the last 6 hours.",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.15}, {"color": "red", "value": 0.25}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(increase(brownrook_receipt_processed_total{status=\"review_required\"}[6h])) / clamp_min(sum(increase(brownrook_receipt_processed_total[6h])), 1e-9) or vector(0)"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Failed",
+      "description": "Share of receipt-processing attempts that failed during the last 6 hours.",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.01}, {"color": "red", "value": 0.1}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(increase(brownrook_receipt_processed_total{status=\"failed\"}[6h])) / clamp_min(sum(increase(brownrook_receipt_processed_total[6h])), 1e-9) or vector(0)"}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Receipt throughput (receipts/minute)",
+      "description": "Aggregate receipt-processing outcomes per minute.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": false, "range": true, "legendFormat": "Successful", "expr": "sum(rate(brownrook_receipt_processed_total{status=\"succeeded\"}[$__rate_interval])) * 60"},
+        {"refId": "B", "editorMode": "code", "instant": false, "range": true, "legendFormat": "Needs review", "expr": "sum(rate(brownrook_receipt_processed_total{status=\"review_required\"}[$__rate_interval])) * 60"},
+        {"refId": "C", "editorMode": "code", "instant": false, "range": true, "legendFormat": "Failed", "expr": "sum(rate(brownrook_receipt_processed_total{status=\"failed\"}[$__rate_interval])) * 60"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Receipt processing latency",
+      "description": "Median and 95th-percentile processing duration across aggregate receipt outcomes.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": false, "range": true, "legendFormat": "p50", "expr": "histogram_quantile(0.50, sum by (le) (rate(brownrook_receipt_processing_duration_seconds_bucket[$__rate_interval])))"},
+        {"refId": "B", "editorMode": "code", "instant": false, "range": true, "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(brownrook_receipt_processing_duration_seconds_bucket[$__rate_interval])))"}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "OCR throughput (passes/minute)",
+      "description": "Aggregate OCR passes completed per minute, without configuration or receipt identifiers.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": false, "range": true, "legendFormat": "OCR passes", "expr": "sum(rate(brownrook_receipt_ocr_pass_completed_total[$__rate_interval])) * 60"}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "OCR pass latency",
+      "description": "Median and 95th-percentile OCR pass duration across all aggregate configurations.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"refId": "A", "editorMode": "code", "instant": false, "range": true, "legendFormat": "p50", "expr": "histogram_quantile(0.50, sum by (le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket[$__rate_interval])))"},
+        {"refId": "B", "editorMode": "code", "instant": false, "range": true, "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket[$__rate_interval])))"}
+      ]
+    }
+  ],
+  "refresh": "60s",
+  "schemaVersion": 41,
+  "tags": ["brown-rook", "live-demo", "{{ monitoring_grafana_public_demo_dashboard_revision }}"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {"hidden": true},
+  "timezone": "browser",
+  "title": "Brown Rook Live Receipt Processing",
+  "uid": "{{ monitoring_grafana_public_demo_dashboard_uid }}",
+  "version": 1
+}

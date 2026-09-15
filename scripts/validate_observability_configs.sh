@@ -55,6 +55,10 @@ dashboard_paths = (
         "ops/monitoring/roles/monitoring/templates/"
         "grafana-ocr-performance-dashboard.json.j2"
     ),
+    pathlib.Path(
+        "ops/monitoring/roles/monitoring/templates/"
+        "grafana-public-live-demo-dashboard.json.j2"
+    ),
 )
 grafana_values = {
     "${environment:regex}": "production",
