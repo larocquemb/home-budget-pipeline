@@ -101,8 +101,18 @@ def test_retry_confirm_precedes_ack(channel):
     assert publication["mandatory"] is True
     assert publication["properties"].delivery_mode == 2
     assert publication["properties"].message_id == MESSAGE.message_id
+    assert isinstance(publication["properties"].timestamp, int)
     assert ReceiptMessage.from_bytes(publication["body"]).attempt == 2
     assert [event[0] for event in channel.events] == ["publish", "ack"]
+
+
+def test_confirmed_publication_sets_amqp_timestamp(channel, monkeypatch):
+    monkeypatch.setattr(queue.time, "time", lambda: 1789470000.9)
+    queue.publish_confirmed(
+        channel, "receipts.v1.work", MESSAGE.to_bytes(),
+        message_id=MESSAGE.message_id,
+    )
+    assert channel.events[0][1]["properties"].timestamp == 1789470000
 
 
 def test_reprocess_retry_preserves_refresh_request_and_message_type(channel):

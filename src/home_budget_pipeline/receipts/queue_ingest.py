@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -98,6 +99,7 @@ def publish_confirmed(channel, exchange: str, body: bytes, *, message_id: str | 
             content_encoding="utf-8",
             delivery_mode=2,
             message_id=message_id,
+            timestamp=int(time.time()),
             type=message_type,
             headers={"error_type": error} if error else {},
         ),
