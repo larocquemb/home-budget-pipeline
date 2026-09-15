@@ -58,7 +58,7 @@ def test_private_rabbitmq_route_exposes_management_only():
 def test_public_telemetry_route_exposes_only_shared_dashboard_endpoints():
     resources = _render("deploy/rabbitmq-private-telemetry")
     ingress = resources[("Ingress", "grafana-public")]
-    endpoint_slice = resources[("EndpointSlice", "grafana-public")]
+    endpoints = resources[("Endpoints", "grafana-public")]
     certificate = resources[("Certificate", "telemetry-idc-brownrook-com-tls")]
 
     assert ingress["spec"]["rules"][0]["host"] == "telemetry.idc.brownrook.com"
@@ -75,5 +75,5 @@ def test_public_telemetry_route_exposes_only_shared_dashboard_endpoints():
         == {"name": "grafana-public", "port": {"number": 3000}}
         for path in ingress["spec"]["rules"][0]["http"]["paths"]
     )
-    assert endpoint_slice["endpoints"][0]["addresses"] == ["192.168.2.210"]
+    assert endpoints["subsets"][0]["addresses"] == [{"ip": "192.168.2.210"}]
     assert certificate["spec"]["dnsNames"] == ["telemetry.idc.brownrook.com"]
