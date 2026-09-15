@@ -10,23 +10,18 @@ spec:
       protocol: TCP
       targetPort: 3000
 ---
-apiVersion: discovery.k8s.io/v1
-kind: EndpointSlice
+apiVersion: v1
+kind: Endpoints
 metadata:
   name: grafana-public
   namespace: home-budget
-  labels:
-    kubernetes.io/service-name: grafana-public
-addressType: IPv4
-ports:
-  - name: http
-    protocol: TCP
-    port: 3000
-endpoints:
+subsets:
   - addresses:
-      - 192.168.2.210
-    conditions:
-      ready: true
+      - ip: 192.168.2.210
+    ports:
+      - name: http
+        protocol: TCP
+        port: 3000
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
