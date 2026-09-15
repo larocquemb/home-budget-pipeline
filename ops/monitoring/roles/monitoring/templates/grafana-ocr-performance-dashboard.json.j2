@@ -1,93 +1,1059 @@
 {
-  "annotations": {"list": []},
-  "description": "KAN-88 OCR pass throughput, outcomes, selected configurations, and latency percentiles.",
-  "editable": false,
-  "fiscalYearStartMonth": 0,
-  "graphTooltip": 1,
-  "id": null,
-  "links": [
-    {"title": "Receipt overview", "type": "link", "url": "/d/{{ monitoring_grafana_receipt_dashboard_uid }}", "targetBlank": false}
-  ],
-  "panels": [
-    {
-      "id": 1, "type": "stat", "title": "OCR passes / second", "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"decimals": 3, "min": 0, "unit": "ops"}, "overrides": []},
-      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])) or vector(0)"}]
-    },
-    {
-      "id": 2, "type": "stat", "title": "OCR failure ratio", "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.05}, {"color": "red", "value": 0.1}]}}, "overrides": []},
-      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=\"failed\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\"}[$__rate_interval])), 1e-9) or vector(0)"}]
-    },
-    {
-      "id": 3, "type": "stat", "title": "Selected OCR bases / second", "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"decimals": 3, "min": 0, "unit": "ops"}, "overrides": []},
-      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_ocr_pass_selected_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])) or vector(0)"}]
-    },
-    {
-      "id": 4, "type": "stat", "title": "OCR duration p95", "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"decimals": 1, "min": 0, "unit": "s"}, "overrides": []},
-      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "histogram_quantile(0.95, sum by (le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))"}]
-    },
-    {
-      "id": 5, "type": "timeseries", "title": "OCR outcomes by engine", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"min": 0, "unit": "ops"}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "", "expr": "sum by (engine, status) (rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))"}]
-    },
-    {
-      "id": 6, "type": "timeseries", "title": "OCR duration percentiles", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"refId": "A", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "p50", "expr": "histogram_quantile(0.50, sum by (le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))"},
-        {"refId": "B", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))"}
-      ]
-    },
-    {
-      "id": 7, "type": "timeseries", "title": "Selected OCR configurations", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
-      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"min": 0, "unit": "ops"}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "", "expr": "sum by (engine, dpi, psm, variant) (rate(brownrook_receipt_ocr_pass_selected_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))"}]
-    },
-    {
-      "id": 8, "type": "timeseries", "title": "OCR p95 by selected dimensions", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
-      "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "", "expr": "histogram_quantile(0.95, sum by (engine, dpi, psm, variant, le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))"}]
+  "apiVersion": "dashboard.grafana.app/v2",
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "{{ monitoring_grafana_ocr_dashboard_uid }}",
+    "annotations": {
+      "grafana.app/folder": "{{ monitoring_grafana_home_budget_folder_uid_effective }}"
     }
-  ],
-  "refresh": "30s",
-  "schemaVersion": 41,
-  "tags": ["home-budget", "ocr", "opentelemetry", "KAN-88", "{{ monitoring_grafana_receipt_dashboard_revision }}"],
-  "templating": {
-    "list": [
-      {"name": "environment", "label": "Environment", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, environment)", "query": {"query": "label_values(brownrook_receipt_ocr_pass_completed_total, environment)", "refId": "VariableQuery-environment"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
-      {"name": "service", "label": "Service", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, service)", "query": {"query": "label_values(brownrook_receipt_ocr_pass_completed_total, service)", "refId": "VariableQuery-service"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
-      {"name": "worker_host", "label": "Worker host", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, worker_host)", "query": {"query": "label_values(brownrook_receipt_ocr_pass_completed_total, worker_host)", "refId": "VariableQuery-worker"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
-      {"name": "engine", "label": "Engine", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, engine)", "query": {"query": "label_values(brownrook_receipt_ocr_pass_completed_total, engine)", "refId": "VariableQuery-engine"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
-      {"name": "dpi", "label": "DPI", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, dpi)", "query": {"query": "label_values(brownrook_receipt_ocr_pass_completed_total, dpi)", "refId": "VariableQuery-dpi"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 3, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
-      {"name": "psm", "label": "PSM", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, psm)", "query": {"query": "label_values(brownrook_receipt_ocr_pass_completed_total, psm)", "refId": "VariableQuery-psm"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 3, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
-      {"name": "variant", "label": "Variant", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, variant)", "query": {"query": "label_values(brownrook_receipt_ocr_pass_completed_total, variant)", "refId": "VariableQuery-variant"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}},
-      {"name": "status", "label": "Status", "type": "query", "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"}, "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, status)", "query": {"query": "label_values(brownrook_receipt_ocr_pass_completed_total, status)", "refId": "VariableQuery-status"}, "includeAll": true, "allValue": ".*", "multi": true, "refresh": 1, "sort": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}}
-    ]
   },
-  "time": {"from": "now-6h", "to": "now"},
-  "timepicker": {},
-  "timezone": "browser",
-  "title": "Home Budget OCR Performance",
-  "uid": "{{ monitoring_grafana_ocr_dashboard_uid }}",
-  "version": 1
+  "spec": {
+    "annotations": [
+      {
+        "kind": "AnnotationQuery",
+        "spec": {
+          "query": {
+            "kind": "DataQuery",
+            "group": "grafana",
+            "version": "v0",
+            "datasource": {
+              "name": "-- Grafana --"
+            },
+            "spec": {}
+          },
+          "enable": true,
+          "hide": true,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "name": "Annotations & Alerts",
+          "builtIn": true,
+          "legacyOptions": {
+            "type": "dashboard"
+          }
+        }
+      }
+    ],
+    "cursorSync": "Crosshair",
+    "description": "KAN-88 OCR pass throughput, outcomes, selected configurations, and latency percentiles.",
+    "editable": false,
+    "elements": {
+      "panel-1": {
+        "kind": "Panel",
+        "spec": {
+          "id": 1,
+          "title": "OCR passes / second",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])) or vector(0)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ops",
+                  "decimals": 3,
+                  "min": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-2": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2,
+          "title": "OCR failure ratio",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=\"failed\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\"}[$__rate_interval])), 1e-9) or vector(0)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "percentunit",
+                  "decimals": 1,
+                  "min": 0,
+                  "max": 1,
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": null,
+                        "color": "green"
+                      },
+                      {
+                        "value": 0.05,
+                        "color": "yellow"
+                      },
+                      {
+                        "value": 0.1,
+                        "color": "red"
+                      }
+                    ]
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-3": {
+        "kind": "Panel",
+        "spec": {
+          "id": 3,
+          "title": "Selected OCR bases / second",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "sum(rate(brownrook_receipt_ocr_pass_selected_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])) or vector(0)",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ops",
+                  "decimals": 3,
+                  "min": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4": {
+        "kind": "Panel",
+        "spec": {
+          "id": 4,
+          "title": "OCR duration p95",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "histogram_quantile(0.95, sum by (le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))",
+                        "instant": true,
+                        "range": false
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "decimals": 1,
+                  "min": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-5": {
+        "kind": "Panel",
+        "spec": {
+          "id": 5,
+          "title": "OCR outcomes by engine",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": true,
+                        "expr": "sum by (engine, status) (rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))",
+                        "instant": false,
+                        "legendFormat": "",
+                        "range": true
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ops",
+                  "min": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-6": {
+        "kind": "Panel",
+        "spec": {
+          "id": 6,
+          "title": "OCR duration percentiles",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": true,
+                        "expr": "histogram_quantile(0.50, sum by (le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))",
+                        "instant": false,
+                        "legendFormat": "p50",
+                        "range": true
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": true,
+                        "expr": "histogram_quantile(0.95, sum by (le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))",
+                        "instant": false,
+                        "legendFormat": "p95",
+                        "range": true
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "min": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-7": {
+        "kind": "Panel",
+        "spec": {
+          "id": 7,
+          "title": "Selected OCR configurations",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": true,
+                        "expr": "sum by (engine, dpi, psm, variant) (rate(brownrook_receipt_ocr_pass_selected_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))",
+                        "instant": false,
+                        "legendFormat": "",
+                        "range": true
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "ops",
+                  "min": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-8": {
+        "kind": "Panel",
+        "spec": {
+          "id": 8,
+          "title": "OCR p95 by selected dimensions",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "exemplar": true,
+                        "expr": "histogram_quantile(0.95, sum by (engine, dpi, psm, variant, le) (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))",
+                        "instant": false,
+                        "legendFormat": "",
+                        "range": true
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "min": 0
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      }
+    },
+    "layout": {
+      "kind": "GridLayout",
+      "spec": {
+        "items": [
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 0,
+              "width": 6,
+              "height": 4,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-1"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 6,
+              "y": 0,
+              "width": 6,
+              "height": 4,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-2"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 12,
+              "y": 0,
+              "width": 6,
+              "height": 4,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-3"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 18,
+              "y": 0,
+              "width": 6,
+              "height": 4,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-4"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 4,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-5"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 12,
+              "y": 4,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-6"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 12,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-7"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 12,
+              "y": 12,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-8"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "links": [
+      {
+        "title": "Receipt overview",
+        "type": "link",
+        "icon": "",
+        "tooltip": "",
+        "url": "/d/{{ monitoring_grafana_receipt_dashboard_uid }}",
+        "tags": [],
+        "asDropdown": false,
+        "targetBlank": false,
+        "includeVars": false,
+        "keepTime": false
+      }
+    ],
+    "liveNow": false,
+    "preload": false,
+    "tags": [
+      "home-budget",
+      "ocr",
+      "opentelemetry",
+      "KAN-88",
+      "{{ monitoring_grafana_receipt_dashboard_revision }}"
+    ],
+    "timeSettings": {
+      "timezone": "browser",
+      "from": "now-6h",
+      "to": "now",
+      "autoRefresh": "30s",
+      "autoRefreshIntervals": [
+        "5s",
+        "10s",
+        "30s",
+        "1m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "1d"
+      ],
+      "hideTimepicker": false,
+      "fiscalYearStartMonth": 0
+    },
+    "title": "Home Budget OCR Performance",
+    "variables": [
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "environment",
+          "current": {
+            "text": [
+              "All"
+            ],
+            "value": [
+              "$__all"
+            ]
+          },
+          "label": "Environment",
+          "hide": "dontHide",
+          "refresh": "onDashboardLoad",
+          "skipUrlSync": false,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+            },
+            "spec": {
+              "query": "label_values(brownrook_receipt_ocr_pass_completed_total, environment)",
+              "refId": "VariableQuery-environment"
+            }
+          },
+          "regex": "",
+          "sort": "alphabeticalAsc",
+          "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, environment)",
+          "options": [],
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "allowCustomValue": true
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "service",
+          "current": {
+            "text": [
+              "All"
+            ],
+            "value": [
+              "$__all"
+            ]
+          },
+          "label": "Service",
+          "hide": "dontHide",
+          "refresh": "onDashboardLoad",
+          "skipUrlSync": false,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+            },
+            "spec": {
+              "query": "label_values(brownrook_receipt_ocr_pass_completed_total, service)",
+              "refId": "VariableQuery-service"
+            }
+          },
+          "regex": "",
+          "sort": "alphabeticalAsc",
+          "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, service)",
+          "options": [],
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "allowCustomValue": true
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "worker_host",
+          "current": {
+            "text": [
+              "All"
+            ],
+            "value": [
+              "$__all"
+            ]
+          },
+          "label": "Worker host",
+          "hide": "dontHide",
+          "refresh": "onDashboardLoad",
+          "skipUrlSync": false,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+            },
+            "spec": {
+              "query": "label_values(brownrook_receipt_ocr_pass_completed_total, worker_host)",
+              "refId": "VariableQuery-worker"
+            }
+          },
+          "regex": "",
+          "sort": "alphabeticalAsc",
+          "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, worker_host)",
+          "options": [],
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "allowCustomValue": true
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "engine",
+          "current": {
+            "text": [
+              "All"
+            ],
+            "value": [
+              "$__all"
+            ]
+          },
+          "label": "Engine",
+          "hide": "dontHide",
+          "refresh": "onDashboardLoad",
+          "skipUrlSync": false,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+            },
+            "spec": {
+              "query": "label_values(brownrook_receipt_ocr_pass_completed_total, engine)",
+              "refId": "VariableQuery-engine"
+            }
+          },
+          "regex": "",
+          "sort": "alphabeticalAsc",
+          "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, engine)",
+          "options": [],
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "allowCustomValue": true
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "dpi",
+          "current": {
+            "text": [
+              "All"
+            ],
+            "value": [
+              "$__all"
+            ]
+          },
+          "label": "DPI",
+          "hide": "dontHide",
+          "refresh": "onDashboardLoad",
+          "skipUrlSync": false,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+            },
+            "spec": {
+              "query": "label_values(brownrook_receipt_ocr_pass_completed_total, dpi)",
+              "refId": "VariableQuery-dpi"
+            }
+          },
+          "regex": "",
+          "sort": "numericalAsc",
+          "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, dpi)",
+          "options": [],
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "allowCustomValue": true
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "psm",
+          "current": {
+            "text": [
+              "All"
+            ],
+            "value": [
+              "$__all"
+            ]
+          },
+          "label": "PSM",
+          "hide": "dontHide",
+          "refresh": "onDashboardLoad",
+          "skipUrlSync": false,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+            },
+            "spec": {
+              "query": "label_values(brownrook_receipt_ocr_pass_completed_total, psm)",
+              "refId": "VariableQuery-psm"
+            }
+          },
+          "regex": "",
+          "sort": "numericalAsc",
+          "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, psm)",
+          "options": [],
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "allowCustomValue": true
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "variant",
+          "current": {
+            "text": [
+              "All"
+            ],
+            "value": [
+              "$__all"
+            ]
+          },
+          "label": "Variant",
+          "hide": "dontHide",
+          "refresh": "onDashboardLoad",
+          "skipUrlSync": false,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+            },
+            "spec": {
+              "query": "label_values(brownrook_receipt_ocr_pass_completed_total, variant)",
+              "refId": "VariableQuery-variant"
+            }
+          },
+          "regex": "",
+          "sort": "alphabeticalAsc",
+          "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, variant)",
+          "options": [],
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "allowCustomValue": true
+        }
+      },
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "status",
+          "current": {
+            "text": [
+              "All"
+            ],
+            "value": [
+              "$__all"
+            ]
+          },
+          "label": "Status",
+          "hide": "dontHide",
+          "refresh": "onDashboardLoad",
+          "skipUrlSync": false,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+            },
+            "spec": {
+              "query": "label_values(brownrook_receipt_ocr_pass_completed_total, status)",
+              "refId": "VariableQuery-status"
+            }
+          },
+          "regex": "",
+          "sort": "alphabeticalAsc",
+          "definition": "label_values(brownrook_receipt_ocr_pass_completed_total, status)",
+          "options": [],
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "allowCustomValue": true
+        }
+      }
+    ]
+  }
 }

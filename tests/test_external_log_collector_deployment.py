@@ -10,6 +10,31 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _v2_dashboard_spec(dashboard: dict) -> dict:
+    assert dashboard["apiVersion"] == "dashboard.grafana.app/v2"
+    assert dashboard["kind"] == "Dashboard"
+    return dashboard["spec"]
+
+
+def _v2_dashboard_panels(dashboard: dict) -> list[dict]:
+    return [
+        element["spec"]
+        for element in _v2_dashboard_spec(dashboard)["elements"].values()
+        if element["kind"] == "Panel"
+    ]
+
+
+def _v2_panel_query_models(panel: dict) -> list[dict]:
+    return [query["spec"] for query in panel["data"]["spec"]["queries"]]
+
+
+def _v2_panel_targets(panel: dict) -> list[dict]:
+    return [
+        query["query"]["spec"]
+        for query in _v2_panel_query_models(panel)
+    ]
+
+
 def _render(path: str) -> dict[tuple[str, str], dict]:
     if not shutil.which("kubectl"):
         pytest.skip("kubectl is not installed")
@@ -324,6 +349,15 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "home-budget-ocr-performance"
     )
     assert inventory["monitoring_grafana_receipt_dashboard_revision"] == "kan-88-v2"
+    assert defaults["monitoring_grafana_api_namespace"] == "default"
+    assert defaults["monitoring_grafana_home_budget_folder_uid"] == "home-budget"
+    assert defaults["monitoring_grafana_home_budget_folder_title"] == "Home Budget"
+    assert defaults["monitoring_grafana_brown_rook_folder_uid"] == "brown-rook"
+    assert defaults["monitoring_grafana_brown_rook_folder_title"] == "Brown Rook"
+    assert not (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/grafana-dashboard-provider.yml.j2"
+    ).exists()
 
     groups = {group["name"]: group for group in rules["groups"]}
     assert set(groups) == {"home-budget-recording", "home-budget-alerts"}
@@ -393,6 +427,9 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "{{ monitoring_grafana_prometheus_datasource_uid }}",
         "home-budget-prometheus",
     ).replace(
+        "{{ monitoring_grafana_home_budget_folder_uid_effective }}",
+        "home-budget",
+    ).replace(
         "{{ monitoring_grafana_receipt_dashboard_uid }}",
         "home-budget-receipt-telemetry",
     ).replace(
@@ -403,25 +440,31 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "kan-88-v2",
     )
     dashboard = json.loads(dashboard_text)
-    assert dashboard["uid"] == "home-budget-receipt-telemetry"
-    assert dashboard["title"] == "Home Budget Receipt Telemetry"
-    assert len(dashboard["panels"]) == 10
-    assert {variable["name"] for variable in dashboard["templating"]["list"]} == {
+    dashboard_spec = _v2_dashboard_spec(dashboard)
+    dashboard_panels = _v2_dashboard_panels(dashboard)
+    assert dashboard["metadata"]["name"] == "home-budget-receipt-telemetry"
+    assert dashboard["metadata"]["annotations"]["grafana.app/folder"] == (
+        "home-budget"
+    )
+    assert dashboard_spec["title"] == "Home Budget Receipt Telemetry"
+    assert len(dashboard_panels) == 10
+    assert {variable["spec"]["name"] for variable in dashboard_spec["variables"]} == {
         "environment", "service", "worker_host", "status", "queue",
     }
     assert all(
-        panel["datasource"]["uid"] == "home-budget-prometheus"
-        for panel in dashboard["panels"]
+        query["query"]["datasource"]["name"] == "home-budget-prometheus"
+        for panel in dashboard_panels
+        for query in _v2_panel_query_models(panel)
     )
     assert any(
         target.get("exemplar") is True
-        for panel in dashboard["panels"]
-        for target in panel["targets"]
+        for panel in dashboard_panels
+        for target in _v2_panel_targets(panel)
     )
     overview_expressions = "\n".join(
         target["expr"]
-        for panel in dashboard["panels"]
-        for target in panel["targets"]
+        for panel in dashboard_panels
+        for target in _v2_panel_targets(panel)
     )
     assert "rabbitmq_detailed_queue_messages_ready" in overview_expressions
     assert "otelcol_exporter_send_failed_metric_points_total" in overview_expressions
@@ -440,8 +483,8 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     assert '"$__range": "1h"' in validator
     rabbitmq_expressions = [
         target["expr"]
-        for panel in dashboard["panels"]
-        for target in panel["targets"]
+        for panel in dashboard_panels
+        for target in _v2_panel_targets(panel)
         if "rabbitmq_" in target["expr"]
     ]
     assert len(rabbitmq_expressions) == 7
@@ -454,20 +497,20 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "OCR cache hit ratio",
     }
     assert all(
-        panel["targets"][0]["expr"].endswith("or vector(0)")
-        for panel in dashboard["panels"]
+        _v2_panel_targets(panel)[0]["expr"].endswith("or vector(0)")
+        for panel in dashboard_panels
         if panel["title"] in idle_zero_panels
     )
-    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    panels_by_title = {panel["title"]: panel for panel in dashboard_panels}
     receipt_count = panels_by_title["Receipts processed in selected period"]
-    assert receipt_count["fieldConfig"]["defaults"]["unit"] == "short"
-    assert "increase(brownrook_receipt_processed_total" in receipt_count["targets"][0][
-        "expr"
-    ]
-    assert "[$__range]" in receipt_count["targets"][0]["expr"]
+    assert receipt_count["vizConfig"]["spec"]["fieldConfig"]["defaults"]["unit"] == "short"
+    assert "increase(brownrook_receipt_processed_total" in _v2_panel_targets(
+        receipt_count
+    )[0]["expr"]
+    assert "[$__range]" in _v2_panel_targets(receipt_count)[0]["expr"]
     receipt_throughput = panels_by_title["Receipt throughput (receipts/minute)"]
-    assert receipt_throughput["fieldConfig"]["defaults"]["unit"] == "short"
-    assert receipt_throughput["targets"][0]["expr"].endswith("* 60")
+    assert receipt_throughput["vizConfig"]["spec"]["fieldConfig"]["defaults"]["unit"] == "short"
+    assert _v2_panel_targets(receipt_throughput)[0]["expr"].endswith("* 60")
 
     ocr_dashboard_text = (
         ROOT
@@ -476,6 +519,9 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     ocr_dashboard_text = ocr_dashboard_text.replace(
         "{{ monitoring_grafana_prometheus_datasource_uid }}",
         "home-budget-prometheus",
+    ).replace(
+        "{{ monitoring_grafana_home_budget_folder_uid_effective }}",
+        "home-budget",
     ).replace(
         "{{ monitoring_grafana_receipt_dashboard_uid }}",
         "home-budget-receipt-telemetry",
@@ -487,17 +533,21 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "kan-88-v2",
     )
     ocr_dashboard = json.loads(ocr_dashboard_text)
-    assert ocr_dashboard["uid"] == "home-budget-ocr-performance"
-    assert ocr_dashboard["title"] == "Home Budget OCR Performance"
-    assert len(ocr_dashboard["panels"]) == 8
-    assert {variable["name"] for variable in ocr_dashboard["templating"]["list"]} == {
+    ocr_dashboard_spec = _v2_dashboard_spec(ocr_dashboard)
+    ocr_dashboard_panels = _v2_dashboard_panels(ocr_dashboard)
+    assert ocr_dashboard["metadata"]["name"] == "home-budget-ocr-performance"
+    assert ocr_dashboard_spec["title"] == "Home Budget OCR Performance"
+    assert len(ocr_dashboard_panels) == 8
+    assert {
+        variable["spec"]["name"] for variable in ocr_dashboard_spec["variables"]
+    } == {
         "environment", "service", "worker_host", "engine", "dpi", "psm",
         "variant", "status",
     }
     assert any(
         target.get("exemplar") is True
-        for panel in ocr_dashboard["panels"]
-        for target in panel["targets"]
+        for panel in ocr_dashboard_panels
+        for target in _v2_panel_targets(panel)
     )
     ocr_idle_zero_panels = {
         "OCR passes / second",
@@ -505,8 +555,8 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "Selected OCR bases / second",
     }
     assert all(
-        panel["targets"][0]["expr"].endswith("or vector(0)")
-        for panel in ocr_dashboard["panels"]
+        _v2_panel_targets(panel)[0]["expr"].endswith("or vector(0)")
+        for panel in ocr_dashboard_panels
         if panel["title"] in ocr_idle_zero_panels
     )
 
@@ -526,8 +576,14 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     assert "tracesToMetrics:" in tasks
     assert "{key: service.name, value: service}" in tasks
     assert "- name: Verify Grafana Prometheus datasource health" in tasks
-    assert "- name: Confirm Grafana provisioned telemetry resources" in tasks
-    assert "- name: Verify provisioned Grafana OCR dashboard" in tasks
+    assert "- name: Confirm native Grafana v2 dashboards" in tasks
+    assert "- name: Read native Grafana folders" in tasks
+    assert "- name: Create missing native Grafana folders" in tasks
+    assert "- name: Update changed native Grafana folders" in tasks
+    assert "- name: Verify native Grafana v2 dashboards" in tasks
+    assert "/apis/dashboard.grafana.app/v2/namespaces/" in tasks
+    assert "/apis/folder.grafana.app/v1/namespaces/" in tasks
+    assert "grafana-dashboard-provider.yml.j2" not in tasks
     assert "listen: restart Grafana" in handlers
 
 
@@ -550,11 +606,14 @@ def test_public_live_demo_is_sanitized_and_revocable():
         "{{ monitoring_grafana_prometheus_datasource_uid }}",
         "home-budget-prometheus",
     ).replace(
+        "{{ monitoring_grafana_brown_rook_folder_uid_effective }}",
+        "brown-rook",
+    ).replace(
         "{{ monitoring_grafana_public_demo_dashboard_uid }}",
         "brown-rook-live-telemetry",
     ).replace(
         "{{ monitoring_grafana_public_demo_dashboard_revision }}",
-        "kan-119-v1",
+        "kan-119-v2",
     )
     dashboard = json.loads(dashboard_text)
 
@@ -562,39 +621,53 @@ def test_public_live_demo_is_sanitized_and_revocable():
         "brown-rook-live-telemetry"
     )
     assert inventory["monitoring_grafana_public_demo_dashboard_revision"] == (
-        "kan-119-v1"
+        "kan-119-v2"
     )
     assert defaults["monitoring_grafana_public_demo_enabled"] is True
     assert defaults["monitoring_grafana_public_demo_annotations_enabled"] is False
     assert defaults["monitoring_grafana_public_demo_time_selection_enabled"] is False
+    assert inventory["monitoring_grafana_public_demo_external_url"] == (
+        "https://telemetry.idc.brownrook.com"
+    )
+    assert inventory["monitoring_grafana_public_demo_access_token"] == (
+        "08396daff846416b806d71cd965a6c6e"
+    )
+    assert inventory["monitoring_grafana_public_proxy_ipv4_sources"] == [
+        "192.168.2.230/32"
+    ]
 
-    assert dashboard["uid"] == "brown-rook-live-telemetry"
-    assert dashboard["title"] == "Brown Rook Live Receipt Processing"
-    assert len(dashboard["panels"]) == 8
-    assert dashboard["templating"]["list"] == []
-    assert dashboard["annotations"]["list"] == []
-    assert dashboard["links"] == []
-    assert dashboard["refresh"] == "60s"
-    assert dashboard["time"] == {"from": "now-6h", "to": "now"}
-    assert dashboard["timepicker"]["hidden"] is True
+    dashboard_spec = _v2_dashboard_spec(dashboard)
+    dashboard_panels = _v2_dashboard_panels(dashboard)
+    assert dashboard["metadata"]["name"] == "brown-rook-live-telemetry"
+    assert dashboard["metadata"]["annotations"]["grafana.app/folder"] == (
+        "brown-rook"
+    )
+    assert dashboard_spec["title"] == "Brown Rook Live Receipt Processing"
+    assert len(dashboard_panels) == 8
+    assert dashboard_spec["variables"] == []
+    assert dashboard_spec["annotations"] == []
+    assert dashboard_spec["links"] == []
+    assert dashboard_spec["timeSettings"]["autoRefresh"] == "60s"
+    assert dashboard_spec["timeSettings"]["from"] == "now-6h"
+    assert dashboard_spec["timeSettings"]["to"] == "now"
+    assert dashboard_spec["timeSettings"]["hideTimepicker"] is True
+    assert dashboard_spec["layout"]["kind"] == "GridLayout"
 
     assert all(
-        panel["datasource"] == {
-            "type": "prometheus",
-            "uid": "home-budget-prometheus",
-        }
-        for panel in dashboard["panels"]
+        query["query"]["datasource"]["name"] == "home-budget-prometheus"
+        for panel in dashboard_panels
+        for query in _v2_panel_query_models(panel)
     )
     assert all(
         target.get("exemplar") is not True
-        for panel in dashboard["panels"]
-        for target in panel["targets"]
+        for panel in dashboard_panels
+        for target in _v2_panel_targets(panel)
     )
 
     public_expressions = "\n".join(
         target["expr"]
-        for panel in dashboard["panels"]
-        for target in panel["targets"]
+        for panel in dashboard_panels
+        for target in _v2_panel_targets(panel)
     ).lower()
     forbidden_query_fields = {
         "instance",
@@ -619,10 +692,23 @@ def test_public_live_demo_is_sanitized_and_revocable():
 
     assert 'Environment="GF_AUTH_ANONYMOUS_ENABLED=false"' in tasks
     assert 'Environment="GF_PUBLIC_DASHBOARDS_ENABLED=true"' in tasks
+    assert 'Environment="GF_SERVER_HTTP_ADDR=0.0.0.0"' in tasks
+    assert "GF_FEATURE_TOGGLES_dashboardNewLayouts" not in tasks
+    assert "tcp dport {{ monitoring_grafana_port }} drop" in (
+        ROOT / "ops/monitoring/roles/monitoring/templates/nftables.conf.j2"
+    ).read_text()
     assert "daemon_reload: true" in handlers
     assert "- name: Enable external sharing for the Grafana public live demo" in tasks
     assert "- name: Reconcile external sharing for the Grafana public live demo" in tasks
-    assert "- name: Verify ordinary Grafana APIs still require authentication" in tasks
+    assert (
+        "- name: Verify ordinary Grafana routes are absent from the public hostname"
+        in tasks
+    )
+    assert 'url: "{{ monitoring_grafana_public_demo_external_url }}{{ item }}"' in tasks
+    assert "status_code: 404" in tasks
+    for blocked_path in ("/", "/login", "/explore", "/api/health", "/api/search"):
+        assert f"    - {blocked_path}" in tasks
+    assert "delegate_to: localhost" in tasks
     assert "annotationsEnabled:" in tasks
     assert "timeSelectionEnabled:" in tasks
     assert "share: public" in tasks

@@ -5,9 +5,47 @@ the Brown Rook public website. The externally shared dashboard is live and does
 not require a Grafana account. Every ordinary Grafana dashboard, API, Explore,
 log, and trace route remains authenticated.
 
+All three Git-managed telemetry dashboards use Grafana's stable
+`dashboard.grafana.app/v2` resource model. Ansible reconciles them through the
+native dashboard API; it does not install classic dashboard JSON through a file
+provider. It likewise reconciles the `Home Budget` and `Brown Rook` folders
+through `folder.grafana.app/v1`, adopting a pre-existing folder with the same
+title during migration so duplicate folders are not created. The private
+receipt and OCR dashboards live in `Home Budget`; the sanitized public demo
+lives in `Brown Rook`.
+
+The one-time conversion removes the classic provider while Grafana is stopped
+and recreates each dashboard with the same UID. Grafana dashboard version
+history is reset by that conversion. The public demo access token is pinned to
+the already-published value, so the brownrook.com link remains stable even if
+Grafana has to recreate the external-share database row.
+
 The public URL is a bearer capability: anyone who has it can see the dashboard
 until sharing is disabled. It contains no password and must never be reused for
-an operational dashboard.
+an operational dashboard. The public hostname is
+`telemetry.idc.brownrook.com`; the private Grafana hostname remains available
+only on the LAN/VPN.
+
+## Public request path
+
+The public site links directly to `telemetry.idc.brownrook.com`. Public DNS
+aliases that name to the dynamic `idc.brownrook.com` site anchor. The existing
+edge proxy retains the Host header and forwards HTTPS traffic to Traefik. The
+`deploy/public-telemetry` resources then route only these Grafana paths to the
+monitoring LXC at `192.168.2.210:3000`:
+
+- `/public-dashboards`;
+- `/bootdata`;
+- `/public`; and
+- `/api/public/dashboards`.
+
+There is deliberately no `/` catch-all. Login, Explore, ordinary dashboard,
+and ordinary Grafana API paths therefore receive a Traefik 404 on the public
+hostname. Grafana global anonymous access also remains disabled as a second
+boundary. The ingress applies response-security headers and a per-client rate
+limit sized for the five-session acceptance test. On the monitoring LXC,
+nftables accepts direct Grafana port 3000 connections only from loopback and
+the K3s node; other LAN clients cannot bypass Traefik's path restrictions.
 
 ## Published data boundary
 
@@ -42,7 +80,10 @@ make monitoring-gitops-check
 make monitoring-gitops-apply
 ```
 
-The apply prints a line beginning with `Public live demo:`. Copy that exact URL
+First reconcile the public DNS CNAME from `brownrook-edge`, then sync the
+`ledger` Argo CD Application so its certificate, restricted ingress, service,
+and endpoint are active. The monitoring apply prints a line beginning with
+`Public live demo:`. Copy that exact URL
 into the `Live Services` section of `brownrook-web/site/index.html`. The website
 should link to the dashboard in a new tab and label it as a live, public demo;
 do not embed Grafana or enable Grafana's global anonymous mode.
@@ -51,16 +92,27 @@ The role verifies all of the following during apply:
 
 - Grafana reports `auth.anonymous.enabled=false`;
 - Grafana reports `public_dashboards.enabled=true`;
-- the separate sanitized dashboard is provisioned with no variables;
+- the two folders and all three dashboards match their native v1/v2 resources;
+- the separate sanitized v2 dashboard has no variables;
 - its externally shared state has annotations and time selection disabled;
 - its public route returns HTTP 200 without credentials; and
-- an ordinary Grafana API returns HTTP 401/403 without credentials.
+- `/`, login, Explore, health, and ordinary Grafana APIs return HTTP 404 on the
+  public hostname because Traefik does not route them.
 
 ## Acceptance checks
+
+Before browser testing, prove the hostname exists in public DNS and does not
+resolve to RFC1918 space:
+
+```sh
+dig @1.1.1.1 +short telemetry.idc.brownrook.com
+```
 
 Open the public URL in a private browser window that has never authenticated to
 Grafana. Confirm that it opens without a login prompt, updates after 60 seconds,
 and shows only the eight aggregate panels. Repeat from a phone on cellular data.
+The cellular check is mandatory: a successful LAN request does not prove public
+reachability.
 
 In the browser developer tools, inspect the document and XHR/fetch responses.
 Search for `192.168.`, `.idc.`, `worker_host`, `instance`, `queue`, `vhost`,
@@ -96,7 +148,7 @@ monitoring_grafana_public_demo_enabled: false
 
 and run the normal monitoring check and apply. GitOps patches the existing
 external share to disabled, making its access token unusable while leaving the
-private provisioned dashboard available for review. Restore the value to
+private Git-managed dashboard available for review. Restore the value to
 `true` and apply to re-enable the same link.
 
 If the URL itself must be rotated, delete the external share in Grafana after
