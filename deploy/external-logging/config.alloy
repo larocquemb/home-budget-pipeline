@@ -139,7 +139,9 @@ otelcol.receiver.otlp "home_budget" {
       cert_file     = "/etc/alloy/otel-server.crt"
       key_file      = "/etc/alloy/otel-server.key"
       client_ca_file = "/etc/alloy/brown-rook-root-ca.crt"
-      min_version   = "TLS12"
+      // otelcol delegates this value to the upstream Collector TLS parser,
+      // whose accepted version names differ from Alloy's native TLS blocks.
+      min_version = "1.2"
     }
   }
 
