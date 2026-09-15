@@ -38,6 +38,7 @@ required_variables=(
   MONITORING_PKI_DIR
   MONITORING_ALLOY_KUBECONFIG
   MONITORING_ADMIN_KUBECONFIG
+  MONITORING_GRAFANA_ENTRA_CLIENT_SECRET_FILE
 )
 for variable_name in "${required_variables[@]}"; do
   if [[ -z "${!variable_name:-}" ]]; then

@@ -4,7 +4,8 @@ This directory turns the monitoring-host commands into a repeatable Ansible
 reconciliation. Git owns the non-secret desired state for Loki, Tempo, Alloy,
 Prometheus ingestion and rules, nftables, Grafana datasources and dashboards,
 and the Kubernetes observability Secret shapes. Certificate private keys,
-Grafana credentials, kubeconfigs, and CA private keys remain outside Git.
+Grafana credentials, Entra client secrets, kubeconfigs, and CA private keys
+remain outside Git.
 
 The committed `monitoring_loki_stage: enforced` state is the final comparison
 configuration:
@@ -33,6 +34,9 @@ configuration:
   Processing** dashboard. Its revocable external share is passwordless, while
   global anonymous Grafana access remains disabled. See
   [`docs/live-telemetry-demo.md`](../../docs/live-telemetry-demo.md).
+- The operational Grafana login uses Microsoft Entra ID with app-role mapping.
+  The local administrator login remains enabled only as a recovery path. See
+  [`docs/grafana-entra-sso.md`](../../docs/grafana-entra-sso.md).
 
 The role also keeps Loki at `info` log level and installs a journald drop-in
 that caps persistent service logs at 256 MiB, reserves 1 GiB of filesystem
@@ -65,7 +69,9 @@ host. It also reconciles the three telemetry TLS Secrets and the data-only OTLP
 backend endpoint Secret. The playbook selects its explicit `brownrook-k3s1`
 context rather than relying on the kubeconfig's current context. Private input
 files and both kubeconfigs must be mode `0400` or `0600`.
-The wrapper asks for the Grafana password without storing it in a file or shell
+`MONITORING_GRAFANA_ENTRA_CLIENT_SECRET_FILE` points to the mode-`0400` or
+mode-`0600` Entra client-secret file outside Git. The wrapper asks for the
+Grafana recovery-administrator password without storing it in a file or shell
 history.
 
 The playbook expects the existing Brown Rook CA layout:
@@ -119,7 +125,8 @@ only changed services. The role also detects the interrupted-apply case where
 `/etc/default/prometheus` changed without restarting the process and repairs it
 before asserting the active remote-write and exemplar flags. Loki, Tempo,
 Prometheus rules, the private and public Grafana dashboards, and all Grafana datasource health
-checks must pass.
+checks must pass. Reconciliation also verifies that Grafana's Entra login
+endpoint redirects to the configured Brown Rook tenant.
 Secret-bearing tasks use Ansible's `no_log` protection.
 
 Running `make monitoring-gitops-check` and then

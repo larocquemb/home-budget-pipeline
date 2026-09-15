@@ -11,6 +11,8 @@ monitoring_grafana_admin_user: >-
   {{ lookup('ansible.builtin.env', 'MONITORING_GRAFANA_ADMIN_USER') | default('admin', true) }}
 monitoring_grafana_admin_password: >-
   {{ lookup('ansible.builtin.env', 'MONITORING_GRAFANA_ADMIN_PASSWORD') }}
+monitoring_grafana_entra_client_secret_source: >-
+  {{ lookup('ansible.builtin.env', 'MONITORING_GRAFANA_ENTRA_CLIENT_SECRET_FILE') }}
 
 monitoring_root_ca_source: "{{ monitoring_pki_dir }}/root/root_ca.crt"
 monitoring_intermediate_ca_source: "{{ monitoring_pki_dir }}/intermediate/intermediate_ca.crt"
@@ -87,6 +89,7 @@ monitoring_grafana_brown_rook_folder_uid: brown-rook
 monitoring_grafana_brown_rook_folder_title: Brown Rook
 monitoring_grafana_systemd_override_dir: >-
   /etc/systemd/system/grafana-server.service.d
+monitoring_grafana_entra_environment_path: /etc/grafana/grafana-entra.env
 monitoring_grafana_port: 3000
 monitoring_grafana_public_proxy_ipv4_sources: []
 monitoring_grafana_public_demo_enabled: true

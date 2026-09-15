@@ -21,6 +21,8 @@ monitoring_otel_collector_backend_secret_name: otel-collector-backend-tls
 monitoring_otel_backend_secret_name: otel-backend
 
 monitoring_grafana_url: https://grafana.idc.brownrook.net
+monitoring_grafana_entra_tenant_id: 8b07f4bd-41e4-4106-8d49-00c5d79d35a2
+monitoring_grafana_entra_client_id: 670b17ca-a1e7-4c63-80e8-9d6a21c31fe4
 monitoring_grafana_datasource_uid: cfy4qg8i178jkb
 monitoring_grafana_datasource_name: loki
 monitoring_grafana_tempo_datasource_uid: home-budget-tempo

@@ -7,10 +7,12 @@
       - monitoring_alloy_kubeconfig | length > 0
       - monitoring_admin_kubeconfig | length > 0
       - monitoring_grafana_admin_password | length > 0
+      - monitoring_grafana_entra_client_secret_source | length > 0
     fail_msg: >-
       Set MONITORING_PKI_DIR, MONITORING_ALLOY_KUBECONFIG,
-      MONITORING_ADMIN_KUBECONFIG, and MONITORING_GRAFANA_ADMIN_PASSWORD; the
-      wrapper prompts for the password.
+      MONITORING_ADMIN_KUBECONFIG,
+      MONITORING_GRAFANA_ENTRA_CLIENT_SECRET_FILE, and
+      MONITORING_GRAFANA_ADMIN_PASSWORD; the wrapper prompts for the password.
     quiet: true
   become: false
   delegate_to: localhost
@@ -40,6 +42,7 @@
       - {label: Collector backend key, path: "{{ monitoring_otel_collector_backend_key_source }}", private: true}
       - {label: Alloy reader kubeconfig, path: "{{ monitoring_alloy_kubeconfig }}", private: true}
       - {label: Kubernetes admin kubeconfig, path: "{{ monitoring_admin_kubeconfig }}", private: true}
+      - {label: Grafana Entra client secret, path: "{{ monitoring_grafana_entra_client_secret_source }}", private: true}
   become: false
   delegate_to: localhost
   run_once: true
@@ -675,13 +678,42 @@
     group: root
     mode: "0755"
 
-- name: Enforce the Grafana public-dashboard security boundary
+- name: Install Grafana Entra client secret environment
+  ansible.builtin.copy:
+    content: |
+      GF_AUTH_AZUREAD_CLIENT_SECRET={{ lookup('ansible.builtin.file', monitoring_grafana_entra_client_secret_source) | trim | to_json }}
+    dest: "{{ monitoring_grafana_entra_environment_path }}"
+    owner: root
+    group: grafana
+    mode: "0640"
+    backup: false
+  notify: restart Grafana
+  no_log: true
+
+- name: Enforce Grafana authentication and public-dashboard boundaries
   ansible.builtin.copy:
     content: |
       [Service]
+      EnvironmentFile={{ monitoring_grafana_entra_environment_path }}
       Environment="GF_SERVER_HTTP_ADDR=0.0.0.0"
+      Environment="GF_SERVER_ROOT_URL={{ monitoring_grafana_url }}"
       Environment="GF_SERVER_ENFORCE_DOMAIN=false"
       Environment="GF_AUTH_ANONYMOUS_ENABLED=false"
+      Environment="GF_AUTH_BASIC_ENABLED=true"
+      Environment="GF_AUTH_DISABLE_LOGIN_FORM=false"
+      Environment="GF_AUTH_AZUREAD_ENABLED=true"
+      Environment="GF_AUTH_AZUREAD_NAME=Microsoft Entra ID"
+      Environment="GF_AUTH_AZUREAD_ALLOW_SIGN_UP=true"
+      Environment="GF_AUTH_AZUREAD_AUTO_LOGIN=false"
+      Environment="GF_AUTH_AZUREAD_CLIENT_ID={{ monitoring_grafana_entra_client_id }}"
+      Environment="GF_AUTH_AZUREAD_SCOPES=openid email profile offline_access"
+      Environment="GF_AUTH_AZUREAD_AUTH_URL=https://login.microsoftonline.com/{{ monitoring_grafana_entra_tenant_id }}/oauth2/v2.0/authorize"
+      Environment="GF_AUTH_AZUREAD_TOKEN_URL=https://login.microsoftonline.com/{{ monitoring_grafana_entra_tenant_id }}/oauth2/v2.0/token"
+      Environment="GF_AUTH_AZUREAD_ALLOWED_ORGANIZATIONS={{ monitoring_grafana_entra_tenant_id }}"
+      Environment="GF_AUTH_AZUREAD_ROLE_ATTRIBUTE_STRICT=true"
+      Environment="GF_AUTH_AZUREAD_ALLOW_ASSIGN_GRAFANA_ADMIN=true"
+      Environment="GF_AUTH_AZUREAD_SKIP_ORG_ROLE_SYNC=false"
+      Environment="GF_AUTH_AZUREAD_USE_REFRESH_TOKEN=true"
       Environment="GF_PUBLIC_DASHBOARDS_ENABLED=true"
     dest: "{{ monitoring_grafana_systemd_override_dir }}/home-budget-public-demo.conf"
     owner: root
@@ -1000,6 +1032,32 @@
   until: monitoring_grafana_ready.status == 200
   changed_when: false
   check_mode: false
+  when: not ansible_check_mode
+
+- name: Probe Grafana Entra login redirect
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/login/azuread"
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    follow_redirects: none
+    return_content: false
+    status_code: 302
+  register: monitoring_grafana_entra_login
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Confirm Grafana redirects authentication to the Brown Rook Entra tenant
+  ansible.builtin.assert:
+    that:
+      - >-
+        monitoring_grafana_entra_login.location is match(
+          '^https://login\\.microsoftonline\\.com/'
+          ~ monitoring_grafana_entra_tenant_id
+          ~ '/oauth2/v2\\.0/authorize\\?'
+        )
+    fail_msg: Grafana did not advertise the configured Microsoft Entra login.
+    quiet: true
   when: not ansible_check_mode
 
 - name: Remove retired temporary Loki storage
