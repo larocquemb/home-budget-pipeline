@@ -247,7 +247,9 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     assert "http_listen_address: {{ monitoring_tempo_http_address }}" in tempo
     assert "endpoint: {{ monitoring_tempo_otlp_address }}:" in tempo
     assert "backend: local" in tempo
+    assert "backend_worker:" in tempo
     assert "block_retention: {{ monitoring_tempo_retention_period }}" in tempo
+    assert "compactor:" not in tempo
     assert "path: {{ monitoring_tempo_storage_path }}/wal" in tempo
     assert "path: {{ monitoring_tempo_storage_path }}/blocks" in tempo
 
