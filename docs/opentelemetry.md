@@ -385,6 +385,41 @@ The exact curl failure text is not significant; a successful unauthenticated
 HTTP response would be a security failure. OTLP/gRPC itself is verified by the
 worker test below.
 
+## Synthetic OTLP demo
+
+Use the repository helper to verify both mTLS hops and Tempo without processing
+a real receipt:
+
+```bash
+make otlp-demo
+```
+
+The helper waits for the production Collector, mounts the
+`receipt-telemetry-client-tls` Secret into a non-root, disposable
+`telemetrygen` Pod, sends one trace over verified OTLP/gRPC mTLS, and deletes
+the Pod. The image is pinned by digest, the service-account token is not
+mounted, and no certificate or key value is placed on the command line.
+
+After the Collector's ten-second tail-sampling window, copy the TraceQL query
+printed by the helper into Grafana Explore with the `tempo` datasource. A
+successful result contains one trace and two spans. To use a predictable
+service name, run:
+
+```bash
+OTLP_DEMO_SERVICE=home-budget-otlp-demo make otlp-demo
+```
+
+Then query:
+
+```traceql
+{ resource.service.name = "home-budget-otlp-demo" }
+```
+
+The demo requires the `deploy/rabbitmq-private-telemetry` Argo CD overlay and
+the four Secrets created by `make monitoring-gitops-apply`. Override
+`KUBE_CONTEXT`, `KUBE_NAMESPACE`, `OTLP_DEMO_CLIENT_SECRET`, or
+`OTLP_DEMO_ENDPOINT` only when testing a different environment.
+
 ## End-to-end verification
 
 Choose one non-sensitive receipt reference and start a reprocess request while
