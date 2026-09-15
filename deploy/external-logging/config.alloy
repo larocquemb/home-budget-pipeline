@@ -139,7 +139,7 @@ otelcol.receiver.otlp "home_budget" {
       cert_file     = "/etc/alloy/otel-server.crt"
       key_file      = "/etc/alloy/otel-server.key"
       client_ca_file = "/etc/alloy/brown-rook-root-ca.crt"
-      min_version   = "TLS 1.2"
+      min_version   = "TLS12"
     }
   }
 

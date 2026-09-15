@@ -236,6 +236,8 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     assert 'otelcol.receiver.otlp "home_budget"' in alloy
     assert 'endpoint          = "0.0.0.0:4317"' in alloy
     assert 'client_ca_file = "/etc/alloy/brown-rook-root-ca.crt"' in alloy
+    assert 'min_version   = "TLS12"' in alloy
+    assert '"TLS 1.2"' not in alloy
     assert 'otelcol.processor.memory_limiter "home_budget"' in alloy
     assert 'otelcol.processor.batch "home_budget"' in alloy
     assert 'otelcol.exporter.otlp "tempo"' in alloy
