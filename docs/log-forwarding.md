@@ -177,6 +177,11 @@ the rollout stage. Private keys, kubeconfigs, Grafana credentials, and CA
 signing keys are external inputs and are never rendered into the repository or
 Ansible output.
 
+The same playbook keeps Loki's filesystem store under `/var/lib/loki` and
+enforces 14-day retention with the Compactor. Its first application makes a
+clean cutover and removes the former `/tmp/loki` history only after authenticated
+Loki readiness succeeds.
+
 This is a Git-controlled push workflow rather than a continuously running pull
 controller for the Debian monitoring host. `check` detects drift and `apply`
 reconciles it; Argo CD continues to own Kubernetes workload manifests. Prepare
@@ -378,8 +383,8 @@ records the reproducible provisioning shape; populate only an untracked copy:
 Test Alloy and Grafana with their client identities while Loki still accepts
 clients without certificates. Only then merge the final `server` settings from
 [`loki-tls-config.example.yaml`](https://github.com/larocquemb/home-budget-pipeline/blob/main/deploy/external-logging/loki-tls-config.example.yaml)
-into `/etc/loki/config.yml`; retain the existing storage, schema, and retention
-configuration:
+into `/etc/loki/config.yml`; the GitOps playbook owns storage, schema, and
+retention settings, so do not copy those settings from this emergency procedure:
 
 ```sh
 sudo cp -a /etc/loki/config.yml \

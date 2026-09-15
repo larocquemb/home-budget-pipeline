@@ -456,6 +456,14 @@
     validate: /usr/sbin/nft --check --file %s
   notify: restart nftables
 
+- name: Create durable Loki storage
+  ansible.builtin.file:
+    path: "{{ monitoring_loki_storage_path }}"
+    state: directory
+    owner: loki
+    group: loki
+    mode: "0750"
+
 - name: Install validated Loki configuration
   ansible.builtin.template:
     src: loki-config.yml.j2
@@ -494,6 +502,11 @@
   until: monitoring_loki_ready.status == 200
   check_mode: false
   when: not ansible_check_mode
+
+- name: Remove retired temporary Loki storage
+  ansible.builtin.file:
+    path: /tmp/loki
+    state: absent
 
 - name: Probe Loki without a client identity
   ansible.builtin.uri:
