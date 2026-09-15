@@ -29,6 +29,13 @@ Run unit tests:
 make test
 ```
 
+With Colima running, validate the exact Prometheus, OpenTelemetry Collector,
+Alloy, and Fluent Bit configurations used by CI:
+
+```bash
+make test-observability
+```
+
 Run database integration tests:
 
 ```bash
@@ -73,6 +80,7 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make docs-build` | Build the online manual locally and fail on documentation warnings. |
 | `make docs-serve` | Serve the online manual locally with live reload. |
 | `make test` | Run unit tests without external-service integration tests. |
+| `make test-observability` | Validate Prometheus, OpenTelemetry Collector, Alloy, and Fluent Bit configurations with containers provided by Colima or Docker. |
 | `make test-db-setup` | Create the disposable test database if needed, then rebuild its schemas. |
 | `make test-db` | Rebuild the disposable test schemas and run integration tests, including RabbitMQ when a broker URL is exported. |
 | `make test-db-verbose` | Run database setup and integration tests with full PostgreSQL output. |
@@ -127,6 +135,15 @@ Intermediate-CA YubiKey issuance and rotation ceremony, PKI inputs,
 configuration, deployment, live correlation, failure testing, and rollback.
 For initial issuance, insert the Intermediate CA YubiKey and run
 `scripts/issue_telemetry_certificates.sh` from the repository root.
+After monitoring reconciliation, use **Dashboards → Home Budget → Home Budget
+Receipt Telemetry** in Grafana for receipt, RabbitMQ queue, and telemetry-pipeline
+health, and **Home Budget OCR Performance** for engine/configuration throughput
+and latency. Dashboard variables filter the bounded environment, service,
+worker, OCR configuration, outcome, and queue dimensions. Exemplar markers on
+the application time-series panels open the corresponding Tempo trace.
+Prometheus alerts cover missing or failed telemetry delivery, receipt failures,
+review-required ratios, OCR failures and latency, growing or stale work queues,
+and dead-lettered jobs.
 
 ## Commit and pull request
 

@@ -14,13 +14,13 @@ ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 MONITORING_GITOPS ?= ./scripts/monitoring_gitops.sh
 LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
 
-.PHONY: help docs-build docs-serve test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
+.PHONY: help docs-build docs-serve test test-observability test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
 	@echo "Local logs:  dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down"
 	@echo "Documentation: docs-build docs-serve"
-	@echo "Tests:       test test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
+	@echo "Tests:       test test-observability test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
 	@echo "Operations:  status otlp-demo enrich-products"
 	@echo "Deployment:  deploy-k3s k3s-config-check k3s-config-apply (uses .env.k3s)"
 	@echo "PostgreSQL:  postgres-config-check postgres-config-apply postgres-password-rotate"
@@ -125,6 +125,9 @@ enrich-products:
 
 test:
 	$(PYTHON) -m pytest -q -m "not integration"
+
+test-observability:
+	@bash ./scripts/validate_observability_configs.sh
 
 test-db-setup:
 	@echo "Resetting PostgreSQL test database..."

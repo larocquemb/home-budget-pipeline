@@ -28,6 +28,12 @@
     state: restarted
   listen: restart Prometheus
 
+- name: Restart Grafana
+  ansible.builtin.systemd_service:
+    name: grafana-server
+    state: restarted
+  listen: restart Grafana
+
 - name: Restart Alloy
   ansible.builtin.systemd_service:
     name: alloy

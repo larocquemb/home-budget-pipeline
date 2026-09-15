@@ -316,9 +316,18 @@ def _process_candidate(
                 from .message import InvalidReceiptMessage
                 raise InvalidReceiptMessage("source contents changed since publication")
             progress(f"Running OCR and parsing {reference}")
-            receipts = parse_scans_parallel(
+            parsed = parse_scans_parallel(
                 [candidate.path], root, max(1, workers), cache_dir, refresh_ocr_cache,
+                return_cache_hits=True,
             )
+            # ``return_cache_hits`` is part of the real parser API. Accept a
+            # receipt-only result as a defensive fallback for integrations
+            # that wrap the parser without forwarding its optional metadata.
+            if isinstance(parsed, tuple):
+                receipts, cache_hits = parsed
+            else:
+                receipts, cache_hits = parsed, 0
+            telemetry.record_cache_lookup(cache_hits > 0)
             if len(receipts) != 1:
                 raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
             receipt = receipts[0]

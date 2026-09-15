@@ -47,7 +47,6 @@ data:
         Grace                      30
         Log_Level                  ${FLUENT_BIT_LOG_LEVEL}
         Parsers_File               /fluent-bit/etc/parsers.conf
-        Parsers_File               /fluent-bit/etc/parsers_multiline.conf
         HTTP_Server                On
         HTTP_Listen                0.0.0.0
         HTTP_Port                  2020

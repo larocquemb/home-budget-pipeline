@@ -30,6 +30,7 @@ def in_memory_telemetry(monkeypatch):
     monkeypatch.setattr(telemetry, "_tracer", provider.get_tracer("test"))
     monkeypatch.setattr(telemetry, "_receipt_counter", None)
     monkeypatch.setattr(telemetry, "_receipt_duration", None)
+    monkeypatch.setattr(telemetry, "_cache_lookup_counter", None)
     monkeypatch.setattr(telemetry, "_ocr_pass_counter", None)
     monkeypatch.setattr(telemetry, "_ocr_pass_duration", None)
     monkeypatch.setattr(telemetry, "_ocr_selected_counter", None)
@@ -257,6 +258,57 @@ def test_metric_dimensions_exclude_run_and_pass_identifiers(monkeypatch):
         assert attributes["engine"] == "paddle"
 
 
+def test_metric_cardinality_is_bounded_as_receipt_volume_grows(monkeypatch):
+    class Instrument:
+        def __init__(self):
+            self.calls = []
+
+        def add(self, value, attributes):
+            self.calls.append((value, attributes))
+
+        def record(self, value, attributes):
+            self.calls.append((value, attributes))
+
+    ocr_counter = Instrument()
+    ocr_duration = Instrument()
+    selected_counter = Instrument()
+    cache_counter = Instrument()
+    monkeypatch.setattr(telemetry, "_ocr_pass_counter", ocr_counter)
+    monkeypatch.setattr(telemetry, "_ocr_pass_duration", ocr_duration)
+    monkeypatch.setattr(telemetry, "_ocr_selected_counter", selected_counter)
+    monkeypatch.setattr(telemetry, "_cache_lookup_counter", cache_counter)
+
+    for index in range(1000):
+        metric = {
+            "run_uuid": f"run-{index}",
+            "pass_id": index,
+            "engine": ("tesseract", "paddle")[index % 2],
+            "engine_type": "traditional_ocr",
+            "dpi": (200, 300)[index % 2],
+            "psm": ("4", "6")[index % 2],
+            "variant": ("raw", "enhanced")[index % 2],
+            "seconds": 0.1,
+            "status": ("success", "failed")[index % 2],
+            "selected_base": index % 2 == 0,
+        }
+        telemetry.record_ocr_pass_completion(telemetry._NoopSpan(), metric)
+        telemetry.finish_ocr_pass(telemetry._NoopSpan(), metric)
+        telemetry.record_cache_lookup(index % 2 == 0)
+
+    ocr_attributes = {
+        tuple(sorted(attributes.items()))
+        for instrument in (ocr_counter, ocr_duration, selected_counter)
+        for _, attributes in instrument.calls
+    }
+    cache_attributes = {
+        tuple(sorted(attributes.items())) for _, attributes in cache_counter.calls
+    }
+    assert len(ocr_attributes) == 2
+    assert cache_attributes == {(('result', 'hit'),), (('result', 'miss'),)}
+    assert all("run_uuid" not in dict(item) for item in ocr_attributes)
+    assert all("pass_id" not in dict(item) for item in ocr_attributes)
+
+
 def test_metric_failure_does_not_change_receipt_outcome(monkeypatch):
     class BrokenInstrument:
         def add(self, value, attributes):
@@ -318,6 +370,14 @@ def test_telemetry_overlay_has_mtls_resiliency_and_worker_configuration():
     assert "storage: file_storage" in config
     assert "queue_size: 2048" in config
     assert "max_elapsed_time: 0s" in config
+    assert "job_name: otel-collector" in config
+    assert "targets: [127.0.0.1:8888]" in config
+    assert "job_name: fluent-bit" in config
+    assert "targets: [fluent-bit:2020]" in config
+    assert "job_name: rabbitmq" in config
+    assert "targets: [rabbitmq:15692]" in config
+    assert "receivers: [otlp, prometheus]" in config
+    assert "queue_delivery_metrics" in config
 
     worker = resources[("Deployment", "receipt-worker")]["spec"]["template"]["spec"]
     container = next(item for item in worker["containers"] if item["name"] == "receipt-worker")
@@ -335,6 +395,14 @@ def test_project_declares_python_opentelemetry_dependencies():
     assert "opentelemetry-api>=1.44,<2" in project
     assert "opentelemetry-sdk>=1.44,<2" in project
     assert "opentelemetry-exporter-otlp-proto-grpc>=1.44,<2" in project
+
+
+def test_ci_validates_collector_configuration_with_deployed_version():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    validator = (ROOT / "scripts/validate_observability_configs.sh").read_text()
+    assert "make test-observability" in workflow
+    assert "otel/opentelemetry-collector-contrib:0.160.0" in validator
+    assert "validate --config=/etc/otelcol-contrib/config.yaml" in validator
 
 
 def test_telemetry_secret_example_targets_managed_backend():

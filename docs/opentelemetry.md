@@ -17,13 +17,21 @@ flowchart LR
     logs[JSON stdout]
     collector[OpenTelemetry Collector]
     wal[(persistent sending queue)]
-    backend[OTLP backend]
+    backend[Alloy telemetry gateway]
+    prometheus[Prometheus]
+    grafana[Grafana]
+    rabbit[RabbitMQ metrics]
+    fluent[Fluent Bit metrics]
     database[(PostgreSQL OCR learning)]
     logCollectors[Fluent Bit and Alloy]
     loki[Loki]
 
     worker -->|OTLP/gRPC mTLS| collector
     collector --> wal -->|OTLP/gRPC mTLS| backend
+    rabbit --> collector
+    fluent --> collector
+    backend -->|normalized metrics| prometheus --> grafana
+    prometheus -.->|scrape loopback /metrics| backend
     worker -->|run_uuid and pass_id| database
     worker --> logs --> logCollectors --> loki
 ```
@@ -75,13 +83,28 @@ from metrics.
 | --- | --- | --- | --- |
 | `brownrook.receipt.processed` | Counter | `{receipt}` | `status` |
 | `brownrook.receipt.processing.duration` | Histogram | `s` | `status` |
+| `brownrook.receipt.cache.lookup` | Counter | `{lookup}` | `result` (`hit` or `miss`) |
 | `brownrook.receipt.ocr.pass.completed` | Counter | `{pass}` | `engine`, `engine_type`, `dpi`, `psm`, `variant`, `status` |
 | `brownrook.receipt.ocr.pass.duration` | Histogram | `s` | `engine`, `engine_type`, `dpi`, `psm`, `variant`, `status` |
 | `brownrook.receipt.ocr.pass.selected` | Counter | `{pass}` | `engine`, `engine_type`, `dpi`, `psm`, `variant`, `status` |
 
 Receipt hashes, filenames, `run_uuid`, and `pass_id` are never metric
-dimensions. They remain in traces and logs. KAN-88 owns Prometheus export,
-recording rules, dashboards, alerts, and metric-to-trace navigation.
+dimensions. They remain in traces and logs. Prometheus receives the normalized
+metric names over loopback remote write, evaluates the KAN-88 recording and
+alerting rules, and supplies the provisioned Grafana receipt and OCR dashboards.
+Alloy copies only `environment`, `service`, and `worker_host` from resource
+metadata into application metric datapoints. Pod names and UIDs are deliberately
+excluded so deployments do not create unbounded time-series cardinality.
+Prometheus exemplars link metric points back to Tempo traces.
+
+The Collector also scrapes its own internal metrics, Fluent Bit's Prometheus
+endpoint, and RabbitMQ's detailed queue families. Prometheus independently
+scrapes Alloy's loopback-only `127.0.0.1:12345/metrics` endpoint. This keeps
+Alloy's remote-write/WAL failures, retries, drops, and pending samples visible
+even when its remote-write path is unhealthy. Together these supply queue depth
+and age, publish/delivery/ACK/redelivery activity, and telemetry failure,
+retry, drop, and buffer health without adding another network-facing
+Prometheus endpoint.
 
 ## Structured log contract
 
@@ -434,7 +457,8 @@ ledger receipts reprocess YYYY-MM-DD/receipt.pdf
 
 Before the root run finishes, the log must show an OCR pass with non-null
 correlation fields. Within the five-second metric export interval, query the
-backend for `brownrook.receipt.ocr.pass.completed`. With the default 100-percent
+backend for `brownrook_receipt_ocr_pass_completed_total` (the
+Prometheus-normalized form of `brownrook.receipt.ocr.pass.completed`). With the default 100-percent
 Collector sampling, query traces for `receipt.ocr.pass` after its ten-second
 decision window and copy its `run_uuid` and `pass_id`.
 
@@ -480,6 +504,39 @@ For a backend-only outage, leave the Collector running and stop or firewall the
 test backend. Confirm Collector logs show retries, its Pod remains ready, and
 the `otel-collector-storage` PVC remains bound. Restore the backend and confirm
 the persistent queue drains before declaring the drill successful.
+
+To test Alloy's final metric-delivery hop independently, stop only Prometheus
+on the monitoring host, process a disposable receipt, and inspect Alloy's
+loopback metrics while the receiver is unavailable:
+
+```bash
+ssh paul@192.168.2.202
+sudo systemctl stop prometheus
+curl -fsS http://127.0.0.1:12345/metrics | \
+  grep -E '^prometheus_remote_storage_(samples_pending|samples_retries_total)'
+```
+
+At least one retry counter or pending-sample gauge for
+`component_id="prometheus.remote_write.local_prometheus"` must increase without
+interrupting receipt processing. Restore the receiver and confirm Alloy drains
+its WAL and Prometheus resumes both the direct Alloy scrape and application
+metric ingestion:
+
+```bash
+sudo systemctl start prometheus
+curl -fsS http://127.0.0.1:9090/-/ready
+curl -fsS \
+  'http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22alloy%22%7D' | \
+  jq -e '.data.result[0].value[1] == "1"'
+curl -fsS \
+  'http://127.0.0.1:9090/api/v1/query?query=brownrook_receipt_processed_total' | \
+  jq -e '.data.result | length > 0'
+```
+
+After the backlog drains,
+`prometheus_remote_storage_samples_pending{component_id="prometheus.remote_write.local_prometheus"}`
+must return to zero. The retry counter is cumulative and is expected to retain
+the interruption as evidence.
 
 ## Rollback
 

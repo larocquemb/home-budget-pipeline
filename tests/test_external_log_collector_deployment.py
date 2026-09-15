@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -212,7 +213,7 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
         / "ops/monitoring/roles/monitoring/tasks/validate_identity.yml"
     ).read_text()
     site = yaml.safe_load((ROOT / "ops/monitoring/site.yml").read_text())
-    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    validator = (ROOT / "scripts/validate_observability_configs.sh").read_text()
 
     assert defaults["monitoring_tempo_version"] == "3.0.3"
     assert defaults["monitoring_tempo_storage_path"] == "/var/lib/tempo"
@@ -226,6 +227,7 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     assert "--enable-feature=exemplar-storage" in defaults[
         "monitoring_prometheus_args"
     ]
+    assert defaults["monitoring_alloy_metrics_target"] == "127.0.0.1:12345"
 
     assert inventory["monitoring_otel_port"] == 4317
     assert inventory["monitoring_otel_allowed_ipv4_sources"] == [
@@ -240,6 +242,12 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     assert '"TLS 1.2"' not in alloy
     assert 'otelcol.processor.memory_limiter "home_budget"' in alloy
     assert 'otelcol.processor.batch "home_budget"' in alloy
+    assert 'otelcol.processor.transform "home_budget_metric_labels"' in alloy
+    assert 'attributes["environment"]' in alloy
+    assert 'attributes["service"]' in alloy
+    assert 'attributes["worker_host"]' in alloy
+    assert 'prometheus.exporter.self "home_budget"' not in alloy
+    assert 'prometheus.scrape "alloy_self"' not in alloy
     assert 'otelcol.exporter.otlp "tempo"' in alloy
     assert "sending_queue {\n    enabled = false" in alloy
     assert 'endpoint = "127.0.0.1:14317"' in alloy
@@ -277,6 +285,198 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     assert "tcp dport {{ monitoring_otel_port }} drop" in firewall
     assert "listen: restart Tempo" in handlers
     assert "listen: restart Prometheus" in handlers
-    assert '"$RUNNER_TEMP/alloy/otel-server.key"' in ci
-    assert '"$RUNNER_TEMP/alloy/otel-server.crt"' in ci
+    assert '"$validation_root/alloy/otel-server.key"' in validator
+    assert '"$validation_root/alloy/otel-server.crt"' in validator
+    assert "grafana/alloy:v1.19.2" in validator
     assert site[0]["force_handlers"] is True
+
+
+def test_monitoring_role_completes_receipt_metrics_observability():
+    defaults = yaml.safe_load(
+        (ROOT / "ops/monitoring/roles/monitoring/defaults/main.yml").read_text()
+    )
+    inventory = yaml.safe_load(
+        (ROOT / "ops/monitoring/inventory/group_vars/monitoring.yml").read_text()
+    )
+    tasks = (ROOT / "ops/monitoring/roles/monitoring/tasks/main.yml").read_text()
+    handlers = (ROOT / "ops/monitoring/roles/monitoring/handlers/main.yml").read_text()
+    rules = yaml.safe_load(
+        (
+            ROOT
+            / "ops/monitoring/roles/monitoring/files/prometheus-home-budget-rules.yml"
+        ).read_text()
+    )
+
+    assert defaults["monitoring_prometheus_config_path"] == (
+        "/etc/prometheus/prometheus.yml"
+    )
+    assert defaults["monitoring_prometheus_rules_path"] == (
+        "/etc/prometheus/rules/home-budget.yml"
+    )
+    assert inventory["monitoring_grafana_prometheus_datasource_uid"] == (
+        "home-budget-prometheus"
+    )
+    assert inventory["monitoring_grafana_receipt_dashboard_uid"] == (
+        "home-budget-receipt-telemetry"
+    )
+    assert inventory["monitoring_grafana_ocr_dashboard_uid"] == (
+        "home-budget-ocr-performance"
+    )
+
+    groups = {group["name"]: group for group in rules["groups"]}
+    assert set(groups) == {"home-budget-recording", "home-budget-alerts"}
+    recordings = {
+        rule["record"] for rule in groups["home-budget-recording"]["rules"]
+    }
+    assert recordings == {
+        "job_status:brownrook_receipt_processed:rate5m",
+        "job:brownrook_receipt_processing_duration_seconds:p95_5m",
+        "job_engine_status:brownrook_receipt_ocr_pass_completed:rate5m",
+        "job_engine:brownrook_receipt_ocr_pass_duration_seconds:p95_5m",
+        "job:brownrook_receipt_cache_hit:ratio5m",
+        "queue:rabbitmq_receipt_messages_ready",
+        "queue:rabbitmq_receipt_oldest_message_age_seconds",
+    }
+    alerts = {rule["alert"] for rule in groups["home-budget-alerts"]["rules"]}
+    assert alerts == {
+        "HomeBudgetTelemetryMetricsMissing",
+        "HomeBudgetReceiptProcessingFailed",
+        "HomeBudgetOcrPassFailureRatioHigh",
+        "HomeBudgetReceiptProcessingLatencyHigh",
+        "HomeBudgetReviewRequiredRatioHigh",
+        "HomeBudgetReceiptQueueGrowing",
+        "HomeBudgetReceiptJobStale",
+        "HomeBudgetReceiptDeadLettered",
+        "HomeBudgetTelemetryDeliveryFailure",
+    }
+    rules_text = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/files/prometheus-home-budget-rules.yml"
+    ).read_text()
+    assert "brownrook_receipt_processed_total" in rules_text
+    assert "brownrook_receipt_processing_duration_seconds_bucket" in rules_text
+    assert "run_uuid" not in rules_text
+    assert "pass_id" not in rules_text
+    assert "source_reference" not in rules_text
+    assert 'absent_over_time(up{job="alloy"}[5m])' in rules_text
+
+    datasource_text = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/grafana-prometheus-datasource.yml.j2"
+    ).read_text()
+    datasource_text = datasource_text.replace(
+        "{{ monitoring_grafana_prometheus_datasource_name }}",
+        "home-budget-prometheus",
+    ).replace(
+        "{{ monitoring_grafana_prometheus_datasource_uid }}",
+        "home-budget-prometheus",
+    ).replace(
+        "{{ monitoring_grafana_tempo_datasource_uid }}",
+        "home-budget-tempo",
+    ).replace(
+        "{{ monitoring_prometheus_version }}",
+        "2.53.3",
+    )
+    datasource = yaml.safe_load(datasource_text)["datasources"][0]
+    assert datasource["url"] == "http://127.0.0.1:9090"
+    assert datasource["jsonData"]["exemplarTraceIdDestinations"] == [
+        {"name": "trace_id", "datasourceUid": "home-budget-tempo"}
+    ]
+
+    dashboard_text = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/grafana-receipt-telemetry-dashboard.json.j2"
+    ).read_text()
+    dashboard_text = dashboard_text.replace(
+        "{{ monitoring_grafana_prometheus_datasource_uid }}",
+        "home-budget-prometheus",
+    ).replace(
+        "{{ monitoring_grafana_receipt_dashboard_uid }}",
+        "home-budget-receipt-telemetry",
+    ).replace(
+        "{{ monitoring_grafana_ocr_dashboard_uid }}",
+        "home-budget-ocr-performance",
+    ).replace(
+        "{{ monitoring_grafana_receipt_dashboard_revision }}",
+        "kan-88-v1",
+    )
+    dashboard = json.loads(dashboard_text)
+    assert dashboard["uid"] == "home-budget-receipt-telemetry"
+    assert dashboard["title"] == "Home Budget Receipt Telemetry"
+    assert len(dashboard["panels"]) == 10
+    assert {variable["name"] for variable in dashboard["templating"]["list"]} == {
+        "environment", "service", "worker_host", "status", "queue",
+    }
+    assert all(
+        panel["datasource"]["uid"] == "home-budget-prometheus"
+        for panel in dashboard["panels"]
+    )
+    assert any(
+        target.get("exemplar") is True
+        for panel in dashboard["panels"]
+        for target in panel["targets"]
+    )
+    overview_expressions = "\n".join(
+        target["expr"]
+        for panel in dashboard["panels"]
+        for target in panel["targets"]
+    )
+    assert "rabbitmq_detailed_queue_messages_ready" in overview_expressions
+    assert "otelcol_exporter_send_failed_metric_points_total" in overview_expressions
+    assert "fluentbit_output_dropped_records_total" in overview_expressions
+    assert "prometheus_remote_storage_samples_failed_total" in overview_expressions
+    assert "prometheus_remote_storage_samples_dropped_total" in overview_expressions
+    assert "prometheus_remote_storage_samples_retries_total" in overview_expressions
+    assert "prometheus_remote_storage_enqueue_retries_total" in overview_expressions
+    assert 'component_id=\\"prometheus.remote_write.local_prometheus\\"' in dashboard_text
+
+    ocr_dashboard_text = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/grafana-ocr-performance-dashboard.json.j2"
+    ).read_text()
+    ocr_dashboard_text = ocr_dashboard_text.replace(
+        "{{ monitoring_grafana_prometheus_datasource_uid }}",
+        "home-budget-prometheus",
+    ).replace(
+        "{{ monitoring_grafana_receipt_dashboard_uid }}",
+        "home-budget-receipt-telemetry",
+    ).replace(
+        "{{ monitoring_grafana_ocr_dashboard_uid }}",
+        "home-budget-ocr-performance",
+    ).replace(
+        "{{ monitoring_grafana_receipt_dashboard_revision }}",
+        "kan-88-v1",
+    )
+    ocr_dashboard = json.loads(ocr_dashboard_text)
+    assert ocr_dashboard["uid"] == "home-budget-ocr-performance"
+    assert ocr_dashboard["title"] == "Home Budget OCR Performance"
+    assert len(ocr_dashboard["panels"]) == 8
+    assert {variable["name"] for variable in ocr_dashboard["templating"]["list"]} == {
+        "environment", "service", "worker_host", "engine", "dpi", "psm",
+        "variant", "status",
+    }
+    assert any(
+        target.get("exemplar") is True
+        for panel in ocr_dashboard["panels"]
+        for target in panel["targets"]
+    )
+
+    assert "validate: /usr/bin/promtool check rules %s" in tasks
+    assert "validate: /usr/bin/promtool check config %s" in tasks
+    assert "- name: Independently scrape Alloy metrics from Prometheus" in tasks
+    assert "- job_name: alloy" in tasks
+    assert 'http://{{ monitoring_alloy_metrics_target }}/metrics' in tasks
+    assert "- name: Wait for Prometheus to scrape Alloy metrics" in tasks
+    assert "- name: Read active Prometheus runtime flags" in tasks
+    assert (
+        "- name: Restart Prometheus when installed receiver flags are not active"
+        in tasks
+    )
+    assert "- name: Confirm Prometheus accepts remote writes and exemplars" in tasks
+    assert "- name: Confirm home-budget Prometheus rules are active" in tasks
+    assert "tracesToMetrics:" in tasks
+    assert "{key: service.name, value: service}" in tasks
+    assert "- name: Verify Grafana Prometheus datasource health" in tasks
+    assert "- name: Confirm Grafana provisioned telemetry resources" in tasks
+    assert "- name: Verify provisioned Grafana OCR dashboard" in tasks
+    assert "listen: restart Grafana" in handlers

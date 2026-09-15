@@ -44,6 +44,7 @@ def test_fluent_bit_is_namespace_scoped_and_collects_only_home_budget_logs():
     assert "*_home-budget_fluent-bit-*.log" in config["fluent-bit.conf"]
     assert "multiline.parser           cri" in config["fluent-bit.conf"]
     assert "multiline.parser           python" in config["fluent-bit.conf"]
+    assert "parsers_multiline.conf" not in config["fluent-bit.conf"]
     assert next(
         volume for volume in pod["volumes"] if volume["name"] == "varlog"
     )["hostPath"] == {"path": "/var/log", "type": "Directory"}

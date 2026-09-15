@@ -1,0 +1,265 @@
+---
+groups:
+  - name: home-budget-recording
+    interval: 30s
+    rules:
+      - record: job_status:brownrook_receipt_processed:rate5m
+        expr: >-
+          sum by (environment, service, worker_host, status)
+          (rate(brownrook_receipt_processed_total[5m]))
+
+      - record: job:brownrook_receipt_processing_duration_seconds:p95_5m
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (environment, service, worker_host, le)
+            (rate(brownrook_receipt_processing_duration_seconds_bucket[5m]))
+          )
+
+      - record: job_engine_status:brownrook_receipt_ocr_pass_completed:rate5m
+        expr: >-
+          sum by (environment, service, worker_host, engine, dpi, psm, variant, status)
+          (rate(brownrook_receipt_ocr_pass_completed_total[5m]))
+
+      - record: job_engine:brownrook_receipt_ocr_pass_duration_seconds:p95_5m
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (environment, service, worker_host, engine, dpi, psm, variant, le)
+            (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket[5m]))
+          )
+
+      - record: job:brownrook_receipt_cache_hit:ratio5m
+        expr: >-
+          sum by (environment, service, worker_host)
+          (rate(brownrook_receipt_cache_lookup_total{result="hit"}[5m]))
+          /
+          clamp_min(
+            sum by (environment, service, worker_host)
+            (rate(brownrook_receipt_cache_lookup_total[5m])),
+            1e-9
+          )
+
+      - record: queue:rabbitmq_receipt_messages_ready
+        expr: >-
+          sum by (queue)
+          (rabbitmq_detailed_queue_messages_ready{vhost="receipts"})
+
+      - record: queue:rabbitmq_receipt_oldest_message_age_seconds
+        expr: >-
+          max by (queue) (
+            time()
+            - rabbitmq_detailed_queue_head_message_timestamp{vhost="receipts"}
+          )
+
+  - name: home-budget-alerts
+    interval: 30s
+    rules:
+      - alert: HomeBudgetTelemetryMetricsMissing
+        expr: >-
+          (min_over_time(up{job=~"otel-collector|fluent-bit|rabbitmq|alloy"}[5m]) == 0)
+          or absent_over_time(up{job="otel-collector"}[5m])
+          or absent_over_time(up{job="fluent-bit"}[5m])
+          or absent_over_time(up{job="rabbitmq"}[5m])
+          or absent_over_time(up{job="alloy"}[5m])
+        for: 5m
+        labels:
+          severity: critical
+          service: telemetry-pipeline
+        annotations:
+          summary: A Home Budget telemetry scrape target is unavailable
+          description: >-
+            Prometheus or the OpenTelemetry Collector cannot scrape one of the
+            Alloy, Collector, Fluent Bit, or RabbitMQ metric endpoints. Check
+            the target named by the job and instance labels.
+
+      - alert: HomeBudgetTelemetryDeliveryFailure
+        expr: >-
+          (
+            (sum(increase(otelcol_exporter_send_failed_metric_points_total[10m])) or vector(0))
+            + (sum(increase(otelcol_exporter_send_failed_spans_total[10m])) or vector(0))
+            + (sum(increase(otelcol_exporter_enqueue_failed_metric_points_total[10m])) or vector(0))
+            + (sum(increase(otelcol_exporter_enqueue_failed_spans_total[10m])) or vector(0))
+            + (sum(increase(fluentbit_output_errors_total[10m])) or vector(0))
+            + (sum(increase(fluentbit_output_dropped_records_total[10m])) or vector(0))
+            + (sum(increase(fluentbit_output_retries_failed_total[10m])) or vector(0))
+            + (sum(increase(prometheus_remote_storage_samples_failed_total[10m])) or vector(0))
+            + (sum(increase(prometheus_remote_storage_samples_dropped_total[10m])) or vector(0))
+          ) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: telemetry-pipeline
+        annotations:
+          summary: Home Budget telemetry delivery is failing
+          description: >-
+            Collector, Fluent Bit, or Alloy reported failed or dropped
+            telemetry during the last 10 minutes.
+
+      - alert: HomeBudgetReceiptProcessingFailed
+        expr: >-
+          sum(
+            increase(
+              brownrook_receipt_processed_total{
+                service="home-budget-receipt-worker",
+                status="failed"
+              }[15m]
+            )
+          ) > 0
+        labels:
+          severity: warning
+          service: home-budget-receipt-worker
+        annotations:
+          summary: A Home Budget receipt-processing attempt failed
+          description: >-
+            At least one receipt-processing attempt reported status=failed
+            during the last 15 minutes. Follow an exemplar or correlated trace
+            in Grafana to investigate.
+
+      - alert: HomeBudgetOcrPassFailureRatioHigh
+        expr: >-
+          (
+            sum(
+              increase(
+                  brownrook_receipt_ocr_pass_completed_total{
+                  service="home-budget-receipt-worker",
+                  status="failed"
+                }[15m]
+              )
+            )
+            /
+            clamp_min(
+              sum(
+                increase(
+                  brownrook_receipt_ocr_pass_completed_total{
+                    service="home-budget-receipt-worker"
+                  }[15m]
+                )
+              ),
+              1
+            )
+          ) > 0.10
+          and
+          sum(
+            increase(
+              brownrook_receipt_ocr_pass_completed_total{
+                service="home-budget-receipt-worker"
+              }[15m]
+            )
+          ) >= 10
+        for: 10m
+        labels:
+          severity: warning
+          service: home-budget-receipt-worker
+        annotations:
+          summary: Home Budget OCR pass failure ratio is high
+          description: >-
+            More than 10 percent of at least 10 OCR passes failed over the last
+            15 minutes for 10 consecutive minutes.
+
+      - alert: HomeBudgetReceiptProcessingLatencyHigh
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(
+                brownrook_receipt_processing_duration_seconds_bucket{
+                  service="home-budget-receipt-worker"
+                }[15m]
+              )
+            )
+          ) > 120
+          and
+          sum(
+            increase(
+              brownrook_receipt_processing_duration_seconds_count{
+                service="home-budget-receipt-worker"
+              }[15m]
+            )
+          ) >= 3
+        for: 10m
+        labels:
+          severity: warning
+          service: home-budget-receipt-worker
+        annotations:
+          summary: Home Budget receipt processing is slow
+          description: >-
+            The 15-minute p95 receipt-processing duration exceeded two minutes
+            for 10 consecutive minutes with at least three observations.
+
+      - alert: HomeBudgetReviewRequiredRatioHigh
+        expr: >-
+          (
+            sum(increase(brownrook_receipt_processed_total{
+              service="home-budget-receipt-worker",
+              status="review_required"
+            }[30m]))
+            /
+            clamp_min(
+              sum(increase(brownrook_receipt_processed_total{
+                service="home-budget-receipt-worker"
+              }[30m])),
+              1
+            )
+          ) > 0.25
+          and
+          sum(increase(brownrook_receipt_processed_total{
+            service="home-budget-receipt-worker"
+          }[30m])) >= 4
+        for: 10m
+        labels:
+          severity: warning
+          service: home-budget-receipt-worker
+        annotations:
+          summary: Home Budget review-required ratio is high
+          description: >-
+            More than 25 percent of at least four receipt attempts required
+            review during the last 30 minutes.
+
+      - alert: HomeBudgetReceiptQueueGrowing
+        expr: >-
+          rabbitmq_detailed_queue_messages_ready{
+            vhost="receipts",
+            queue="receipts.v1.work"
+          } > 10
+        for: 15m
+        labels:
+          severity: warning
+          service: rabbitmq
+        annotations:
+          summary: Home Budget receipt queue is growing
+          description: >-
+            More than 10 receipt jobs have remained ready for processing for
+            15 minutes.
+
+      - alert: HomeBudgetReceiptJobStale
+        expr: >-
+          time()
+          - rabbitmq_detailed_queue_head_message_timestamp{
+              vhost="receipts",
+              queue="receipts.v1.work"
+            } > 900
+        for: 10m
+        labels:
+          severity: critical
+          service: rabbitmq
+        annotations:
+          summary: A Home Budget receipt job is stale
+          description: >-
+            The oldest ready receipt job has been queued for more than 15
+            minutes for 10 consecutive minutes.
+
+      - alert: HomeBudgetReceiptDeadLettered
+        expr: >-
+          rabbitmq_detailed_queue_messages{
+            vhost="receipts",
+            queue="receipts.v1.dead"
+          } > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: rabbitmq
+        annotations:
+          summary: Home Budget has dead-lettered receipt jobs
+          description: >-
+            At least one receipt job is waiting in the dead-letter queue.

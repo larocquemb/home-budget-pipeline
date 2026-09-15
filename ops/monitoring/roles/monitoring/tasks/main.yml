@@ -619,6 +619,102 @@
     backup: true
   notify: restart Prometheus
 
+- name: Create Prometheus rules directory
+  ansible.builtin.file:
+    path: "{{ monitoring_prometheus_rules_dir }}"
+    state: directory
+    owner: root
+    group: prometheus
+    mode: "0750"
+
+- name: Install validated home-budget Prometheus rules
+  ansible.builtin.copy:
+    src: prometheus-home-budget-rules.yml
+    dest: "{{ monitoring_prometheus_rules_path }}"
+    owner: root
+    group: prometheus
+    mode: "0640"
+    backup: true
+    validate: /usr/bin/promtool check rules %s
+  notify: restart Prometheus
+
+- name: Load Git-managed Prometheus rules
+  ansible.builtin.lineinfile:
+    path: "{{ monitoring_prometheus_config_path }}"
+    regexp: '^rule_files:'
+    line: 'rule_files: ["{{ monitoring_prometheus_rules_dir }}/*.yml"]'
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+    validate: /usr/bin/promtool check config %s
+  notify: restart Prometheus
+
+- name: Independently scrape Alloy metrics from Prometheus
+  ansible.builtin.blockinfile:
+    path: "{{ monitoring_prometheus_config_path }}"
+    insertafter: '^scrape_configs:$'
+    marker: '  # {mark} ANSIBLE MANAGED BLOCK: home-budget Alloy scrape'
+    block: |2
+        - job_name: alloy
+          static_configs:
+            - targets:
+                - "{{ monitoring_alloy_metrics_target }}"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+    validate: /usr/bin/promtool check config %s
+  notify: restart Prometheus
+
+- name: Create Grafana home-budget dashboard directory
+  ansible.builtin.file:
+    path: "{{ monitoring_grafana_dashboard_dir }}"
+    state: directory
+    owner: root
+    group: grafana
+    mode: "0750"
+
+- name: Provision Grafana Prometheus datasource
+  ansible.builtin.template:
+    src: grafana-prometheus-datasource.yml.j2
+    dest: "{{ monitoring_grafana_prometheus_provisioning_path }}"
+    owner: root
+    group: grafana
+    mode: "0640"
+    backup: true
+  notify: restart Grafana
+
+- name: Provision Grafana home-budget dashboard provider
+  ansible.builtin.template:
+    src: grafana-dashboard-provider.yml.j2
+    dest: "{{ monitoring_grafana_dashboard_provisioning_path }}"
+    owner: root
+    group: grafana
+    mode: "0640"
+    backup: true
+  notify: restart Grafana
+
+- name: Install Grafana receipt telemetry dashboard
+  ansible.builtin.template:
+    src: grafana-receipt-telemetry-dashboard.json.j2
+    dest: "{{ monitoring_grafana_dashboard_path }}"
+    owner: root
+    group: grafana
+    mode: "0640"
+    backup: true
+  notify: restart Grafana
+
+- name: Install Grafana OCR performance dashboard
+  ansible.builtin.template:
+    src: grafana-ocr-performance-dashboard.json.j2
+    dest: "{{ monitoring_grafana_ocr_dashboard_path }}"
+    owner: root
+    group: grafana
+    mode: "0640"
+    backup: true
+  notify: restart Grafana
+
 - name: Keep Grafana's Loki hostname on loopback
   ansible.builtin.lineinfile:
     path: /etc/hosts
@@ -785,12 +881,140 @@
   check_mode: false
   when: not ansible_check_mode
 
+- name: Read active Prometheus runtime flags
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9090/api/v1/status/flags
+    return_content: true
+    status_code: 200
+  register: monitoring_prometheus_runtime_flags
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Restart Prometheus when installed receiver flags are not active
+  ansible.builtin.systemd_service:
+    name: prometheus
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - >-
+      monitoring_prometheus_runtime_flags.json.data['web.enable-remote-write-receiver']
+      | default('false') != 'true'
+      or 'exemplar-storage' not in
+         (monitoring_prometheus_runtime_flags.json.data['enable-feature'] | default(''))
+
+- name: Wait for Prometheus after runtime flag recovery
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9090/-/ready
+    return_content: true
+    status_code: 200
+  register: monitoring_prometheus_recovered
+  retries: 12
+  delay: 5
+  until: monitoring_prometheus_recovered.status == 200
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Verify active Prometheus receiver flags
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9090/api/v1/status/flags
+    return_content: true
+    status_code: 200
+  register: monitoring_prometheus_verified_flags
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Confirm Prometheus accepts remote writes and exemplars
+  ansible.builtin.assert:
+    that:
+      - >-
+        monitoring_prometheus_verified_flags.json.data['web.enable-remote-write-receiver']
+        | default('false') == 'true'
+      - >-
+        'exemplar-storage' in
+        (monitoring_prometheus_verified_flags.json.data['enable-feature'] | default(''))
+    fail_msg: Prometheus is not running with its configured telemetry receiver flags.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Read loaded Prometheus rule groups
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9090/api/v1/rules
+    return_content: true
+    status_code: 200
+  register: monitoring_prometheus_loaded_rules
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Confirm home-budget Prometheus rules are active
+  ansible.builtin.assert:
+    that:
+      - >-
+        'home-budget-recording' in
+        (monitoring_prometheus_loaded_rules.json.data.groups
+         | map(attribute='name') | list)
+      - >-
+        'home-budget-alerts' in
+        (monitoring_prometheus_loaded_rules.json.data.groups
+         | map(attribute='name') | list)
+    fail_msg: Prometheus did not load the home-budget recording and alerting rules.
+    quiet: true
+  when: not ansible_check_mode
+
 - name: Wait for Alloy OTLP listener
   ansible.builtin.wait_for:
     host: 127.0.0.1
     port: "{{ monitoring_otel_port }}"
     state: started
     timeout: 30
+  when: not ansible_check_mode
+
+- name: Wait for Alloy metrics endpoint on loopback
+  ansible.builtin.uri:
+    url: "http://{{ monitoring_alloy_metrics_target }}/metrics"
+    return_content: false
+    status_code: 200
+  register: monitoring_alloy_metrics_ready
+  retries: 12
+  delay: 5
+  until: monitoring_alloy_metrics_ready.status == 200
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Wait for Prometheus to scrape Alloy metrics
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22alloy%22%7D
+    return_content: true
+    status_code: 200
+  register: monitoring_prometheus_alloy_target
+  retries: 12
+  delay: 5
+  until: >-
+    monitoring_prometheus_alloy_target.json.status == 'success'
+    and monitoring_prometheus_alloy_target.json.data.result | length > 0
+    and monitoring_prometheus_alloy_target.json.data.result[0].value[1] == '1'
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Wait for Grafana before datasource reconciliation
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/api/health"
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_ready
+  retries: 12
+  delay: 5
+  until: monitoring_grafana_ready.status == 200
+  changed_when: false
+  check_mode: false
   when: not ansible_check_mode
 
 - name: Remove retired temporary Loki storage
@@ -1049,6 +1273,20 @@
           filterByTraceID: true
           filterBySpanID: true
           customQuery: false
+        tracesToMetrics:
+          datasourceUid: "{{ monitoring_grafana_prometheus_datasource_uid }}"
+          spanStartTimeShift: -5m
+          spanEndTimeShift: 5m
+          tags:
+            - {key: service.name, value: service}
+          queries:
+            - name: Receipt throughput
+              query: 'sum(rate(brownrook_receipt_processed_total{$__tags}[5m]))'
+            - name: Receipt duration p95
+              query: >-
+                histogram_quantile(0.95,
+                sum by (le)
+                (rate(brownrook_receipt_processing_duration_seconds_bucket{$__tags}[5m])))
 
 - name: Determine whether Grafana Tempo datasource needs reconciliation
   ansible.builtin.set_fact:
@@ -1063,6 +1301,8 @@
         or not (monitoring_grafana_tempo_datasource.json.jsonData.nodeGraph.enabled | default(false))
         or (monitoring_grafana_tempo_datasource.json.jsonData.tracesToLogsV2 | default({})
             != monitoring_grafana_tempo_datasource_payload.jsonData.tracesToLogsV2)
+        or (monitoring_grafana_tempo_datasource.json.jsonData.tracesToMetrics | default({})
+            != monitoring_grafana_tempo_datasource_payload.jsonData.tracesToMetrics)
       }}
 
 - name: Create Grafana Tempo datasource
@@ -1130,6 +1370,232 @@
     that:
       - monitoring_grafana_tempo_health.json.status == 'OK'
     fail_msg: Grafana could not connect to Tempo over loopback.
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Read provisioned Grafana Prometheus datasource
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/datasources/uid/{{ monitoring_grafana_prometheus_datasource_uid }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_prometheus_datasource
+  check_mode: false
+  no_log: true
+
+- name: Read provisioned Grafana receipt dashboard
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_receipt_dashboard_uid }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_receipt_dashboard
+  check_mode: false
+  no_log: true
+
+- name: Read provisioned Grafana OCR dashboard
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_ocr_dashboard_uid }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_ocr_dashboard
+  check_mode: false
+  no_log: true
+
+- name: Determine whether Grafana provisioning needs activation
+  ansible.builtin.set_fact:
+    monitoring_grafana_provisioning_needs_activation: >-
+      {{
+        monitoring_grafana_prometheus_datasource.status != 200
+        or monitoring_grafana_prometheus_datasource.json.name | default('')
+           != monitoring_grafana_prometheus_datasource_name
+        or monitoring_grafana_prometheus_datasource.json.type | default('') != 'prometheus'
+        or monitoring_grafana_prometheus_datasource.json.url | default('')
+           != 'http://127.0.0.1:9090'
+        or monitoring_grafana_tempo_datasource_uid not in
+           (monitoring_grafana_prometheus_datasource.json.jsonData.exemplarTraceIdDestinations
+            | default([])
+            | selectattr('name', 'equalto', 'trace_id')
+            | map(attribute='datasourceUid') | list)
+        or monitoring_grafana_receipt_dashboard.status != 200
+        or monitoring_grafana_receipt_dashboard.json.dashboard.title | default('')
+           != 'Home Budget Receipt Telemetry'
+        or monitoring_grafana_receipt_dashboard.json.dashboard.panels | default([])
+           | length != 10
+        or monitoring_grafana_receipt_dashboard_revision not in
+           (monitoring_grafana_receipt_dashboard.json.dashboard.tags | default([]))
+        or monitoring_grafana_ocr_dashboard.status != 200
+        or monitoring_grafana_ocr_dashboard.json.dashboard.title | default('')
+           != 'Home Budget OCR Performance'
+        or monitoring_grafana_ocr_dashboard.json.dashboard.panels | default([])
+           | length != 8
+        or monitoring_grafana_receipt_dashboard_revision not in
+           (monitoring_grafana_ocr_dashboard.json.dashboard.tags | default([]))
+      }}
+  no_log: true
+
+- name: Report pending Grafana provisioning activation in check mode
+  ansible.builtin.debug:
+    msg: Grafana Prometheus datasource and receipt/OCR dashboards would be activated.
+  when:
+    - ansible_check_mode
+    - monitoring_grafana_provisioning_needs_activation
+
+- name: Restart Grafana when installed provisioning is not active
+  ansible.builtin.systemd_service:
+    name: grafana-server
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - monitoring_grafana_provisioning_needs_activation
+
+- name: Wait for Grafana after provisioning activation
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/api/health"
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_provisioning_ready
+  retries: 12
+  delay: 5
+  until: monitoring_grafana_provisioning_ready.status == 200
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Verify provisioned Grafana Prometheus datasource
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/datasources/uid/{{ monitoring_grafana_prometheus_datasource_uid }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_prometheus_verified
+  retries: 6
+  delay: 5
+  until: monitoring_grafana_prometheus_verified.status == 200
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Verify provisioned Grafana receipt dashboard
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_receipt_dashboard_uid }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_dashboard_verified
+  retries: 6
+  delay: 5
+  until: monitoring_grafana_dashboard_verified.status == 200
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Verify provisioned Grafana OCR dashboard
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/dashboards/uid/{{ monitoring_grafana_ocr_dashboard_uid }}
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_grafana_ocr_dashboard_verified
+  retries: 6
+  delay: 5
+  until: monitoring_grafana_ocr_dashboard_verified.status == 200
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Confirm Grafana provisioned telemetry resources
+  ansible.builtin.assert:
+    that:
+      - monitoring_grafana_prometheus_verified.json.url == 'http://127.0.0.1:9090'
+      - >-
+        monitoring_grafana_tempo_datasource_uid in
+        (monitoring_grafana_prometheus_verified.json.jsonData.exemplarTraceIdDestinations
+         | selectattr('name', 'equalto', 'trace_id')
+         | map(attribute='datasourceUid') | list)
+      - >-
+        monitoring_grafana_dashboard_verified.json.dashboard.title
+        == 'Home Budget Receipt Telemetry'
+      - >-
+        monitoring_grafana_receipt_dashboard_revision in
+        monitoring_grafana_dashboard_verified.json.dashboard.tags
+      - >-
+        monitoring_grafana_ocr_dashboard_verified.json.dashboard.title
+        == 'Home Budget OCR Performance'
+      - >-
+        monitoring_grafana_receipt_dashboard_revision in
+        monitoring_grafana_ocr_dashboard_verified.json.dashboard.tags
+    fail_msg: Grafana did not activate the provisioned Prometheus datasource and receipt/OCR dashboards.
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Verify Grafana Prometheus datasource health
+  ansible.builtin.uri:
+    url: >-
+      {{ monitoring_grafana_url }}/api/datasources/uid/{{ monitoring_grafana_prometheus_datasource_uid }}/health
+    method: GET
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_prometheus_health
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Confirm Grafana can query Prometheus
+  ansible.builtin.assert:
+    that:
+      - monitoring_grafana_prometheus_health.json.status == 'OK'
+    fail_msg: Grafana could not connect to Prometheus over loopback.
     quiet: true
   when: not ansible_check_mode
   no_log: true
