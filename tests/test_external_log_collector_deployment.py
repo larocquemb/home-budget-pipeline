@@ -300,6 +300,7 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     )
     tasks = (ROOT / "ops/monitoring/roles/monitoring/tasks/main.yml").read_text()
     handlers = (ROOT / "ops/monitoring/roles/monitoring/handlers/main.yml").read_text()
+    validator = (ROOT / "scripts/validate_observability_configs.sh").read_text()
     rules = yaml.safe_load(
         (
             ROOT
@@ -322,6 +323,7 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     assert inventory["monitoring_grafana_ocr_dashboard_uid"] == (
         "home-budget-ocr-performance"
     )
+    assert inventory["monitoring_grafana_receipt_dashboard_revision"] == "kan-88-v2"
 
     groups = {group["name"]: group for group in rules["groups"]}
     assert set(groups) == {"home-budget-recording", "home-budget-alerts"}
@@ -398,7 +400,7 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "home-budget-ocr-performance",
     ).replace(
         "{{ monitoring_grafana_receipt_dashboard_revision }}",
-        "kan-88-v1",
+        "kan-88-v2",
     )
     dashboard = json.loads(dashboard_text)
     assert dashboard["uid"] == "home-budget-receipt-telemetry"
@@ -429,6 +431,42 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     assert "prometheus_remote_storage_samples_retries_total" in overview_expressions
     assert "prometheus_remote_storage_enqueue_retries_total" in overview_expressions
     assert 'component_id=\\"prometheus.remote_write.local_prometheus\\"' in dashboard_text
+    assert "grafana-dashboard-validation" in validator
+    assert "grafana-receipt-telemetry-dashboard.json.j2" in validator
+    assert "grafana-ocr-performance-dashboard.json.j2" in validator
+    assert '"${queue:regex}": r"receipts\\.v1\\.work"' in validator
+    assert '"$__rate_interval": "5m"' in validator
+    assert '"$__range": "1h"' in validator
+    rabbitmq_expressions = [
+        target["expr"]
+        for panel in dashboard["panels"]
+        for target in panel["targets"]
+        if "rabbitmq_" in target["expr"]
+    ]
+    assert len(rabbitmq_expressions) == 7
+    assert all('queue=~`${queue:regex}`' in expr for expr in rabbitmq_expressions)
+    assert all('queue=~"${queue:regex}"' not in expr for expr in rabbitmq_expressions)
+    idle_zero_panels = {
+        "Receipts processed in selected period",
+        "Receipt failure ratio",
+        "Review-required ratio",
+        "OCR cache hit ratio",
+    }
+    assert all(
+        panel["targets"][0]["expr"].endswith("or vector(0)")
+        for panel in dashboard["panels"]
+        if panel["title"] in idle_zero_panels
+    )
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    receipt_count = panels_by_title["Receipts processed in selected period"]
+    assert receipt_count["fieldConfig"]["defaults"]["unit"] == "short"
+    assert "increase(brownrook_receipt_processed_total" in receipt_count["targets"][0][
+        "expr"
+    ]
+    assert "[$__range]" in receipt_count["targets"][0]["expr"]
+    receipt_throughput = panels_by_title["Receipt throughput (receipts/minute)"]
+    assert receipt_throughput["fieldConfig"]["defaults"]["unit"] == "short"
+    assert receipt_throughput["targets"][0]["expr"].endswith("* 60")
 
     ocr_dashboard_text = (
         ROOT
@@ -445,7 +483,7 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "home-budget-ocr-performance",
     ).replace(
         "{{ monitoring_grafana_receipt_dashboard_revision }}",
-        "kan-88-v1",
+        "kan-88-v2",
     )
     ocr_dashboard = json.loads(ocr_dashboard_text)
     assert ocr_dashboard["uid"] == "home-budget-ocr-performance"
@@ -459,6 +497,16 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         target.get("exemplar") is True
         for panel in ocr_dashboard["panels"]
         for target in panel["targets"]
+    )
+    ocr_idle_zero_panels = {
+        "OCR passes / second",
+        "OCR failure ratio",
+        "Selected OCR bases / second",
+    }
+    assert all(
+        panel["targets"][0]["expr"].endswith("or vector(0)")
+        for panel in ocr_dashboard["panels"]
+        if panel["title"] in ocr_idle_zero_panels
     )
 
     assert "validate: /usr/bin/promtool check rules %s" in tasks

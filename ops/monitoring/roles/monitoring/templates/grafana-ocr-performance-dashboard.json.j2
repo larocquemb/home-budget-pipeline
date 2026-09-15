@@ -14,21 +14,21 @@
       "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
       "fieldConfig": {"defaults": {"decimals": 3, "min": 0, "unit": "ops"}, "overrides": []},
       "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))"}]
+      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])) or vector(0)"}]
     },
     {
       "id": 2, "type": "stat", "title": "OCR failure ratio", "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
       "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
       "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.05}, {"color": "red", "value": 0.1}]}}, "overrides": []},
       "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=\"failed\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\"}[$__rate_interval])), 1e-9)"}]
+      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=\"failed\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_ocr_pass_completed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\"}[$__rate_interval])), 1e-9) or vector(0)"}]
     },
     {
       "id": 3, "type": "stat", "title": "Selected OCR bases / second", "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
       "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
       "fieldConfig": {"defaults": {"decimals": 3, "min": 0, "unit": "ops"}, "overrides": []},
       "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
-      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_ocr_pass_selected_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))"}]
+      "targets": [{"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_ocr_pass_selected_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",engine=~\"${engine:regex}\",dpi=~\"${dpi:regex}\",psm=~\"${psm:regex}\",variant=~\"${variant:regex}\",status=~\"${status:regex}\"}[$__rate_interval])) or vector(0)"}]
     },
     {
       "id": 4, "type": "stat", "title": "OCR duration p95", "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},

@@ -12,13 +12,13 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Receipt attempts / second",
+      "title": "Receipts processed in selected period",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
       "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"decimals": 3, "min": 0, "unit": "ops"}, "overrides": []},
+      "fieldConfig": {"defaults": {"decimals": 0, "min": 0, "unit": "short"}, "overrides": []},
       "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
       "targets": [
-        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))"}
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(increase(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__range])) or vector(0)"}
       ]
     },
     {
@@ -30,7 +30,7 @@
       "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.01}, {"color": "red", "value": 0.1}]}}, "overrides": []},
       "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
       "targets": [
-        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=\"failed\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\"}[$__rate_interval])), 1e-9)"}
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=\"failed\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\"}[$__rate_interval])), 1e-9) or vector(0)"}
       ]
     },
     {
@@ -42,7 +42,7 @@
       "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.15}, {"color": "red", "value": 0.25}]}}, "overrides": []},
       "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
       "targets": [
-        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=\"review_required\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\"}[$__rate_interval])), 1e-9)"}
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=\"review_required\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\"}[$__rate_interval])), 1e-9) or vector(0)"}
       ]
     },
     {
@@ -54,19 +54,19 @@
       "fieldConfig": {"defaults": {"decimals": 1, "max": 1, "min": 0, "unit": "percentunit"}, "overrides": []},
       "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
       "targets": [
-        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_cache_lookup_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",result=\"hit\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_cache_lookup_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\"}[$__rate_interval])), 1e-9)"}
+        {"refId": "A", "editorMode": "code", "instant": true, "range": false, "expr": "sum(rate(brownrook_receipt_cache_lookup_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",result=\"hit\"}[$__rate_interval])) / clamp_min(sum(rate(brownrook_receipt_cache_lookup_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\"}[$__rate_interval])), 1e-9) or vector(0)"}
       ]
     },
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Receipt outcomes",
+      "title": "Receipt throughput (receipts/minute)",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
       "datasource": {"type": "prometheus", "uid": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
-      "fieldConfig": {"defaults": {"min": 0, "unit": "ops"}, "overrides": []},
+      "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
       "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
-        {"refId": "A", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "", "expr": "sum by (status) (rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval]))"}
+        {"refId": "A", "editorMode": "code", "instant": false, "range": true, "exemplar": true, "legendFormat": "", "expr": "sum by (status) (rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval])) * 60"}
       ]
     },
     {
@@ -91,8 +91,8 @@
       "fieldConfig": {"defaults": {"min": 0, "unit": "short"}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
-        {"refId": "A", "editorMode": "code", "legendFormat": "", "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_ready{vhost=\"receipts\",queue=~\"${queue:regex}\"})"},
-        {"refId": "B", "editorMode": "code", "legendFormat": "", "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_unacked{vhost=\"receipts\",queue=~\"${queue:regex}\"})"}
+        {"refId": "A", "editorMode": "code", "legendFormat": "", "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_ready{vhost=\"receipts\",queue=~`${queue:regex}`})"},
+        {"refId": "B", "editorMode": "code", "legendFormat": "", "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_unacked{vhost=\"receipts\",queue=~`${queue:regex}`})"}
       ]
     },
     {
@@ -104,10 +104,10 @@
       "fieldConfig": {"defaults": {"min": 0, "unit": "ops"}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
-        {"refId": "A", "editorMode": "code", "legendFormat": "published", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_exchange_messages_published_total{vhost=\"receipts\",queue=~\"${queue:regex}\"}[$__rate_interval]))"},
-        {"refId": "B", "editorMode": "code", "legendFormat": "delivered", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_messages_delivered_ack_total{vhost=\"receipts\",queue=~\"${queue:regex}\"}[$__rate_interval]))"},
-        {"refId": "C", "editorMode": "code", "legendFormat": "acked", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_messages_acked_total{vhost=\"receipts\",queue=~\"${queue:regex}\"}[$__rate_interval]))"},
-        {"refId": "D", "editorMode": "code", "legendFormat": "redelivered", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_messages_redelivered_total{vhost=\"receipts\",queue=~\"${queue:regex}\"}[$__rate_interval]))"}
+        {"refId": "A", "editorMode": "code", "legendFormat": "published", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_exchange_messages_published_total{vhost=\"receipts\",queue=~`${queue:regex}`}[$__rate_interval])) or vector(0)"},
+        {"refId": "B", "editorMode": "code", "legendFormat": "delivered", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_messages_delivered_ack_total{vhost=\"receipts\",queue=~`${queue:regex}`}[$__rate_interval])) or vector(0)"},
+        {"refId": "C", "editorMode": "code", "legendFormat": "acked", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_messages_acked_total{vhost=\"receipts\",queue=~`${queue:regex}`}[$__rate_interval])) or vector(0)"},
+        {"refId": "D", "editorMode": "code", "legendFormat": "redelivered", "expr": "sum by (queue) (rate(rabbitmq_detailed_queue_messages_redelivered_total{vhost=\"receipts\",queue=~`${queue:regex}`}[$__rate_interval])) or vector(0)"}
       ]
     },
     {
@@ -119,7 +119,7 @@
       "fieldConfig": {"defaults": {"min": 0, "unit": "s"}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
-        {"refId": "A", "editorMode": "code", "legendFormat": "", "expr": "max by (queue) (time() - rabbitmq_detailed_queue_head_message_timestamp{vhost=\"receipts\",queue=~\"${queue:regex}\"})"}
+        {"refId": "A", "editorMode": "code", "legendFormat": "", "expr": "max by (queue) (time() - rabbitmq_detailed_queue_head_message_timestamp{vhost=\"receipts\",queue=~`${queue:regex}`})"}
       ]
     },
     {

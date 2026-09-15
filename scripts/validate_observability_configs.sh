@@ -36,6 +36,66 @@ printf 'Validating Prometheus configuration and rules...\n'
 mkdir -p "$validation_root/prometheus/rules"
 cp ops/monitoring/roles/monitoring/files/prometheus-home-budget-rules.yml \
   "$validation_root/prometheus/rules/home-budget.yml"
+"$validation_python" - \
+  "$validation_root/prometheus/rules/grafana-dashboard.yml" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+import yaml
+
+output = pathlib.Path(sys.argv[1])
+dashboard_paths = (
+    pathlib.Path(
+        "ops/monitoring/roles/monitoring/templates/"
+        "grafana-receipt-telemetry-dashboard.json.j2"
+    ),
+    pathlib.Path(
+        "ops/monitoring/roles/monitoring/templates/"
+        "grafana-ocr-performance-dashboard.json.j2"
+    ),
+)
+grafana_values = {
+    "${environment:regex}": "production",
+    "${service:regex}": "home-budget-receipt-worker",
+    "${worker_host:regex}": "k3s1",
+    "${status:regex}": "succeeded",
+    "${queue:regex}": r"receipts\.v1\.work",
+    "${engine:regex}": "tesseract",
+    "${dpi:regex}": "300",
+    "${psm:regex}": "6",
+    "${variant:regex}": "grayscale",
+    "$__rate_interval": "5m",
+    "$__range": "1h",
+}
+
+expressions = []
+for dashboard_path in dashboard_paths:
+    rendered = re.sub(r"\{\{[^{}]+\}\}", "validation", dashboard_path.read_text())
+    dashboard = json.loads(rendered)
+    for panel in dashboard["panels"]:
+        for target in panel.get("targets", []):
+            expression = target.get("expr")
+            if not expression:
+                continue
+            for variable, value in grafana_values.items():
+                expression = expression.replace(variable, value)
+            expressions.append(expression)
+
+rules = {
+    "groups": [
+        {
+            "name": "grafana-dashboard-validation",
+            "rules": [
+                {"record": f"grafana_dashboard_validation_{index:03d}", "expr": expr}
+                for index, expr in enumerate(expressions, start=1)
+            ],
+        }
+    ]
+}
+output.write_text(yaml.safe_dump(rules, sort_keys=False))
+PY
 cat > "$validation_root/prometheus/prometheus.yml" <<'EOF'
 global:
   scrape_interval: 15s
