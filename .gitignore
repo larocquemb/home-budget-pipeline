@@ -110,6 +110,7 @@ env.bak/
 venv.bak/
 
 # IDE/tool state
+.vscode/
 .spyderproject
 .spyproject
 .ropeproject
