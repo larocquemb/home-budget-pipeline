@@ -17,15 +17,23 @@ server:
 
 common:
   instance_addr: 127.0.0.1
-  path_prefix: /tmp/loki
+  path_prefix: {{ monitoring_loki_storage_path }}
   storage:
     filesystem:
-      chunks_directory: /tmp/loki/chunks
-      rules_directory: /tmp/loki/rules
+      chunks_directory: {{ monitoring_loki_storage_path }}/chunks
+      rules_directory: {{ monitoring_loki_storage_path }}/rules
   replication_factor: 1
   ring:
     kvstore:
       store: inmemory
+
+compactor:
+  working_directory: {{ monitoring_loki_storage_path }}/compactor
+  compaction_interval: {{ monitoring_loki_compaction_interval }}
+  retention_enabled: true
+  retention_delete_delay: {{ monitoring_loki_retention_delete_delay }}
+  retention_delete_worker_count: {{ monitoring_loki_retention_delete_worker_count }}
+  delete_request_store: filesystem
 
 query_range:
   results_cache:
@@ -39,6 +47,7 @@ limits_config:
   # Keep pattern detection but disable that callback in the enforced stage.
   metric_aggregation_enabled: {{ 'true' if monitoring_loki_stage == 'optional' else 'false' }}
   enable_multi_variant_queries: true
+  retention_period: {{ monitoring_loki_retention_period }}
 
 schema_config:
   configs:

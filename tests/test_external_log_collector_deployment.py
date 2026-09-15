@@ -142,3 +142,40 @@ def test_monitoring_role_bounds_loki_and_journald_output():
     assert "notify: restart journald" in tasks
     assert "name: systemd-journald" in handlers
     assert "listen: restart journald" in handlers
+
+
+def test_monitoring_role_uses_durable_loki_storage_with_retention():
+    defaults = yaml.safe_load(
+        (
+            ROOT
+            / "ops/monitoring/roles/monitoring/defaults/main.yml"
+        ).read_text()
+    )
+    loki = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/templates/loki-config.yml.j2"
+    ).read_text()
+    tasks = (
+        ROOT
+        / "ops/monitoring/roles/monitoring/tasks/main.yml"
+    ).read_text()
+
+    assert defaults["monitoring_loki_storage_path"] == "/var/lib/loki"
+    assert defaults["monitoring_loki_retention_period"] == "336h"
+    assert defaults["monitoring_loki_retention_delete_worker_count"] == 10
+    assert "path_prefix: {{ monitoring_loki_storage_path }}" in loki
+    assert (
+        "working_directory: {{ monitoring_loki_storage_path }}/compactor" in loki
+    )
+    assert "retention_enabled: true" in loki
+    assert "retention_period: {{ monitoring_loki_retention_period }}" in loki
+    assert "delete_request_store: filesystem" in loki
+    assert "/tmp/loki" not in loki
+    assert "- name: Create durable Loki storage" in tasks
+    assert 'path: "{{ monitoring_loki_storage_path }}"' in tasks
+    assert "owner: loki\n    group: loki" in tasks
+    assert "- name: Remove retired temporary Loki storage" in tasks
+    assert "path: /tmp/loki\n    state: absent" in tasks
+    assert tasks.index("- name: Wait for authenticated Loki readiness") < tasks.index(
+        "- name: Remove retired temporary Loki storage"
+    )

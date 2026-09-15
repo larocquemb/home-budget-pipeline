@@ -31,6 +31,11 @@ monitoring_fluent_bit_key_source: >-
 
 monitoring_loki_config_path: /etc/loki/config.yml
 monitoring_loki_log_level: info
+monitoring_loki_storage_path: /var/lib/loki
+monitoring_loki_retention_period: 336h
+monitoring_loki_compaction_interval: 10m
+monitoring_loki_retention_delete_delay: 2h
+monitoring_loki_retention_delete_worker_count: 10
 monitoring_tls_dir: /etc/monitoring/tls
 monitoring_alloy_dir: /etc/alloy
 monitoring_system_root_ca_path: /usr/local/share/ca-certificates/brown-rook-root-ca.crt

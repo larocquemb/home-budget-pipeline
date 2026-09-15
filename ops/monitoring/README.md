@@ -24,6 +24,12 @@ memory, storage, and write endurance. Applying the role does not delete
 existing journal history; any `journalctl --vacuum-*` cleanup is a separate,
 explicit operator action.
 
+Loki stores indexed logs under `/var/lib/loki` and its Compactor enforces a
+14-day retention period. The first apply is an intentional clean cutover: after
+Loki restarts and passes authenticated readiness against the durable store, the
+role deletes the retired `/tmp/loki` store and its old log history. No migration
+or manual cleanup is required.
+
 ## External inputs
 
 Copy the data-free environment example and set absolute paths:
@@ -85,6 +91,8 @@ printing log contents:
 ssh paul@192.168.2.202 \
   'systemd-analyze cat-config systemd/journald.conf | grep -E "^(SystemMaxUse|SystemKeepFree|SystemMaxFileSize|RuntimeMaxUse|MaxRetentionSec|RateLimitIntervalSec|RateLimitBurst)="'
 ssh paul@192.168.2.202 'journalctl --disk-usage'
+ssh paul@192.168.2.202 \
+  'sudo du -sh /var/lib/loki; sudo test ! -e /tmp/loki'
 ```
 
 Reducing an already oversized journal is intentionally not automated because
