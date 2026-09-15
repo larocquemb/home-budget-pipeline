@@ -14,13 +14,13 @@ ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 MONITORING_GITOPS ?= ./scripts/monitoring_gitops.sh
 LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
 
-.PHONY: help docs-build docs-serve test test-observability test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
+.PHONY: help docs-build docs-serve test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
 	@echo "Local logs:  dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down"
 	@echo "Documentation: docs-build docs-serve"
-	@echo "Tests:       test test-observability test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
+	@echo "Tests:       test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
 	@echo "Operations:  status otlp-demo enrich-products"
 	@echo "Deployment:  deploy-k3s k3s-config-check k3s-config-apply (uses .env.k3s)"
 	@echo "PostgreSQL:  postgres-config-check postgres-config-apply postgres-password-rotate"
@@ -73,22 +73,23 @@ deploy-k3s: postgres-config-check k3s-config-check
 	argocd app sync "$(ARGO_APP)" --server "$(ARGO_SERVER)" --grpc-web
 
 dev-up:
-	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
-	docker-compose --env-file .env.dev -f compose.dev.yaml up -d
+	@$(PYTHON) scripts/local_development_up.py .env.dev
 
 dev-down:
-	docker-compose --env-file .env.dev -f compose.dev.yaml down
+	@./scripts/docker_compose.sh --env-file .env.dev -f compose.dev.yaml down
 
 dev-web:
 	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
-	@set -a; . ./.env.dev; set +a; \
+	@test -f .local-postgres/runtime.env || (echo "Run make dev-up to initialize local PostgreSQL 18"; exit 2)
+	@set -a; . ./.env.dev; . ./.local-postgres/runtime.env; set +a; \
 		test -n "$$LEDGER_PROXY_SECRET" || { echo "Set LEDGER_PROXY_SECRET in .env.dev"; exit 2; }; \
 		LEDGER_BASE_PATH=/ledger HOST=0.0.0.0 PORT=8080 \
 		.venv/bin/uvicorn home_budget_pipeline.web.app:app \
 			--host 0.0.0.0 --port 8080 --reload
 
 dev-db-reset:
-	@./scripts/rebuild_local_database.sh .env.dev
+	@test -f .local-postgres/runtime.env || (echo "Run make dev-up to initialize local PostgreSQL 18"; exit 2)
+	@./scripts/rebuild_local_database.sh .local-postgres/runtime.env
 
 dev-cert-install:
 	@mkdir -p .dev-certs
@@ -128,6 +129,9 @@ test:
 
 test-observability:
 	@bash ./scripts/validate_observability_configs.sh
+
+test-postgres-oidc-image:
+	@bash ./scripts/test_postgres_oidc_image.sh
 
 test-db-setup:
 	@echo "Resetting PostgreSQL test database..."

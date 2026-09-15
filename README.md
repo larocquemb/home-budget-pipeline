@@ -800,19 +800,26 @@ from budget categories.
 
 ## 15. Local Entra-authenticated Ledger
 
-The development proxy runs Caddy and OAuth2 Proxy in Docker while Ledger runs
-directly from the working tree. This avoids the image build and K3S deployment
-loop for application changes.
+The development stack runs PostgreSQL 18, Caddy, and OAuth2 Proxy in Colima
+while Ledger runs directly from the working tree. PostgreSQL uses the same
+OAuth-capable image and schema bootstrap sequence as K3s. This avoids the K3s
+deployment loop for application changes without sacrificing database parity.
 
-1. Copy `.env.dev.example` to `.env.dev`, fill in the Entra and database values,
+1. Copy `.env.dev.example` to `.env.dev`, fill in the Entra values and local
+   database identity,
    and generate the separate `LEDGER_PROXY_SECRET` described in that file.
 2. Add `127.0.0.1 ledger-dev.brownrook.net` to `/etc/hosts`.
 3. Add `https://ledger-dev.brownrook.net/ledger/oauth2/callback` as a redirect URI in Entra.
-4. Start PostgreSQL forwarding with `kubectl -n home-budget port-forward svc/postgres 5433:5432`.
-5. Run `make dev-up`, then `make dev-cert-install` once to trust Caddy's local CA.
-6. Run `make dev-web` and open `https://ledger-dev.brownrook.net/ledger`.
+4. Stop any old `kubectl port-forward` using local port 5433.
+5. Run `make dev-up`; it creates the dedicated `home-budget-postgres18-data`
+   volume, generates a local-only password under `.local-postgres/`, and
+   initializes the database on first start.
+6. Run `make dev-cert-install` once to trust Caddy's local CA.
+7. Run `make dev-web` and open `https://ledger-dev.brownrook.net/ledger`.
 
-Stop the proxy with `make dev-down`. The local Ledger process is intentionally
+Stop the containers with `make dev-down`. The PostgreSQL 18 volume is retained
+and is deliberately distinct from every PostgreSQL 17 or K3s volume. The local
+Ledger process is intentionally
 outside Docker so source changes only require restarting that process.
 Caddy publishes ports 80 and 443 only on `127.0.0.1`. Ledger listens on port
 8080 for the Docker proxy, and verifies `LEDGER_PROXY_SECRET` before trusting
@@ -822,3 +829,5 @@ for the local and K3s boundaries.
 To discard and rebuild the local `home_budget` schemas with the exact SQL
 bootstrap sequence used by K3S, run `make dev-db-reset`. The command refuses
 to run unless PostgreSQL reports the local `home_budget` database.
+Run `make test-postgres-oidc-image` to rebuild and start the PostgreSQL 18 image
+independently and verify that the hardened OAuth validator loads.
