@@ -241,6 +241,7 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     assert "sending_queue {\n    enabled = false" in alloy
     assert 'endpoint = "127.0.0.1:14317"' in alloy
     assert 'url = "http://127.0.0.1:9090/api/v1/write"' in alloy
+    assert "url = \"http://127.0.0.1:9090/api/v1/write\"\n\n    queue_config {" in alloy
     assert "insecure_skip_verify" not in alloy
 
     assert "http_listen_address: {{ monitoring_tempo_http_address }}" in tempo

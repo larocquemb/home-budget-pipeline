@@ -180,12 +180,12 @@ otelcol.exporter.prometheus "home_budget" {
 prometheus.remote_write "local_prometheus" {
   endpoint {
     url = "http://127.0.0.1:9090/api/v1/write"
-  }
 
-  queue_config {
-    capacity             = 2048
-    max_samples_per_send = 512
-    max_shards           = 2
+    queue_config {
+      capacity             = 2048
+      max_samples_per_send = 512
+      max_shards           = 2
+    }
   }
 }
 
