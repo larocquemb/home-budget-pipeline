@@ -680,6 +680,7 @@
     content: |
       [Service]
       Environment="GF_SERVER_HTTP_ADDR=0.0.0.0"
+      Environment="GF_SERVER_ENFORCE_DOMAIN=false"
       Environment="GF_AUTH_ANONYMOUS_ENABLED=false"
       Environment="GF_PUBLIC_DASHBOARDS_ENABLED=true"
     dest: "{{ monitoring_grafana_systemd_override_dir }}/home-budget-public-demo.conf"
@@ -2029,7 +2030,7 @@
       {{ monitoring_grafana_public_demo_external_url }}/public-dashboards/{{ monitoring_grafana_public_demo_share_verified.json.accessToken }}
     method: GET
     validate_certs: true
-    follow_redirects: all
+    follow_redirects: none
     return_content: false
     status_code: 200
   become: false
