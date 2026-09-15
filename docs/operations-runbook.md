@@ -220,6 +220,13 @@ do not change the StatefulSet pod template or restart PostgreSQL. A fresh
 PostgreSQL volume still receives the latest bootstrap files. The versioned
 PreSync migration image remains tied to the application deployment.
 
+K3s runs the pinned `home-budget-postgres:18.6-oidc-*` image and mounts the
+explicit `postgres18-data` claim at `/var/lib/postgresql`, matching PostgreSQL
+18's versioned data layout. The legacy `postgres-data-postgres-0` claim is not
+mounted; it is retained only as a PostgreSQL 17 rollback copy. This cutover does
+not migrate database contents from PostgreSQL 17. A fresh PostgreSQL 18 claim is
+initialized from the staged bootstrap SQL.
+
 ## Argo CD deployment
 
 Argo CD owns application deployments and workload restarts. `make deploy-k3s`

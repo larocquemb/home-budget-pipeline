@@ -206,15 +206,19 @@ For a normal recovery, recreate only the pod:
 kubectl -n home-budget delete pod postgres-0
 ```
 
-The StatefulSet reuses the existing PostgreSQL PVC.
+The StatefulSet reuses the active `postgres18-data` PVC. The legacy
+`postgres-data-postgres-0` claim is not mounted by PostgreSQL 18.
 
 ## 6. Destructive PostgreSQL reset
 
 Only use this procedure when the database is intentionally being discarded and
 rebuilt from source receipts. It destroys the PostgreSQL database.
 
-The PostgreSQL StatefulSet uses the `postgres-data-postgres-0` local-path PVC.
-This is separate from `home-budget-data`, which contains receipt files on SMB.
+The PostgreSQL 18 StatefulSet uses the `postgres18-data` local-path PVC. The
+legacy `postgres-data-postgres-0` claim contains the pre-cutover PostgreSQL 17
+database and must not be deleted as part of a PostgreSQL 18 reset. Both database
+claims are separate from `home-budget-data`, which contains receipt files on
+SMB.
 
 Stop PostgreSQL:
 
@@ -228,14 +232,15 @@ Verify the PVC name:
 kubectl -n home-budget get pvc
 ```
 
-Delete only the PostgreSQL PVC:
+Delete only the PostgreSQL 18 PVC:
 
 ```bash
-kubectl -n home-budget delete pvc postgres-data-postgres-0
+kubectl -n home-budget delete pvc postgres18-data
 ```
 
 If its dynamically provisioned local-path PV remains in `Released`, delete that
-PV as well. Do not delete `home-budget-data` as part of a database reset.
+PV as well. Do not delete `postgres-data-postgres-0` or `home-budget-data` as
+part of a PostgreSQL 18 reset.
 
 Recreate PostgreSQL:
 
