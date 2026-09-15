@@ -635,7 +635,8 @@ def test_public_live_demo_is_sanitized_and_revocable():
         "08396daff846416b806d71cd965a6c6e"
     )
     assert inventory["monitoring_grafana_public_proxy_ipv4_sources"] == [
-        "192.168.2.230/32"
+        "192.168.2.210/32",
+        "192.168.2.230/32",
     ]
 
     dashboard_spec = _v2_dashboard_spec(dashboard)

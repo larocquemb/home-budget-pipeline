@@ -32,7 +32,7 @@ The public site links directly to `telemetry.idc.brownrook.com`. Public DNS
 aliases that name to the dynamic `idc.brownrook.com` site anchor. The existing
 edge proxy retains the Host header and forwards HTTPS traffic to Traefik. The
 `deploy/public-telemetry` resources then route only these Grafana paths to the
-monitoring LXC at `192.168.2.210:3000`:
+monitoring LXC at `192.168.2.202:3000`:
 
 - `/public-dashboards`;
 - `/bootdata`;
@@ -44,8 +44,17 @@ and ordinary Grafana API paths therefore receive a Traefik 404 on the public
 hostname. Grafana global anonymous access also remains disabled as a second
 boundary. The ingress applies response-security headers and a per-client rate
 limit sized for the five-session acceptance test. On the monitoring LXC,
-nftables accepts direct Grafana port 3000 connections only from loopback and
-the K3s node; other LAN clients cannot bypass Traefik's path restrictions.
+nftables accepts direct Grafana port 3000 connections only from loopback, the
+edge proxy, and the K3s node; other LAN clients cannot bypass the approved
+proxy paths.
+
+The three hosts have distinct roles:
+
+| Address | Role |
+| --- | --- |
+| `192.168.2.202` | Monitoring LXC and Grafana backend |
+| `192.168.2.210` | Edge Nginx proxy and private Grafana DNS target |
+| `192.168.2.230` | K3s node and Traefik public-path proxy |
 
 ## Published data boundary
 

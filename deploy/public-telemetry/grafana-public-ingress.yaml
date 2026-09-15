@@ -24,7 +24,7 @@ ports:
     port: 3000
 endpoints:
   - addresses:
-      - 192.168.2.210
+      - 192.168.2.202
     conditions:
       ready: true
 ---
