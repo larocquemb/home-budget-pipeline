@@ -87,7 +87,7 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make test-rabbit` | Rebuild the disposable test schemas, then run the five RabbitMQ integration tests with their names displayed. |
 | `make test-all` | Run unit tests followed by PostgreSQL and available RabbitMQ integration tests; the integration summary displays their names. |
 | `make test-receipts` | Copy real receipt inputs into an isolated workspace and process them against the disposable test database. |
-| `make dev-up` | Start the local supporting services from `compose.dev.yaml`. |
+| `make dev-up` | Stage the K3s database bootstrap and start local PostgreSQL 18, Caddy, and OAuth2 Proxy in Colima. |
 | `make dev-down` | Stop the local supporting services. |
 | `make dev-web` | Run the Ledger web application against the local services. |
 | `make dev-cert-install` | Install the local Caddy certificate authority in the macOS system keychain. |

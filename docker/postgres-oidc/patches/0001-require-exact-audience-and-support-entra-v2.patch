@@ -1,0 +1,96 @@
+diff --git a/src/jwk.cpp b/src/jwk.cpp
+index ea5b7c2..c208ef8 100644
+--- a/src/jwk.cpp
++++ b/src/jwk.cpp
+@@ -25,6 +25,12 @@ std::string extract_azure_tenant_id(const std::string& issuer) {
+ std::string convert_azure_issuer_to_jwt_format(const std::string& config_issuer) {
+   std::string tenant_id = extract_azure_tenant_id(config_issuer);
+ 
++  // Entra v2 access tokens preserve the v2.0 issuer advertised by discovery.
++  // Only translate legacy v1 issuers to the sts.windows.net form.
++  if (config_issuer.ends_with("/v2.0")) {
++    return config_issuer;
++  }
++
+   // Convert login.microsoftonline.com format to sts.windows.net format
+   if (config_issuer.find("login.microsoftonline.com") != std::string::npos) {
+     return "https://sts.windows.net/" + tenant_id + "/";
+@@ -122,7 +128,7 @@ std::string get_required_parameter(picojson::object const& key_object, std::stri
+ }
+ 
+ jwt_verifier configure_verifier_with_jwks(const std::string& issuer, const picojson::value& jwksInfo,
+-                                          const std::string& required_kid) {
++                                          const std::string& required_kid, const std::string& required_audience) {
+   std::string expected_issuer = issuer;
+ 
+   if (issuer_is_azure(issuer)) {
+@@ -134,7 +140,9 @@ jwt_verifier configure_verifier_with_jwks(const std::string& issuer, const picoj
+     expected_issuer = convert_azure_issuer_to_jwt_format(issuer);
+   }
+ 
+-  auto verifier = jwt::verify().with_issuer(expected_issuer);
++  auto verifier = jwt::verify();
++  verifier.with_issuer(expected_issuer);
++  verifier.with_audience(required_audience);
+ 
+   if (!jwksInfo.is<picojson::object>()) {
+     throw std::runtime_error("JWKS info is not a JSON object");
+diff --git a/src/jwk.hpp b/src/jwk.hpp
+index 640bcc8..616c5be 100644
+--- a/src/jwk.hpp
++++ b/src/jwk.hpp
+@@ -15,7 +15,7 @@ using scopes_t = std::set<std::string>;
+ using jwt_verifier = jwt::verifier<jwt::default_clock, jwt::traits::kazuho_picojson>;
+ 
+ jwt_verifier configure_verifier_with_jwks(const std::string& issuer, const picojson::value& jwksInfo,
+-                                          const std::string& required_kid);
++                                          const std::string& required_kid, const std::string& required_audience);
+ 
+ std::string issuer_info_url(std::string const& issuer_url);
+ 
+diff --git a/src/pg_oidc_validator.cpp b/src/pg_oidc_validator.cpp
+index 7ef0a16..4930023 100644
+--- a/src/pg_oidc_validator.cpp
++++ b/src/pg_oidc_validator.cpp
+@@ -40,6 +40,9 @@ static char* authn_field = nullptr;
+ // When non-empty, the validator uses this URL (instead of pg_hba's `issuer=`)
+ static char* discovery_url_override = nullptr;
+ 
++// Exact OAuth resource audience required in every accepted access token.
++static char* audience = nullptr;
++
+ extern "C" void _PG_init() {
+   DefineCustomStringVariable("pg_oidc_validator.authn_field",
+                              gettext_noop("OAuth field used for matching PostgreSQL users"), nullptr, &authn_field,
+@@ -49,6 +52,10 @@ extern "C" void _PG_init() {
+       gettext_noop("If set, fetch OIDC discovery and JWKS from this URL instead of the pg_hba issuer."),
+       gettext_noop("The JWT `iss` claim is still validated against the pg_hba issuer."), &discovery_url_override, "",
+       PGC_SIGHUP, 0, nullptr, nullptr, nullptr);
++  DefineCustomStringVariable(
++      "pg_oidc_validator.audience", gettext_noop("Exact OAuth audience required in access tokens."),
++      gettext_noop("The validator denies every token when this setting is empty."), &audience, "", PGC_SIGHUP, 0,
++      nullptr, nullptr, nullptr);
+ }
+ 
+ bool validate_token(const ValidatorModuleState* state, const char* token, const char* role,
+@@ -57,6 +64,11 @@ bool validate_token(const ValidatorModuleState* state, const char* token, const
+   res->authn_id = nullptr;
+   res->authorized = false;
+ 
++  if (audience == nullptr || *audience == '\0') {
++    elog(WARNING, "OAuth validation denied: pg_oidc_validator.audience is not configured");
++    return false;
++  }
++
+   try {
+     pg::pg_try([&]() { pg::http_cache::get_instance().attach(); });
+   } catch (const pg::postgres_exception& ex) {
+@@ -95,7 +107,7 @@ bool validate_token(const ValidatorModuleState* state, const char* token, const
+   const auto jwks_info = http.get_json(jwks_uri);
+   const auto decoded_token = jwt::decode(token);
+   const std::string jwt_kid = decoded_token.get_header_claim("kid").as_string();
+-  const auto verifier = configure_verifier_with_jwks(issuer, jwks_info, jwt_kid);
++  const auto verifier = configure_verifier_with_jwks(issuer, jwks_info, jwt_kid, audience);
+   verifier.verify(decoded_token);
+   auto received_scopes = parse_jwt_scopes(decoded_token.get_payload_json()["scp"]);
+   const auto json_scope = parse_jwt_scopes(decoded_token.get_payload_json()["scope"]);

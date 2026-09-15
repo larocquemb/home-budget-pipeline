@@ -1,4 +1,41 @@
 services:
+  postgres:
+    build:
+      context: .
+      dockerfile: docker/postgres-oidc/Dockerfile
+    image: home-budget-postgres:18.6-oidc-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      # local_development_up.py derives these values from the generated,
+      # ignored runtime environment. Passing the names without values keeps
+      # credentials out of this Compose file and fails PostgreSQL startup if
+      # somebody bypasses `make dev-up` without exporting them.
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+    command:
+      - -c
+      - oauth_validator_libraries=pg_oidc_validator
+      - -c
+      - pg_oidc_validator.authn_field=oid
+      - -c
+      - pg_oidc_validator.audience=${POSTGRES_OAUTH_AUDIENCE:-local-development}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    volumes:
+      # PostgreSQL 18 changed the image's declared data layout. Mount the
+      # parent directory and use a new volume that cannot contain PG17 data.
+      - home-budget-postgres18-data:/var/lib/postgresql
+      - ./.local-postgres/init:/docker-entrypoint-initdb.d:ro
+
   caddy:
     image: caddy:2.10.2
     restart: unless-stopped
@@ -42,5 +79,7 @@ services:
       OAUTH2_PROXY_PASS_USER_HEADERS: "true"
 
 volumes:
+  home-budget-postgres18-data:
+    name: home-budget-postgres18-data
   ledger-caddy-data:
   ledger-caddy-config:

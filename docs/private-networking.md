@@ -42,9 +42,12 @@ or AMQP ports on the public edge.
 
 ## Mac development
 
-`compose.dev.yaml` publishes Caddy on `127.0.0.1:80` and `127.0.0.1:443`.
+`compose.dev.yaml` publishes Caddy on `127.0.0.1:80` and `127.0.0.1:443`, and
+PostgreSQL 18 on `127.0.0.1:5433`.
 `compose.queue-test.yaml` similarly publishes its disposable RabbitMQ ports only
-on loopback. Other LAN devices cannot connect to those published ports.
+on loopback. Other LAN devices cannot connect to those published ports. The
+local PostgreSQL volume is named `home-budget-postgres18-data`; it is not a
+copy of, or tunnel to, the K3s database.
 
 Ledger itself listens on port 8080 so the OAuth2 Proxy container can reach the
 host through `host.docker.internal`. A separate `LEDGER_PROXY_SECRET` protects
