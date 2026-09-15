@@ -173,7 +173,7 @@ def test_monitoring_role_uses_durable_loki_storage_with_retention():
     assert "/tmp/loki" not in loki
     assert "- name: Create durable Loki storage" in tasks
     assert 'path: "{{ monitoring_loki_storage_path }}"' in tasks
-    assert "owner: loki\n    group: loki" in tasks
+    assert "owner: loki\n    group: root" in tasks
     assert "- name: Remove retired temporary Loki storage" in tasks
     assert "path: /tmp/loki\n    state: absent" in tasks
     assert tasks.index("- name: Wait for authenticated Loki readiness") < tasks.index(

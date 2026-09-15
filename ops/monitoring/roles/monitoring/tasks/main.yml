@@ -461,7 +461,7 @@
     path: "{{ monitoring_loki_storage_path }}"
     state: directory
     owner: loki
-    group: loki
+    group: root
     mode: "0750"
 
 - name: Install validated Loki configuration
