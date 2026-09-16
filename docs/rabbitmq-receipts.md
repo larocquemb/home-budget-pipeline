@@ -248,27 +248,32 @@ from urllib.parse import quote
 
 user = os.environ["RABBITMQ_DEFAULT_USER"]
 password = os.environ["RABBITMQ_DEFAULT_PASS"]
+namespace = os.environ["KUBE_NAMESPACE"]
 if not user or not password:
     raise SystemExit("Set RABBITMQ_DEFAULT_USER and RABBITMQ_DEFAULT_PASS in .env.k3s")
 print(json.dumps({
     "apiVersion": "v1",
     "kind": "Secret",
-    "metadata": {"name": "rabbitmq-secret", "namespace": os.environ["KUBE_NAMESPACE"]},
+    "metadata": {"name": "rabbitmq-secret", "namespace": namespace},
     "type": "Opaque",
     "stringData": {
         "RABBITMQ_DEFAULT_USER": user,
         "RABBITMQ_DEFAULT_PASS": password,
-        "RABBITMQ_URL": f"amqp://{quote(user, safe='')}:{quote(password, safe='')}@rabbitmq:5672/receipts",
+        "RABBITMQ_URL": f"amqp://{quote(user, safe='')}:{quote(password, safe='')}@rabbitmq.{namespace}.svc.cluster.local:5672/receipts",
     },
 }))
 PY
 ```
 
 This derives the connection URL from the same credentials and URL-encodes them.
-Only the RabbitMQ settings are sent to Kubernetes. The namespace must already
-exist. `k8s/rabbitmq-secret.example.yaml` remains available as a manual template.
-The broker initializes the `receipts` vhost. Secrets are deliberately excluded
-from the overlay. Review the rendered configuration:
+Use the namespace-qualified service name: application pods run in `home-budget`,
+but the KEDA operator resolves the same URL from the `keda` namespace. The
+private `rabbitmq.brownrook.net` hostname exposes only the HTTPS management UI,
+not the AMQP port. Only the RabbitMQ settings are sent to Kubernetes. The
+namespace must already exist. `k8s/rabbitmq-secret.example.yaml` remains
+available as a manual template. The broker initializes the `receipts` vhost.
+Secrets are deliberately excluded from the overlay. Review the rendered
+configuration:
 
 ```sh
 kubectl kustomize deploy/rabbitmq
@@ -281,13 +286,15 @@ resume. Set the Argo CD application's source path to `deploy/rabbitmq` and run
 `make deploy-k3s`. No cluster resources are changed by rendering the overlay.
 
 The overlay includes a KEDA `ScaledObject` using the
-[RabbitMQ queue scaler](https://keda.sh/docs/2.18/scalers/rabbitmq-queue/) and
-[HPA behavior controls](https://keda.sh/docs/2.18/reference/scaledobject-spec/).
-The cluster must have the KEDA operator and `scaledobjects.keda.sh` CRD before
-the Argo CD sync. Verify that prerequisite and the resulting HPA with:
+[RabbitMQ queue scaler](https://keda.sh/docs/2.20/scalers/rabbitmq-queue/) and
+[HPA behavior controls](https://keda.sh/docs/2.20/reference/scaledobject-spec/).
+The `brownrook-root` GitOps application installs the pinned KEDA 2.20.2 chart
+from `brownrook-infra/kubernetes/gitops/apps/keda-app.yaml`. Verify the operator,
+CRD, and resulting HPA with:
 
 ```sh
 kubectl --context brownrook-k3s1 get crd scaledobjects.keda.sh
+kubectl --context brownrook-k3s1 -n keda get deployment
 kubectl --context brownrook-k3s1 -n home-budget get scaledobject, hpa
 ```
 

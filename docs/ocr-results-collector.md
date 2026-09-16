@@ -78,11 +78,11 @@ not acknowledge the original delivery.
 ## Deployment and security
 
 Apply the `deploy/rabbitmq` overlay after running `ledger database setup` so the
-KAN-89 migration is present. With the KEDA CRDs installed, the overlay deploys
-one to two CPU-heavy `receipt-worker` replicas without PostgreSQL credentials
-and two lightweight `ocr-results-collector` replicas with the PostgreSQL
-secret. RabbitMQ credentials remain required by the publisher, worker, and
-collector.
+KAN-89 migration is present. The `brownrook-root` GitOps application supplies
+the KEDA operator and CRDs. The overlay deploys one to two CPU-heavy
+`receipt-worker` replicas without PostgreSQL credentials and two lightweight
+`ocr-results-collector` replicas with the PostgreSQL secret. RabbitMQ
+credentials remain required by the publisher, worker, and collector.
 
 The telemetry overlay gives both deployments an mTLS OTLP client. The collector
 continues durable writes when telemetry export is unavailable because exporters
