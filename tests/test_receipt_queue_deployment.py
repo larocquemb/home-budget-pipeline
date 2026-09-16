@@ -98,6 +98,14 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     assert ("ConfigMap", "receipt-runtime-config") not in resources
 
 
+def test_rabbitmq_secret_example_uses_cross_namespace_service_dns():
+    secret = yaml.safe_load((ROOT / "k8s/rabbitmq-secret.example.yaml").read_text())
+    assert secret["stringData"]["RABBITMQ_URL"] == (
+        "amqp://receipts:REPLACE_ME@"
+        "rabbitmq.home-budget.svc.cluster.local:5672/receipts"
+    )
+
+
 def test_default_deployment_remains_local_and_ci_exercises_live_broker():
     base = (ROOT / "k8s/kustomization.yaml").read_text()
     assert "rabbitmq" not in base
