@@ -1,0 +1,23 @@
+# Optional S3-compatible storage for full OCR cache artifacts.
+# Copy the ConfigMap and Secret into the home-budget namespace. If omitted,
+# workers retain artifacts on the existing durable receipt PVC.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ocr-artifact-storage
+  namespace: home-budget
+data:
+  OCR_ARTIFACT_S3_BUCKET: REPLACE_WITH_BUCKET
+  OCR_ARTIFACT_S3_PREFIX: ocr-results
+  OCR_ARTIFACT_S3_ENDPOINT: https://REPLACE_WITH_S3_ENDPOINT
+  OCR_ARTIFACT_S3_REGION: ca-central-1
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ocr-artifact-storage
+  namespace: home-budget
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: REPLACE_WITH_ACCESS_KEY
+  AWS_SECRET_ACCESS_KEY: REPLACE_WITH_SECRET_KEY

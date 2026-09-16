@@ -17,20 +17,35 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     publisher = resources["CronJob", "receipt-processor"]["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
     worker_spec = resources["Deployment", "receipt-worker"]["spec"]["template"]["spec"]
     worker = worker_spec["containers"][0]
+    collector_spec = resources["Deployment", "ocr-results-collector"]["spec"]
+    collector = collector_spec["template"]["spec"]["containers"][0]
     assert resources["Deployment", "receipt-worker"]["spec"]["strategy"] == {
         "type": "RollingUpdate", "rollingUpdate": {"maxSurge": 0, "maxUnavailable": 1},
     }
     assert publisher["command"] == worker["command"] == ["ledger"]
     assert publisher["args"] == ["receipts", "publish", "/data/receipts/raw/scanned/inbox"]
     assert worker["args"] == ["receipts", "consume", "/data/receipts/raw/scanned/inbox"]
-    assert publisher["image"] == worker["image"]
+    assert publisher["image"] == worker["image"] == collector["image"]
     assert "latest" not in worker["image"]
     assert worker_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "home-budget-data"
     assert worker_spec["terminationGracePeriodSeconds"] == 900
-    for container in (publisher, worker):
+    for container in (publisher, worker, collector):
         env = {entry["name"]: entry for entry in container["env"]}
         assert env["RABBITMQ_URL"]["valueFrom"]["secretKeyRef"]["name"] == "rabbitmq-secret"
-        assert env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] == "postgres-secret"
+    publisher_env = {entry["name"]: entry for entry in publisher["env"]}
+    worker_env = {entry["name"]: entry for entry in worker["env"]}
+    collector_env = {entry["name"]: entry for entry in collector["env"]}
+    assert publisher_env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] == "postgres-secret"
+    assert "DATABASE_URL" not in worker_env
+    assert worker["envFrom"] == [
+        {"configMapRef": {"name": "ocr-artifact-storage", "optional": True}},
+        {"secretRef": {"name": "ocr-artifact-storage", "optional": True}},
+    ]
+    assert collector_env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] == "postgres-secret"
+    assert collector["args"] == ["receipts", "collect"]
+    assert collector_spec["replicas"] == 2
+    for container in (publisher, worker):
+        env = {entry["name"]: entry for entry in container["env"]}
         assert env["HOME_BUDGET_OCR_CACHE"]["valueFrom"]["configMapKeyRef"] == {
             "name": "receipt-runtime-config", "key": "HOME_BUDGET_OCR_CACHE",
         }

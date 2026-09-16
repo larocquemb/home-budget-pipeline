@@ -4,6 +4,7 @@ resources:
   - ../../k8s
   - rabbitmq.yaml
   - receipt-worker.yaml
+  - ocr-results-collector.yaml
 patches:
   - path: publisher-patch.yaml
 # Follow the immutable application image selected by the existing CI pipeline.
@@ -18,3 +19,8 @@ replacements:
           name: receipt-worker
         fieldPaths:
           - spec.template.spec.containers.[name=receipt-worker].image
+      - select:
+          kind: Deployment
+          name: ocr-results-collector
+        fieldPaths:
+          - spec.template.spec.containers.[name=ocr-results-collector].image

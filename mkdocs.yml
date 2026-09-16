@@ -55,6 +55,7 @@ nav:
       - Backlog processing: receipt-processing.md
       - RabbitMQ design: rabbitmq-receipt-design.md
       - RabbitMQ operations: rabbitmq-receipts.md
+      - OCR Results Collector: ocr-results-collector.md
   - Operations:
       - Build and deployment: operations-runbook.md
       - Kubernetes log design: log-forwarding-design.md

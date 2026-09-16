@@ -18,7 +18,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from .. import telemetry
 from . import backlog_ingest as backlog
 from .message import MAX_ATTEMPTS, InvalidReceiptMessage, ReceiptMessage
-from .parallel_ingest import has_ocr_cache
+from .parallel_ingest import _cache_path, has_ocr_cache
 
 LOG = logging.getLogger(__name__)
 
@@ -86,12 +86,22 @@ def connect_broker(url: str):
     return pika.BlockingConnection(parameters)
 
 
-def publish_confirmed(channel, exchange: str, body: bytes, *, message_id: str | None = None, error: str | None = None, message_type: str = "receipt.process.v1") -> None:
+def publish_confirmed(
+    channel,
+    exchange: str,
+    body: bytes,
+    *,
+    message_id: str | None = None,
+    error: str | None = None,
+    error_message: str | None = None,
+    message_type: str = "receipt.process.v1",
+    routing_key: str = "receipt",
+) -> None:
     import pika
 
     channel.basic_publish(
         exchange=exchange,
-        routing_key="receipt",
+        routing_key=routing_key,
         body=body,
         mandatory=True,
         properties=pika.BasicProperties(
@@ -101,7 +111,14 @@ def publish_confirmed(channel, exchange: str, body: bytes, *, message_id: str | 
             message_id=message_id,
             timestamp=int(time.time()),
             type=message_type,
-            headers={"error_type": error} if error else {},
+            headers={
+                key: value
+                for key, value in {
+                    "error_type": error,
+                    "error_message": error_message,
+                }.items()
+                if value
+            },
         ),
     )
 
@@ -327,6 +344,68 @@ def process_message(message: ReceiptMessage, args) -> str:
         conn.close()
 
 
+def produce_result_messages(message: ReceiptMessage, args):
+    """Run OCR without database access and return durable result events."""
+    from .ocr_results import result_messages_for_receipt
+
+    root = Path(args.receipt_root).expanduser().resolve()
+    path = message.resolve_source(root)
+    cache_dir = Path(args.ocr_cache).expanduser().resolve()
+    if not path.is_file():
+        raise InvalidReceiptMessage("receipt source does not exist")
+    if backlog.scan.sha256_file(path) != message.source_sha256:
+        raise InvalidReceiptMessage("source contents changed since publication")
+    with telemetry.receipt_process(
+        message.source_reference, message.source_sha256,
+    ) as receipt_trace:
+        parsed = backlog.parse_scans_parallel(
+            [path],
+            root,
+            1,
+            cache_dir,
+            message.version in (2, 3),
+            return_cache_hits=True,
+            progress=lambda text: LOG.info("receipt=%s %s", message.message_id, text),
+        )
+        if isinstance(parsed, tuple):
+            receipts, cache_hits = parsed
+        else:
+            receipts, cache_hits = parsed, 0
+        telemetry.record_cache_lookup(cache_hits > 0)
+        if len(receipts) != 1:
+            raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
+        receipt = receipts[0]
+        run_uuid = (getattr(receipt, "ocr_run", None) or {}).get("run_uuid")
+        telemetry.adopt_run_uuid(run_uuid)
+        if (
+            receipt.source_sha256 != message.source_sha256
+            or backlog.scan.sha256_file(path) != message.source_sha256
+        ):
+            raise InvalidReceiptMessage("source contents changed during processing")
+        mode = "cache_only" if message.version == 3 else (
+            "reprocess" if message.version == 2 else "normal"
+        )
+        cache_path = _cache_path(
+            cache_dir, message.source_reference, message.source_sha256,
+        )
+        events = result_messages_for_receipt(
+            receipt,
+            cache_path=cache_path,
+            cache_root=cache_dir,
+            persistence_mode=mode,
+            request_id=message.request_id,
+        )
+        # This worker completed computation and confirmed result publication;
+        # only the collector may report durable success after its DB commit.
+        status = "cache_results_published" if mode == "cache_only" else (
+            "review_results_published"
+            if receipt.extraction_status != "complete"
+            else "results_published"
+        )
+        receipt_trace.finish(status)
+        return status, events
+
+
 def handle_delivery(channel, delivery_tag: int, body: bytes, process, topology: Topology) -> None:
     """ACK only after DB success or a confirmed retry/DLQ publication.
 
@@ -351,6 +430,57 @@ def handle_delivery(channel, delivery_tag: int, body: bytes, process, topology: 
         LOG.warning("receipt=%s routed=%s error=%s", message.message_id if message else "invalid", target, type(exc).__name__)
     else:
         LOG.info("receipt=%s status=%s", message.message_id, status)
+    channel.basic_ack(delivery_tag=delivery_tag)
+
+
+def handle_worker_delivery(
+    connection,
+    channel,
+    executor,
+    delivery_tag: int,
+    body: bytes,
+    process,
+    topology: Topology,
+    result_topology,
+) -> None:
+    """Publish every result with confirms before acknowledging OCR work."""
+    from .ocr_collector import publish_result
+
+    message = None
+    try:
+        message = ReceiptMessage.from_bytes(body)
+        status, events = process_with_heartbeats(
+            connection, executor, process, message,
+        )
+        for event in events:
+            publish_result(channel, result_topology.work, event)
+    except Exception as exc:
+        permanent = isinstance(exc, InvalidReceiptMessage)
+        retry = message is not None and not permanent and message.attempt < MAX_ATTEMPTS
+        target = topology.retry if retry else topology.dead
+        next_body = replace(message, attempt=message.attempt + 1).to_bytes() if retry else body
+        publish_confirmed(
+            channel,
+            target,
+            next_body,
+            message_id=message.message_id if message else None,
+            error=type(exc).__name__,
+            error_message=str(exc)[:512],
+            message_type=message.message_type if message else "receipt.process.v1",
+        )
+        LOG.warning(
+            "receipt=%s routed=%s error=%s",
+            message.message_id if message else "invalid",
+            target,
+            type(exc).__name__,
+        )
+    else:
+        LOG.info(
+            "receipt=%s status=%s result_events=%s",
+            message.message_id,
+            status,
+            len(events),
+        )
     channel.basic_ack(delivery_tag=delivery_tag)
 
 
@@ -382,6 +512,40 @@ def consume(connection, channel, process, topology: Topology, stop: Event) -> No
                 channel.cancel()
 
 
+def consume_worker(
+    connection,
+    channel,
+    process,
+    topology: Topology,
+    result_topology,
+    stop: Event,
+) -> None:
+    """Consume source work while keeping AMQP operations on their owner thread."""
+    channel.basic_qos(prefetch_count=1)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            for method, properties, body in channel.consume(
+                topology.work, auto_ack=False, inactivity_timeout=1,
+            ):
+                if stop.is_set():
+                    break
+                if method is None:
+                    continue
+                handle_worker_delivery(
+                    connection,
+                    channel,
+                    executor,
+                    method.delivery_tag,
+                    body,
+                    process,
+                    topology,
+                    result_topology,
+                )
+        finally:
+            if channel.is_open:
+                channel.cancel()
+
+
 def add_arguments(parser, mode: str) -> None:
     parser.set_defaults(queue_mode=mode, handler=run)
     parser.add_argument("receipt_root", nargs="?", default=backlog._default_path(
@@ -405,7 +569,7 @@ def run(args) -> int:
     backlog.validate_schema(args.ingest_schema)
     backlog.validate_schema(args.budget_schema)
     missing = []
-    if not args.db_dsn:
+    if args.queue_mode == "publish" and not args.db_dsn:
         missing.append("database DSN (--db-dsn, DATABASE_URL, or HOME_BUDGET_PG_DSN)")
     if not args.rabbitmq_url:
         missing.append("RabbitMQ URL (--rabbitmq-url or RABBITMQ_URL)")
@@ -438,10 +602,21 @@ def run(args) -> int:
                     print(f"[{index}/{len(messages)}] Queued {message.source_reference}", file=sys.stderr, flush=True)
             _print_json(summary)
         else:
+            from .ocr_collector import ResultTopology, declare_result_topology
+
+            result_topology = ResultTopology()
+            declare_result_topology(channel, result_topology)
             stop = Event()
             previous = {sig: signal.signal(sig, lambda signum, frame: stop.set()) for sig in (signal.SIGINT, signal.SIGTERM)}
             try:
-                consume(connection, channel, lambda message: process_message(message, args), topology, stop)
+                consume_worker(
+                    connection,
+                    channel,
+                    lambda message: produce_result_messages(message, args),
+                    topology,
+                    result_topology,
+                    stop,
+                )
             finally:
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)

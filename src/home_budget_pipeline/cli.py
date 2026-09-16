@@ -69,6 +69,16 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
         queued = receipt_commands.add_parser(mode, help=f"{mode.title()} receipt work through RabbitMQ.")
         add_arguments(queued, mode)
 
+    collect = receipt_commands.add_parser(
+        "collect", help="Validate and durably persist OCR result events from RabbitMQ.",
+    )
+    collect.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))
+    collect.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))
+    collect.add_argument("--ingest-schema", default="ingest")
+    collect.add_argument("--budget-schema", default="budget")
+    from .receipts.ocr_collector import run_collector
+    collect.set_defaults(handler=run_collector)
+
     retry = receipt_commands.add_parser(
         "retry", help="Reset a failed or interrupted receipt for the next publish or process command.",
     )

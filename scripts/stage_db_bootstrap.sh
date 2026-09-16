@@ -17,3 +17,4 @@ cp "$repo_root/sql/receipt_processing.sql" "$destination/007-receipt-processing.
 cp "$repo_root/sql/merchant_aliases.sql" "$destination/008-merchant-aliases.sql"
 cp "$repo_root/sql/product_enrichment.sql" "$destination/009-product-enrichment.sql"
 cp "$repo_root/sql/receipt_reprocess_requests.sql" "$destination/010-receipt-reprocess-requests.sql"
+cp "$repo_root/sql/ocr_result_collector.sql" "$destination/011-ocr-result-collector.sql"

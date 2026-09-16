@@ -33,7 +33,7 @@
       }
     ],
     "cursorSync": "Crosshair",
-    "description": "KAN-88 receipt, queue, and telemetry-pipeline overview with Prometheus exemplars linked to Tempo.",
+    "description": "KAN-88/KAN-89 receipt, OCR collector, queue, and telemetry-pipeline overview with Prometheus exemplars linked to Tempo.",
     "editable": false,
     "elements": {
       "panel-1": {
@@ -358,6 +358,107 @@
                 },
                 "overrides": []
               }
+            }
+          }
+        }
+      },
+      "panel-11": {
+        "kind": "Panel",
+        "spec": {
+          "id": 11,
+          "title": "OCR result collector throughput, latency, retries, failures and DLQ",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {"name": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "sum by (event_type, outcome) (rate(brownrook_ocr_collector_events_total[$__rate_interval])) or vector(0)",
+                        "legendFormat": "collector event outcome"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {"name": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "histogram_quantile(0.95, sum by (event_type, le) (rate(brownrook_ocr_collector_persistence_duration_seconds_bucket[$__rate_interval]))) or vector(0)",
+                        "legendFormat": "p95 persistence seconds"
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {"name": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "sum by (destination) (rate(brownrook_ocr_collector_routed_total[$__rate_interval])) or vector(0)",
+                        "legendFormat": "retry/dead routing"
+                      }
+                    },
+                    "refId": "C",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {"name": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "rabbitmq_detailed_queue_messages{vhost=\"receipts\",queue=\"ocr.results.v1.dead\"} or vector(0)",
+                        "legendFormat": "dead-letter depth"
+                      }
+                    },
+                    "refId": "D",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true},
+                "tooltip": {"mode": "multi", "sort": "desc"}
+              },
+              "fieldConfig": {"defaults": {"min": 0}, "overrides": []}
             }
           }
         }
@@ -1150,6 +1251,19 @@
                 "name": "panel-10"
               }
             }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 28,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-11"
+              }
+            }
           }
         ]
       }
@@ -1174,6 +1288,7 @@
       "home-budget",
       "opentelemetry",
       "KAN-88",
+      "KAN-89",
       "{{ monitoring_grafana_receipt_dashboard_revision }}"
     ],
     "timeSettings": {

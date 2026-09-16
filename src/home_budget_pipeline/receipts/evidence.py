@@ -237,34 +237,46 @@ def persist_ocr_run(conn, evidence_id: int, receipt, schema: str = "budget") -> 
             ),
         )
         for metric in passes:
-            cur.execute(
-                f"""
-                INSERT INTO {schema}.receipt_ocr_passes (
-                    run_uuid, pass_id, page_number, engine, engine_type, dpi, psm,
-                    variant, seconds, status, error_type, line_count, character_count,
-                    structural_score, summary_score, valid_timestamp, selected_base,
-                    consensus_line_coverage, consensus_coverage_ratio, extracted_text,
-                    quality, engine_options, usage, provenance
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (run_uuid, pass_id) DO NOTHING
-                """,
-                (
-                    run_uuid, metric.get("pass_id"), metric.get("page_number"),
-                    metric.get("engine"), metric.get("engine_type"), metric.get("dpi"),
-                    metric.get("psm"), metric.get("variant"), metric.get("seconds"),
-                    metric.get("status"), metric.get("error_type"), metric.get("line_count"),
-                    metric.get("character_count"), metric.get("structural_score"),
-                    metric.get("summary_score"), metric.get("valid_timestamp"),
-                    bool(metric.get("selected_base")), metric.get("consensus_line_coverage"),
-                    metric.get("consensus_coverage_ratio"), metric.get("text"),
-                    json.dumps(metric.get("quality") or {}),
-                    json.dumps(metric.get("engine_options") or {}),
-                    json.dumps(metric.get("usage") or {}),
-                    json.dumps(metric.get("provenance") or {}),
-                ),
-            )
+            persist_ocr_pass(conn, run_uuid, metric, schema)
     return len(passes)
+
+
+def persist_ocr_pass(conn, run_uuid: str, metric: dict, schema: str = "budget") -> bool:
+    """Idempotently persist one pass-completed result.
+
+    This is shared by legacy atomic receipt persistence and the asynchronous
+    result collector.  ``(run_uuid, pass_id)`` is the delivery-idempotence key.
+    """
+    schema = _safe_schema(schema)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.receipt_ocr_passes (
+                run_uuid, pass_id, page_number, engine, engine_type, dpi, psm,
+                variant, seconds, status, error_type, line_count, character_count,
+                structural_score, summary_score, valid_timestamp, selected_base,
+                consensus_line_coverage, consensus_coverage_ratio, extracted_text,
+                quality, engine_options, usage, provenance
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (run_uuid, pass_id) DO NOTHING
+            """,
+            (
+                run_uuid, metric.get("pass_id"), metric.get("page_number"),
+                metric.get("engine"), metric.get("engine_type"), metric.get("dpi"),
+                metric.get("psm"), metric.get("variant"), metric.get("seconds"),
+                metric.get("status"), metric.get("error_type"), metric.get("line_count"),
+                metric.get("character_count"), metric.get("structural_score"),
+                metric.get("summary_score"), metric.get("valid_timestamp"),
+                bool(metric.get("selected_base")), metric.get("consensus_line_coverage"),
+                metric.get("consensus_coverage_ratio"), metric.get("text"),
+                json.dumps(metric.get("quality") or {}),
+                json.dumps(metric.get("engine_options") or {}),
+                json.dumps(metric.get("usage") or {}),
+                json.dumps(metric.get("provenance") or {}),
+            ),
+        )
+        return cur.rowcount == 1
 
 
 def record_ocr_feedback(

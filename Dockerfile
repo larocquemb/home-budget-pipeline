@@ -27,7 +27,7 @@ COPY pyproject.toml README.md ./
 RUN mkdir -p src/home_budget_pipeline \
     && touch src/home_budget_pipeline/__init__.py \
     && python -m pip install --no-cache-dir 'setuptools>=77' \
-    && python -m pip install --no-cache-dir --no-build-isolation '.[db,paddle]'
+    && python -m pip install --no-cache-dir --no-build-isolation '.[db,paddle,object-storage]'
 
 COPY src ./src
 COPY sql ./sql
