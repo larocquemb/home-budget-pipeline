@@ -35,6 +35,8 @@ def test_postgres_bootstrap_stages_constraints_and_receipt_processing_sql():
     assert "006-schema-constraints.sql" in bootstrap
     assert "receipt_processing.sql" in bootstrap
     assert "007-receipt-processing.sql" in bootstrap
+    assert "ocr_result_collector.sql" in bootstrap
+    assert "011-ocr-result-collector.sql" in bootstrap
 
 
 def test_postgres_bootstrap_uses_stable_image_separate_from_app_rollouts():

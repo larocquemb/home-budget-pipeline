@@ -29,6 +29,19 @@ groups:
             (rate(brownrook_receipt_ocr_pass_duration_seconds_bucket[5m]))
           )
 
+      - record: job_event_outcome:brownrook_ocr_collector_events:rate5m
+        expr: >-
+          sum by (environment, service, event_type, outcome)
+          (rate(brownrook_ocr_collector_events_total[5m]))
+
+      - record: job_event:brownrook_ocr_collector_persistence_duration_seconds:p95_5m
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (environment, service, event_type, le)
+            (rate(brownrook_ocr_collector_persistence_duration_seconds_bucket[5m]))
+          )
+
       - record: job:brownrook_receipt_cache_hit:ratio5m
         expr: >-
           sum by (environment, service, worker_host)
@@ -263,3 +276,19 @@ groups:
           summary: Home Budget has dead-lettered receipt jobs
           description: >-
             At least one receipt job is waiting in the dead-letter queue.
+
+      - alert: HomeBudgetOcrResultDeadLettered
+        expr: >-
+          rabbitmq_detailed_queue_messages{
+            vhost="receipts",
+            queue="ocr.results.v1.dead"
+          } > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: home-budget-ocr-results-collector
+        annotations:
+          summary: Home Budget has dead-lettered OCR result events
+          description: >-
+            At least one OCR result event could not be validated or persisted
+            within its bounded retry budget.

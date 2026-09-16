@@ -43,6 +43,9 @@ _cache_lookup_counter: Any = None
 _ocr_pass_counter: Any = None
 _ocr_pass_duration: Any = None
 _ocr_selected_counter: Any = None
+_collector_counter: Any = None
+_collector_duration: Any = None
+_collector_routing_counter: Any = None
 
 
 class _NoopSpan:
@@ -118,6 +121,7 @@ def configure_telemetry() -> bool:
     global _receipt_counter, _receipt_duration, _cache_lookup_counter
     global _ocr_pass_counter, _ocr_pass_duration
     global _ocr_selected_counter
+    global _collector_counter, _collector_duration, _collector_routing_counter
 
     if not _truthy("HOME_BUDGET_TELEMETRY_ENABLED"):
         return False
@@ -189,6 +193,21 @@ def configure_telemetry() -> bool:
                 unit="{pass}",
                 description="OCR passes selected as page consensus bases.",
             )
+            _collector_counter = meter.create_counter(
+                "brownrook.ocr.collector.events",
+                unit="{event}",
+                description="OCR result collector events by bounded type and outcome.",
+            )
+            _collector_duration = meter.create_histogram(
+                "brownrook.ocr.collector.persistence.duration",
+                unit="s",
+                description="OCR result collector durable persistence latency.",
+            )
+            _collector_routing_counter = meter.create_counter(
+                "brownrook.ocr.collector.routed",
+                unit="{event}",
+                description="OCR result events routed to retry or dead-letter queues.",
+            )
             _configured_pid = pid
             _configuration_failed_pid = None
             return True
@@ -229,8 +248,23 @@ def _context_attributes() -> dict[str, Any]:
     return _clean_attributes({"run_uuid": _run_uuid.get(), "pass_id": _pass_id.get()})
 
 
+def extract_trace_context(carrier: Mapping[str, str]) -> Any:
+    """Best-effort extraction of a remote W3C trace context."""
+    try:
+        from opentelemetry import propagate
+
+        return propagate.extract(dict(carrier))
+    except Exception:
+        return None
+
+
 @contextmanager
-def span(name: str, attributes: Mapping[str, Any] | None = None) -> Iterator[Any]:
+def span(
+    name: str,
+    attributes: Mapping[str, Any] | None = None,
+    *,
+    context: Any = None,
+) -> Iterator[Any]:
     """Create a current child span, or a harmless placeholder when disabled."""
     combined = _context_attributes()
     combined.update(_clean_attributes(attributes))
@@ -238,13 +272,36 @@ def span(name: str, attributes: Mapping[str, Any] | None = None) -> Iterator[Any
         yield _NoopSpan()
         return
     try:
-        with _tracer.start_as_current_span(name, attributes=combined) as current:
+        with _tracer.start_as_current_span(
+            name, attributes=combined, context=context,
+        ) as current:
             yield current
     except Exception:
         # Exceptions from the instrumented operation must retain their original
         # semantics. SDK/exporter failures are asynchronous and do not arrive
         # here; this merely preserves the normal context-manager behavior.
         raise
+
+
+def record_collector_result(event_type: str, outcome: str, seconds: float) -> None:
+    """Record collector throughput/latency without receipt identifiers."""
+    attributes = {"event_type": event_type, "outcome": outcome}
+    try:
+        if _collector_counter is not None:
+            _collector_counter.add(1, attributes)
+        if _collector_duration is not None:
+            _collector_duration.record(float(seconds), attributes)
+    except Exception:
+        LOG.warning("OCR collector metric recording failed", exc_info=True)
+
+
+def record_collector_routing(destination: str) -> None:
+    """Record bounded retry/dead-letter routing."""
+    try:
+        if _collector_routing_counter is not None:
+            _collector_routing_counter.add(1, {"destination": destination})
+    except Exception:
+        LOG.warning("OCR collector routing metric recording failed", exc_info=True)
 
 
 @dataclass

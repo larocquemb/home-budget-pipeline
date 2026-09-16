@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from home_budget_pipeline import telemetry
-from home_budget_pipeline.receipts import evidence, ingest
+from home_budget_pipeline.receipts import evidence, ingest, ocr_results
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -159,6 +159,29 @@ def test_late_failure_emits_independent_error_trace(in_memory_telemetry):
     assert failure.context.trace_id != root.context.trace_id
     assert failure.status.status_code.name == "ERROR"
     assert failure.attributes["run_uuid"] == root.attributes["run_uuid"]
+
+
+def test_worker_trace_context_parents_collector_persistence_span(in_memory_telemetry):
+    exporter = in_memory_telemetry
+    with telemetry.receipt_process(
+        "receipt.pdf",
+        "9" * 64,
+        run_uuid="99999999-9999-4999-8999-999999999999",
+    ) as receipt_trace:
+        carrier = ocr_results.current_trace_context()
+        receipt_trace.finish("results_published")
+
+    with telemetry.span(
+        "ocr.results.persist",
+        context=telemetry.extract_trace_context(carrier),
+    ):
+        pass
+
+    spans = exporter.get_finished_spans()
+    worker = next(item for item in spans if item.name == "receipt.process")
+    collector = next(item for item in spans if item.name == "ocr.results.persist")
+    assert collector.context.trace_id == worker.context.trace_id
+    assert collector.parent.span_id == worker.context.span_id
 
 
 def test_trace_pass_identity_matches_persisted_ocr_row(in_memory_telemetry):

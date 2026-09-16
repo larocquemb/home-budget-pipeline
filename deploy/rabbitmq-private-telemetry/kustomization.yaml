@@ -6,3 +6,4 @@ resources:
   - ../public-telemetry
 patches:
   - path: receipt-worker-telemetry-patch.yaml
+  - path: ocr-results-collector-telemetry-patch.yaml

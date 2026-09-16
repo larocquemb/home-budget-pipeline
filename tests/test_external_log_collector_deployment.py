@@ -369,6 +369,8 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "job:brownrook_receipt_processing_duration_seconds:p95_5m",
         "job_engine_status:brownrook_receipt_ocr_pass_completed:rate5m",
         "job_engine:brownrook_receipt_ocr_pass_duration_seconds:p95_5m",
+        "job_event_outcome:brownrook_ocr_collector_events:rate5m",
+        "job_event:brownrook_ocr_collector_persistence_duration_seconds:p95_5m",
         "job:brownrook_receipt_cache_hit:ratio5m",
         "queue:rabbitmq_receipt_messages_ready",
         "queue:rabbitmq_receipt_oldest_message_age_seconds",
@@ -383,6 +385,7 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "HomeBudgetReceiptQueueGrowing",
         "HomeBudgetReceiptJobStale",
         "HomeBudgetReceiptDeadLettered",
+        "HomeBudgetOcrResultDeadLettered",
         "HomeBudgetTelemetryDeliveryFailure",
     }
     rules_text = (
@@ -447,7 +450,7 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "home-budget"
     )
     assert dashboard_spec["title"] == "Home Budget Receipt Telemetry"
-    assert len(dashboard_panels) == 10
+    assert len(dashboard_panels) == 11
     assert {variable["spec"]["name"] for variable in dashboard_spec["variables"]} == {
         "environment", "service", "worker_host", "status", "queue",
     }
@@ -473,6 +476,10 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     assert "prometheus_remote_storage_samples_dropped_total" in overview_expressions
     assert "prometheus_remote_storage_samples_retries_total" in overview_expressions
     assert "prometheus_remote_storage_enqueue_retries_total" in overview_expressions
+    assert "brownrook_ocr_collector_events_total" in overview_expressions
+    assert "brownrook_ocr_collector_persistence_duration_seconds_bucket" in overview_expressions
+    assert "brownrook_ocr_collector_routed_total" in overview_expressions
+    assert "ocr.results.v1.dead" in overview_expressions
     assert 'component_id=\\"prometheus.remote_write.local_prometheus\\"' in dashboard_text
     assert "grafana-dashboard-validation" in validator
     assert "grafana-receipt-telemetry-dashboard.json.j2" in validator
@@ -487,9 +494,10 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         for target in _v2_panel_targets(panel)
         if "rabbitmq_" in target["expr"]
     ]
-    assert len(rabbitmq_expressions) == 7
-    assert all('queue=~`${queue:regex}`' in expr for expr in rabbitmq_expressions)
-    assert all('queue=~"${queue:regex}"' not in expr for expr in rabbitmq_expressions)
+    assert len(rabbitmq_expressions) == 8
+    variable_queue_expressions = [expr for expr in rabbitmq_expressions if "ocr.results.v1.dead" not in expr]
+    assert all('queue=~`${queue:regex}`' in expr for expr in variable_queue_expressions)
+    assert all('queue=~"${queue:regex}"' not in expr for expr in variable_queue_expressions)
     idle_zero_panels = {
         "Receipts processed in selected period",
         "Receipt failure ratio",
