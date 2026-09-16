@@ -299,6 +299,8 @@ kubectl -n home-budget delete jobs -l app=receipt-processor
 If the RabbitMQ overlay is active, also stop its receipt consumer:
 
 ```bash
+kubectl -n home-budget annotate scaledobject receipt-worker \
+  autoscaling.keda.sh/paused="true" --overwrite
 kubectl -n home-budget scale deployment receipt-worker --replicas=0
 ```
 
@@ -318,8 +320,14 @@ kubectl -n home-budget patch cronjob receipt-processor \
   --type merge -p '{"spec":{"suspend":false}}'
 ```
 
-If the RabbitMQ overlay is active, restore `receipt-worker` to its previous
-replica count after the PVC is bound.
+If the RabbitMQ overlay is active, restore the minimum worker and resume KEDA
+after the PVC is bound:
+
+```bash
+kubectl -n home-budget scale deployment receipt-worker --replicas=1
+kubectl -n home-budget annotate scaledobject receipt-worker \
+  autoscaling.keda.sh/paused-
+```
 
 Avoid manually removing PV/PVC protection finalizers while workloads still
 reference the volume.

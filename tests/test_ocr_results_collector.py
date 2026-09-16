@@ -2,6 +2,7 @@ import json
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -235,6 +236,91 @@ def test_ocr_worker_produces_results_without_opening_database(tmp_path, monkeypa
     assert status == "results_published"
     assert len(events) == 2
     assert events[0].payload["persistence_mode"] == "normal"
+
+
+def test_duplicate_cache_request_reuses_locked_valid_artifact(tmp_path, monkeypatch, caplog):
+    source = tmp_path / "receipt.pdf"
+    source.write_bytes(b"receipt")
+    receipt = result_receipt(source)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cache_path = cache / "receipt.pdf.json"
+    refreshes = []
+
+    def parse(*args, **kwargs):
+        refresh = args[4]
+        refreshes.append(refresh)
+        if refresh:
+            cache_path.write_text('{"cache":"rebuilt"}', encoding="utf-8")
+        return [receipt], 0 if refresh else 1
+
+    monkeypatch.setattr(queue.backlog, "parse_scans_parallel", parse)
+    caplog.set_level("INFO", logger=queue.__name__)
+    args = SimpleNamespace(receipt_root=str(tmp_path), ocr_cache=str(cache))
+    message = ReceiptMessage(
+        receipt.source_sha256,
+        source.name,
+        version=3,
+        request_id="740023b1-a078-4914-b074-81bd7129bb75",
+        batch_id="840023b1-a078-4914-b074-81bd7129bb75",
+        batch_index=1,
+        batch_total=1,
+    )
+
+    first, _ = queue.produce_result_messages(message, args)
+    duplicate, _ = queue.produce_result_messages(message, args)
+    cache_path.unlink()
+    repaired, _ = queue.produce_result_messages(message, args)
+
+    assert (first, duplicate, repaired) == (
+        "cache_results_published",
+        "cache_results_republished",
+        "cache_results_published",
+    )
+    assert refreshes == [True, False, True]
+    marker = queue._cache_rebuild_marker(cache, message)
+    assert marker.is_file()
+    assert "worker_host=" in caplog.text
+    assert "worker_pid=" in caplog.text
+    assert "source_reference=receipt.pdf" in caplog.text
+    assert f"request_id={message.request_id}" in caplog.text
+    assert "status=cache_ready" in caplog.text
+    assert "completed=1/1" in caplog.text
+
+
+def test_cache_rebuild_lock_serializes_the_same_source(tmp_path):
+    first_acquired = Event()
+    release_first = Event()
+    second_attempting = Event()
+    second_acquired = Event()
+    source_sha256 = "a" * 64
+
+    def hold_first_lock():
+        with queue.cache_rebuild_lock(tmp_path, source_sha256):
+            first_acquired.set()
+            release_first.wait(timeout=2)
+
+    def wait_for_same_lock():
+        second_attempting.set()
+        with queue.cache_rebuild_lock(tmp_path, source_sha256):
+            second_acquired.set()
+
+    first = Thread(target=hold_first_lock)
+    second = Thread(target=wait_for_same_lock)
+    first.start()
+    try:
+        assert first_acquired.wait(timeout=1)
+        second.start()
+        assert second_attempting.wait(timeout=1)
+        assert not second_acquired.wait(timeout=0.1)
+    finally:
+        release_first.set()
+        first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert second_acquired.is_set()
 
 
 def test_cli_exposes_dedicated_collector(monkeypatch):

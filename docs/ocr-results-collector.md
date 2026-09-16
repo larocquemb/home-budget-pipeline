@@ -78,10 +78,11 @@ not acknowledge the original delivery.
 ## Deployment and security
 
 Apply the `deploy/rabbitmq` overlay after running `ledger database setup` so the
-KAN-89 migration is present. The overlay deploys one CPU-heavy `receipt-worker`
-without PostgreSQL credentials and two lightweight `ocr-results-collector`
-replicas with the PostgreSQL secret. RabbitMQ credentials remain required by
-the publisher, worker, and collector.
+KAN-89 migration is present. With the KEDA CRDs installed, the overlay deploys
+one to two CPU-heavy `receipt-worker` replicas without PostgreSQL credentials
+and two lightweight `ocr-results-collector` replicas with the PostgreSQL
+secret. RabbitMQ credentials remain required by the publisher, worker, and
+collector.
 
 The telemetry overlay gives both deployments an mTLS OTLP client. The collector
 continues durable writes when telemetry export is unavailable because exporters
@@ -125,8 +126,9 @@ the collector and worker. Unacknowledged result events replay automatically.
 Replay a DLQ event only after correcting its diagnostic cause; the same message
 ID is safe to replay.
 
-To roll back application code, scale `receipt-worker` to zero, let the collector
-drain `ocr.results.v1.work`, then deploy the earlier application version. The
-schema migration is additive and can remain in place. Do not remove collector
-tables while a result queue contains messages. A forward rollback restores the
-new worker and collector against the retained queues and schema.
+To roll back application code, pause the `receipt-worker` KEDA `ScaledObject`,
+scale the worker to zero, let the collector drain `ocr.results.v1.work`, then
+deploy the earlier application version. The schema migration is additive and
+can remain in place. Do not remove collector tables while a result queue
+contains messages. A forward rollback restores the new worker and collector
+against the retained queues and schema, then resumes the scaler.

@@ -29,6 +29,16 @@ from .queue_ingest import connect_broker, process_with_heartbeats, publish_confi
 LOG = logging.getLogger(__name__)
 
 
+def _result_log_context(message: OcrResultMessage | None) -> str:
+    if message is None:
+        return "source_reference=unknown request_id=None worker_host=unknown worker_pid=0"
+    request_id = message.payload.get("request_id") if message.event_type == RUN_COMPLETED else None
+    return (
+        f"source_reference={message.source_reference} request_id={request_id} "
+        f"worker_host={message.worker['host']} worker_pid={message.worker['pid']}"
+    )
+
+
 @dataclass(frozen=True)
 class ResultTopology:
     prefix: str = "ocr.results.v1"
@@ -330,13 +340,21 @@ def handle_result_delivery(
         )
         telemetry.record_collector_routing("retry" if retry else "dead")
         LOG.warning(
-            "ocr_result=%s routed=%s error=%s",
+            "ocr_result=%s %s status=%s routed=%s error=%s attempt=%s",
             message.message_id if message else "invalid",
+            _result_log_context(message),
+            "retried" if retry else "failed",
             target,
             type(exc).__name__,
+            message.attempt if message else 0,
         )
     else:
-        LOG.info("ocr_result=%s status=%s", message.message_id, status)
+        LOG.info(
+            "ocr_result=%s %s status=%s",
+            message.message_id,
+            _result_log_context(message),
+            status,
+        )
     channel.basic_ack(delivery_tag=delivery_tag)
 
 

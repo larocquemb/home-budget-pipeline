@@ -22,6 +22,9 @@ class ReceiptMessage:
     attempt: int = 1
     version: int = 1
     request_id: str | None = None
+    batch_id: str | None = None
+    batch_index: int | None = None
+    batch_total: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.version) is not int or self.version not in (1, 2, 3):
@@ -34,6 +37,21 @@ class ReceiptMessage:
                     raise ValueError("noncanonical UUID")
             except ValueError as exc:
                 raise InvalidReceiptMessage("reprocess request_id must be a canonical UUID") from exc
+        batch_values = (self.batch_id, self.batch_index, self.batch_total)
+        if self.version != 3 and any(value is not None for value in batch_values):
+            raise InvalidReceiptMessage("batch progress is only valid for cache rebuild work")
+        if self.version == 3 and any(value is not None for value in batch_values):
+            if any(value is None for value in batch_values):
+                raise InvalidReceiptMessage("cache rebuild batch progress must be complete")
+            try:
+                if not isinstance(self.batch_id, str) or str(UUID(self.batch_id)) != self.batch_id:
+                    raise ValueError("noncanonical UUID")
+            except ValueError as exc:
+                raise InvalidReceiptMessage("batch_id must be a canonical UUID") from exc
+            if type(self.batch_index) is not int or type(self.batch_total) is not int:
+                raise InvalidReceiptMessage("batch progress must use integers")
+            if not 1 <= self.batch_index <= self.batch_total:
+                raise InvalidReceiptMessage("batch progress is outside its declared total")
         if not isinstance(self.source_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", self.source_sha256):
             raise InvalidReceiptMessage("source_sha256 must be a lowercase SHA-256 digest")
         ref = self.source_reference
@@ -61,6 +79,9 @@ class ReceiptMessage:
         payload = asdict(self)
         if self.version == 1:
             del payload["request_id"]
+        if self.batch_id is None:
+            for field in ("batch_id", "batch_index", "batch_total"):
+                del payload[field]
         return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     @classmethod
@@ -72,6 +93,8 @@ class ReceiptMessage:
             fields = {"version", "source_sha256", "source_reference", "attempt"}
             if isinstance(value, dict) and value.get("version") in (2, 3):
                 fields.add("request_id")
+            if isinstance(value, dict) and value.get("version") == 3 and "batch_id" in value:
+                fields.update({"batch_id", "batch_index", "batch_total"})
             if not isinstance(value, dict) or set(value) != fields:
                 raise ValueError("unexpected message fields")
             return cls(**value)

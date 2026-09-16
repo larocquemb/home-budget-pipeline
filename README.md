@@ -99,14 +99,16 @@ ledger receipts process --verbose
 ```
 
 The command discovers eligible receipts and publishes persistent, confirmed
-messages. A running `ledger receipts consume` worker performs OCR and persists
-results. All receipt processing and cache rebuild commands use RabbitMQ; broker
-failure never starts local OCR. Completion is reported in worker logs.
+messages. A running `ledger receipts consume` worker performs OCR and publishes
+versioned result events; `ledger receipts collect` persists them. All receipt
+processing and cache rebuild commands use RabbitMQ; broker failure never starts
+local OCR. Completion is reported in worker and collector logs.
 
 To queue cache rebuilds while preserving saved extraction results:
 
 ```bash
 ledger ocr-cache rebuild --verbose
+ledger ocr-cache rebuild --missing-only --verbose
 ```
 
 Run the publisher and consumer separately:
@@ -124,9 +126,10 @@ replaces saved extraction results and line items. Completed receipts with
 current or legacy caches remain skipped. Deleting cache files does not require
 a database reset. See [who checks for missing caches](docs/receipt-processing.md#who-checks-for-missing-ocr-cache-files).
 
-Publishing is confirmed and consumers acknowledge manually after a durable
-database result or confirmed retry/dead-letter transfer. PostgreSQL advisory
-locks serialize duplicate deliveries for the same SHA-256. Use
+Publishing is confirmed. Workers acknowledge after confirmed result publication
+or retry/dead-letter routing; collectors acknowledge after PostgreSQL commit.
+Shared-volume locks serialize cache access for the same SHA-256, and durable
+database keys make result replay idempotent. Use
 `ledger receipts retry SOURCE_REFERENCE` after fixing a failed or interrupted
 receipt whose attempt budget is exhausted. Enabling RabbitMQ does not require a
 database schema rebuild.
@@ -725,8 +728,9 @@ K3s
 ```
 
 The optional `deploy/rabbitmq` overlay changes the receipt CronJob to a
-publisher and adds RabbitMQ plus a receipt-worker Deployment. Private-LAN
-variants are documented in the [network access guide](docs/private-networking.md).
+publisher and adds RabbitMQ, a KEDA-scaled receipt-worker Deployment, and the
+OCR Results Collector. Private-LAN variants are documented in the
+[network access guide](docs/private-networking.md).
 
 A fresh PostgreSQL 18 persistent volume automatically receives the staged
 schema, category catalogue, analytics views, and supporting processing tables

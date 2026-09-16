@@ -13,6 +13,15 @@ from home_budget_pipeline.receipts.message import InvalidReceiptMessage, Receipt
 
 MESSAGE = ReceiptMessage("a" * 64, "2026/receipt.pdf")
 REPROCESS = replace(MESSAGE, version=2, request_id="740023b1-a078-4914-b074-81bd7129bb75")
+CACHE_REBUILD = ReceiptMessage(
+    "a" * 64,
+    "2026/receipt.pdf",
+    version=3,
+    request_id="740023b1-a078-4914-b074-81bd7129bb75",
+    batch_id="840023b1-a078-4914-b074-81bd7129bb75",
+    batch_index=2,
+    batch_total=4,
+)
 
 
 @pytest.fixture
@@ -38,6 +47,26 @@ def test_reprocess_contract_preserves_v1_and_has_request_identity():
     assert ReceiptMessage.from_bytes(REPROCESS.to_bytes()) == REPROCESS
     assert replace(REPROCESS, attempt=2).message_id == REPROCESS.message_id
     assert replace(REPROCESS, request_id="840023b1-a078-4914-b074-81bd7129bb75").message_id != REPROCESS.message_id
+
+
+def test_cache_rebuild_contract_carries_validated_batch_progress():
+    assert ReceiptMessage.from_bytes(CACHE_REBUILD.to_bytes()) == CACHE_REBUILD
+    assert json.loads(CACHE_REBUILD.to_bytes())["batch_total"] == 4
+    assert replace(CACHE_REBUILD, attempt=2).message_id == CACHE_REBUILD.message_id
+
+
+@pytest.mark.parametrize("changes", [
+    {"batch_id": None},
+    {"batch_index": None},
+    {"batch_total": None},
+    {"batch_id": "not-a-uuid"},
+    {"batch_index": 0},
+    {"batch_index": 5},
+    {"batch_total": True},
+])
+def test_cache_rebuild_contract_rejects_invalid_batch_progress(changes):
+    with pytest.raises(InvalidReceiptMessage):
+        replace(CACHE_REBUILD, **changes)
 
 
 @pytest.mark.parametrize("request_id", [None, "", "not-a-uuid", True, 12, "740023B1-A078-4914-B074-81BD7129BB75"])

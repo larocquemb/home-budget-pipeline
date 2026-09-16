@@ -60,6 +60,8 @@ flowchart TB
     publisher[Receipt publisher]
     rabbit[(RabbitMQ work, retry, and dead queues)]
     worker[Receipt worker]
+    results[(OCR result, retry, and dead queues)]
+    collector[OCR Results Collector]
     db[(PostgreSQL system of record)]
     enrich[Product enrichment job]
     providers[Brave Search and optional OpenAI]
@@ -68,10 +70,12 @@ flowchart TB
     mode -->|base| cron
     cron -->|discover, OCR, normalize, persist| db
     mode -->|queued| publisher
-    publisher -->|confirmed v1 message| rabbit
+    publisher -->|confirmed versioned message| rabbit
     rabbit -->|manual-ACK delivery| worker
     worker -->|read and verify source| files
-    worker -->|OCR, normalize, reconcile, persist| db
+    worker -->|OCR, normalize, reconcile| results
+    results -->|manual-ACK delivery| collector
+    collector -->|validate and persist| db
     worker -->|transient retry or terminal failure| rabbit
     db -->|pending items| enrich
     enrich -->|accepted product evidence| db
@@ -80,8 +84,9 @@ flowchart TB
 
 The base Kubernetes deployment runs receipt discovery and processing in one
 CronJob every 15 minutes. The optional `deploy/rabbitmq` overlay changes that
-CronJob into a publisher and adds RabbitMQ plus a long-running worker. Both
-modes call the same processing code and use the same PostgreSQL status tables.
+CronJob into a publisher and adds RabbitMQ, a KEDA-scaled worker, and an OCR
+Results Collector. Workers have no PostgreSQL credentials; collectors own the
+durable result transaction.
 The private-LAN overlays add a second authenticated Ledger route; the RabbitMQ
 private variant also exposes only the broker management UI through private
 HTTPS. PostgreSQL and AMQP application traffic remain internal. See the
@@ -99,10 +104,11 @@ The main processing path is:
 6. Present receipts, expenses, review queues, reconciliation, duplicates, and
    category reports in Ledger.
 
-In queued mode, delivery is at least once. A PostgreSQL advisory lock serializes
-workers for the same source hash, and completed database state makes a duplicate
-delivery safe. The consumer acknowledges a message only after the database
-result or a retry/dead-letter transfer is durable. See the
+In queued mode, delivery is at least once. Shared-volume source locks and cache
+request markers prevent concurrent or repeated OCR for one refresh, while
+collector-side PostgreSQL keys make result replay idempotent. A worker
+acknowledges only after confirmed result publication or retry/dead-letter
+routing; a collector acknowledges only after database commit. See the
 [RabbitMQ design](rabbitmq-receipt-design.md) for those boundaries in detail.
 
 ## Observability boundary

@@ -118,9 +118,22 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     cache_commands = ocr_cache.add_subparsers(dest="cache_command", required=True)
     rebuild = cache_commands.add_parser("rebuild", help="Queue cache rebuilds without replacing saved extraction results.")
     rebuild.add_argument("receipt_root", nargs="?", default=_receipt_root_default())
-    rebuild.add_argument("--ocr-cache", default=_ocr_cache_default(), help="Legacy option; the consumer selects its cache directory.")
+    rebuild.add_argument(
+        "--ocr-cache",
+        default=_ocr_cache_default(),
+        help="Cache directory inspected by --missing-only; each consumer uses its own configured path.",
+    )
     rebuild.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))
     rebuild.add_argument("--request-id", help="Reuse a batch UUID when retrying an uncertain publication.")
+    rebuild.add_argument(
+        "--source-reference",
+        help="Queue exactly one receipt path relative to the receipt root.",
+    )
+    rebuild.add_argument(
+        "--missing-only",
+        action="store_true",
+        help="Queue only receipts whose current or legacy OCR cache is absent.",
+    )
     rebuild.add_argument("--workers", type=int, help="Deprecated; concurrency is controlled by RabbitMQ consumers.")
     rebuild.add_argument("--verbose", action="store_true", help="Print confirmed publication progress to stderr; OCR progress is in worker logs.")
     rebuild.set_defaults(handler=_rebuild_ocr_cache)
