@@ -4,6 +4,7 @@ resources:
   - ../../k8s
   - rabbitmq.yaml
   - receipt-worker.yaml
+  - receipt-worker-scaler.yaml
   - ocr-results-collector.yaml
 patches:
   - path: publisher-patch.yaml

@@ -4,7 +4,6 @@ metadata:
   name: receipt-worker
   namespace: home-budget
 spec:
-  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:

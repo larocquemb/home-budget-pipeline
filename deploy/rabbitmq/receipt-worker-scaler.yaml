@@ -1,0 +1,40 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: receipt-worker
+  namespace: home-budget
+spec:
+  scaleTargetRef:
+    name: receipt-worker
+    envSourceContainerName: receipt-worker
+  pollingInterval: 15
+  cooldownPeriod: 600
+  initialCooldownPeriod: 60
+  minReplicaCount: 1
+  maxReplicaCount: 2
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          selectPolicy: Max
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          selectPolicy: Min
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 300
+  triggers:
+    - type: rabbitmq
+      metadata:
+        hostFromEnv: RABBITMQ_URL
+        protocol: amqp
+        queueName: receipts.v1.work
+        mode: QueueLength
+        value: "1"
+        activationValue: "0"

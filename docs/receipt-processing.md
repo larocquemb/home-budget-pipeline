@@ -193,14 +193,38 @@ This publishes one `receipt.cache-rebuild.v3` message per discovered source,
 including receipts already completed in PostgreSQL. `--verbose` prints confirmed
 publication progress, for example `[1/12] Queued 2026-08-14/receipts_20260814_0001.pdf`.
 The JSON summary reports `published`, the batch `request_id`, and `status: queued`.
-It confirms submission, not cache completion. Watch consumer logs for
-`Rebuilding OCR cache`, `cache_rebuilt`, and retry/dead-letter outcomes.
+It confirms submission, not cache completion. Watch worker logs for
+`status=active`, `status=cache_ready`, `cache_results_published`, and
+retry/dead-letter outcomes; the collector reports durable `cache_rebuilt`
+completion after its database commit.
 
-The worker uses its own `HOME_BUDGET_OCR_CACHE`, rebuilds one receipt at a time,
-and records request completion without changing saved extraction or ingest
-completion state. `--workers` is deprecated and does not start local processes;
-concurrency comes from consumer replicas. The legacy rebuild `--ocr-cache`
-option does not override the consumer's cache directory.
+Limit a repair to one path relative to the receipt root, or skip receipts that
+already have a current or legacy cache:
+
+```bash
+ledger ocr-cache rebuild \
+  --source-reference 2026-08-14/receipts_20260814_0001.pdf \
+  --verbose
+
+ledger ocr-cache rebuild --missing-only --verbose
+```
+
+Each v3 message carries the batch UUID plus its item index and total. Worker
+logs include `batch_id`, `progress`, and `completed=N/TOTAL`. The completed
+count comes from atomic markers on the shared receipt volume, so concurrent
+pods report one monotonic batch total without requiring database access.
+
+The worker uses its own `HOME_BUDGET_OCR_CACHE` and rebuilds one receipt at a
+time. A shared-PV advisory lock serializes cache writes by source hash. After an
+atomic cache replacement, the worker writes a request marker containing the
+cache checksum. A duplicate delivery reuses that exact cache and republishes
+the idempotent result events instead of repeating OCR. Deleting or changing the
+cache invalidates the marker, allowing a new repair to recreate it. Collector
+persistence records request completion without changing saved extraction or
+ingest completion state. `--workers` is deprecated and does not start local
+processes; concurrency comes from consumer replicas. The rebuild `--ocr-cache`
+option is used only by the publisher for `--missing-only`; consumers always use
+their own configured cache directory.
 
 For an interrupted or uncertain batch publication, rerun with the printed
 `--request-id UUID`. The same batch and source produce the same request identity,
@@ -246,12 +270,15 @@ interactive prompt. Those items remain unenriched for manual review in Ledger.
 publisher mounts receipt storage read-only and requests 100m CPU and 256Mi memory.
 The manual scanned-receipt Job and default container command also publish work.
 
-Deploy `deploy/rabbitmq` through Argo CD to supply the broker and long-running
-`receipt-worker` Deployment. Base manifests require the same RabbitMQ secret and
-a running consumer. The worker handles one receipt at a time with shared PV
-storage and per-receipt database locks. It requests 2 CPUs and 4Gi memory, with
-limits of 4 CPUs and 8Gi. See the [RabbitMQ runbook](rabbitmq-receipts.md) for
-rollout, monitoring, and recovery.
+Deploy `deploy/rabbitmq` through Argo CD to supply the broker, long-running
+`receipt-worker` Deployment, and its KEDA `ScaledObject`. Install the KEDA
+operator and CRDs before syncing this overlay. Base manifests require the same
+RabbitMQ secret and a running consumer. Each worker handles one receipt at a
+time with shared-PV locks. A worker requests 2 CPUs and 4Gi memory, with limits
+of 4 CPUs and 8Gi. KEDA keeps one worker warm and scales to at most two, for a
+maximum reservation of 4 CPUs and 8Gi. See the
+[RabbitMQ runbook](rabbitmq-receipts.md) for rollout, monitoring, scaling
+validation, and recovery.
 
 Useful commands:
 

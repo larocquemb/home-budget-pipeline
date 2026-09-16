@@ -67,6 +67,50 @@ def test_batch_retry_reuses_each_request_and_partial_failure_is_reported(queued_
     assert [call.kwargs["body"] for call in publish.call_args_list] == initial
 
 
+def test_cache_batch_can_select_one_receipt_and_reports_progress(queued_cli, capsys):
+    source, broker = queued_cli
+    selected = source.parent / "second.pdf"
+    selected.write_bytes(b"second")
+
+    assert cli.main([
+        "ocr-cache", "rebuild", "--source-reference", selected.name,
+    ]) == 0
+
+    publication = broker.channel.return_value.basic_publish.call_args.kwargs
+    message = ReceiptMessage.from_bytes(publication["body"])
+    summary = json.loads(capsys.readouterr().out)
+    assert message.source_reference == selected.name
+    assert message.batch_id == summary["request_id"]
+    assert (message.batch_index, message.batch_total) == (1, 1)
+    assert summary["discovered"] == 2
+    assert summary["selected"] == summary["published"] == 1
+
+
+def test_cache_batch_missing_only_skips_valid_cache(queued_cli, tmp_path, capsys):
+    source, broker = queued_cli
+    second = source.parent / "second.pdf"
+    second.write_bytes(b"second")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cached = queue._cache_path(
+        cache, source.name, queue.backlog.scan.sha256_file(source),
+    )
+    cached.write_text("cached")
+
+    assert cli.main([
+        "ocr-cache", "rebuild", "--missing-only", "--ocr-cache", str(cache),
+    ]) == 0
+
+    bodies = [
+        ReceiptMessage.from_bytes(call.kwargs["body"])
+        for call in broker.channel.return_value.basic_publish.call_args_list
+    ]
+    summary = json.loads(capsys.readouterr().out)
+    assert [message.source_reference for message in bodies] == [second.name]
+    assert summary["skipped_existing"] == 1
+    assert summary["selected"] == summary["published"] == 1
+
+
 def test_process_backlog_entry_points_publish(queued_cli, monkeypatch):
     source, broker = queued_cli
     monkeypatch.setenv("DATABASE_URL", "dbname=test")

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import logging
 import os
 import signal
+import socket
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event
@@ -26,6 +29,107 @@ LOG = logging.getLogger(__name__)
 def _print_json(payload: object) -> None:
     """Emit one JSON object per stdout line for container log collectors."""
     print(json.dumps(payload, sort_keys=True), flush=True)
+
+
+def _cache_rebuild_marker(cache_dir: Path, message: ReceiptMessage) -> Path:
+    if message.batch_id:
+        return cache_dir / ".rebuild-batches" / message.batch_id / f"{message.request_id}.json"
+    return cache_dir / ".rebuild-requests" / message.source_sha256 / f"{message.request_id}.json"
+
+
+@contextmanager
+def cache_rebuild_lock(cache_dir: Path, source_sha256: str):
+    """Serialize cache writes for one receipt across worker processes and pods."""
+    lock_dir = cache_dir / ".rebuild-locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"{source_sha256}.lock"
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _completed_cache_rebuild(
+    cache_dir: Path,
+    cache_path: Path,
+    message: ReceiptMessage,
+) -> bool:
+    """Return true only while this request's exact cache artifact remains valid."""
+    marker = _cache_rebuild_marker(cache_dir, message)
+    if not marker.is_file() or not cache_path.is_file():
+        return False
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+        expected = {
+            "request_id": message.request_id,
+            "source_sha256": message.source_sha256,
+            "cache_sha256": backlog.scan.sha256_file(cache_path),
+        }
+        if message.batch_id:
+            expected.update({
+                "batch_id": message.batch_id,
+                "batch_index": message.batch_index,
+                "batch_total": message.batch_total,
+            })
+        return value == expected
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+
+
+def _mark_cache_rebuild_complete(
+    cache_dir: Path,
+    cache_path: Path,
+    message: ReceiptMessage,
+) -> None:
+    """Atomically record that a request produced the current cache artifact."""
+    if not cache_path.is_file():
+        raise RuntimeError("cache rebuild did not produce its expected artifact")
+    marker = _cache_rebuild_marker(cache_dir, message)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    temporary = marker.with_name(f".{marker.name}.{os.getpid()}.tmp")
+    payload = {
+        "request_id": message.request_id,
+        "source_sha256": message.source_sha256,
+        "cache_sha256": backlog.scan.sha256_file(cache_path),
+    }
+    if message.batch_id:
+        payload.update({
+            "batch_id": message.batch_id,
+            "batch_index": message.batch_index,
+            "batch_total": message.batch_total,
+        })
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, marker)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _cache_batch_progress(cache_dir: Path, message: ReceiptMessage) -> tuple[int, int] | None:
+    if not message.batch_id or message.batch_total is None:
+        return None
+    markers = cache_dir / ".rebuild-batches" / message.batch_id
+    completed = sum(1 for path in markers.glob("*.json") if path.is_file())
+    return completed, message.batch_total
+
+
+def _work_log_context(message: ReceiptMessage | None) -> str:
+    if message is None:
+        return f"worker_host={socket.gethostname()} worker_pid={os.getpid()}"
+    progress = (
+        f" batch_id={message.batch_id} progress={message.batch_index}/{message.batch_total}"
+        if message.batch_id else ""
+    )
+    return (
+        f"worker_host={socket.gethostname()} worker_pid={os.getpid()} "
+        f"source_reference={message.source_reference} request_id={message.request_id}{progress}"
+    )
 
 
 @dataclass(frozen=True)
@@ -241,6 +345,10 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
 
     batch_id = args.request_id or str(uuid4())
     published = 0
+    discovered = 0
+    selected = 0
+    skipped_existing = 0
+    topology = Topology()
     try:
         if not args.rabbitmq_url:
             raise ValueError("RABBITMQ_URL or --rabbitmq-url is required")
@@ -251,26 +359,61 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
         if not root.is_dir():
             raise ValueError("receipt root must be an existing directory")
         paths = backlog.scan.discover_scans(root)
+        discovered = len(paths)
+        source_reference = getattr(args, "source_reference", None)
+        if source_reference:
+            selector = ReceiptMessage(
+                "0" * 64,
+                source_reference,
+                version=3,
+                request_id=str(uuid5(namespace, f"selector:{source_reference}")),
+            )
+            selected_path = selector.resolve_source(root)
+            if not selected_path.is_file():
+                raise ValueError(f"Receipt not found: {source_reference}")
+            if selected_path.suffix.lower() not in backlog.scan.SUPPORTED_EXTS:
+                raise ValueError(f"Unsupported receipt file: {source_reference}")
+            paths = [selected_path]
+
+        sources = []
+        cache_dir = Path(args.ocr_cache).expanduser().resolve()
+        for path in paths:
+            reference = path.relative_to(root).as_posix()
+            source_sha256 = backlog.scan.sha256_file(path)
+            if (
+                cache_only
+                and getattr(args, "missing_only", False)
+                and has_ocr_cache(cache_dir, reference, source_sha256)
+            ):
+                skipped_existing += 1
+                continue
+            sources.append((reference, source_sha256))
+        selected = len(sources)
+
         connection = connect_broker(args.rabbitmq_url)
         try:
             channel = connection.channel()
-            topology = Topology()
             declare_topology(channel, topology)
-            for path in paths:
-                reference = path.relative_to(root).as_posix()
+            for index, (reference, source_sha256) in enumerate(sources, start=1):
                 request = ReceiptMessage(
-                    "0" * 64, reference, version=3 if cache_only else 2,
+                    source_sha256, reference, version=3 if cache_only else 2,
                     request_id=str(uuid5(namespace, f"{'cache' if cache_only else 'reprocess'}:{reference}")),
+                    batch_id=batch_id if cache_only else None,
+                    batch_index=index if cache_only else None,
+                    batch_total=selected if cache_only else None,
                 )
                 request.resolve_source(root)
-                request = replace(request, source_sha256=backlog.scan.sha256_file(path))
                 publish_confirmed(
                     channel, topology.work, request.to_bytes(),
                     message_id=request.message_id, message_type=request.message_type,
                 )
                 published += 1
                 if args.verbose:
-                    print(f"[{published}/{len(paths)}] Queued {reference}", file=sys.stderr, flush=True)
+                    print(
+                        f"[{published}/{selected}] Queued {reference} batch={batch_id}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
         finally:
             if connection.is_open:
                 connection.close()
@@ -279,9 +422,18 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
         print(f"Cannot finish batch {batch_id}: {detail}; {published} publication(s) confirmed.", file=sys.stderr)
         print(f"Retry with --request-id {batch_id} to reuse these requests.", file=sys.stderr)
         return 1
-    _print_json({"discovered": len(paths), "published": published, "request_id": batch_id,
-                 "queue": topology.work, "status": "queued"})
-    return 0 if paths else 2
+    summary = {
+        "discovered": discovered,
+        "selected": selected,
+        "published": published,
+        "request_id": batch_id,
+        "queue": topology.work,
+        "status": "queued",
+    }
+    if cache_only:
+        summary["skipped_existing"] = skipped_existing
+    _print_json(summary)
+    return 0 if selected else 2
 
 
 def rebuild_cache_message(conn, message: ReceiptMessage, root: Path, cache_dir: Path, budget_schema: str) -> str:
@@ -351,59 +503,80 @@ def produce_result_messages(message: ReceiptMessage, args):
     root = Path(args.receipt_root).expanduser().resolve()
     path = message.resolve_source(root)
     cache_dir = Path(args.ocr_cache).expanduser().resolve()
+    cache_path = _cache_path(
+        cache_dir, message.source_reference, message.source_sha256,
+    )
     if not path.is_file():
         raise InvalidReceiptMessage("receipt source does not exist")
     if backlog.scan.sha256_file(path) != message.source_sha256:
         raise InvalidReceiptMessage("source contents changed since publication")
-    with telemetry.receipt_process(
-        message.source_reference, message.source_sha256,
-    ) as receipt_trace:
-        parsed = backlog.parse_scans_parallel(
-            [path],
-            root,
-            1,
-            cache_dir,
-            message.version in (2, 3),
-            return_cache_hits=True,
-            progress=lambda text: LOG.info("receipt=%s %s", message.message_id, text),
+    lock = cache_rebuild_lock(cache_dir, message.source_sha256)
+    with lock:
+        cache_reused = message.version in (2, 3) and _completed_cache_rebuild(
+            cache_dir, cache_path, message,
         )
-        if isinstance(parsed, tuple):
-            receipts, cache_hits = parsed
-        else:
-            receipts, cache_hits = parsed, 0
-        telemetry.record_cache_lookup(cache_hits > 0)
-        if len(receipts) != 1:
-            raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
-        receipt = receipts[0]
-        run_uuid = (getattr(receipt, "ocr_run", None) or {}).get("run_uuid")
-        telemetry.adopt_run_uuid(run_uuid)
-        if (
-            receipt.source_sha256 != message.source_sha256
-            or backlog.scan.sha256_file(path) != message.source_sha256
-        ):
-            raise InvalidReceiptMessage("source contents changed during processing")
-        mode = "cache_only" if message.version == 3 else (
-            "reprocess" if message.version == 2 else "normal"
-        )
-        cache_path = _cache_path(
-            cache_dir, message.source_reference, message.source_sha256,
-        )
-        events = result_messages_for_receipt(
-            receipt,
-            cache_path=cache_path,
-            cache_root=cache_dir,
-            persistence_mode=mode,
-            request_id=message.request_id,
-        )
-        # This worker completed computation and confirmed result publication;
-        # only the collector may report durable success after its DB commit.
-        status = "cache_results_published" if mode == "cache_only" else (
-            "review_results_published"
-            if receipt.extraction_status != "complete"
-            else "results_published"
-        )
-        receipt_trace.finish(status)
-        return status, events
+        force_refresh = message.version in (2, 3) and not cache_reused
+        with telemetry.receipt_process(
+            message.source_reference, message.source_sha256,
+        ) as receipt_trace:
+            parsed = backlog.parse_scans_parallel(
+                [path],
+                root,
+                1,
+                cache_dir,
+                force_refresh,
+                return_cache_hits=True,
+                progress=lambda text: LOG.info(
+                    "receipt=%s %s %s", message.message_id, _work_log_context(message), text,
+                ),
+            )
+            if isinstance(parsed, tuple):
+                receipts, cache_hits = parsed
+            else:
+                receipts, cache_hits = parsed, 0
+            telemetry.record_cache_lookup(cache_hits > 0)
+            if len(receipts) != 1:
+                raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
+            receipt = receipts[0]
+            run_uuid = (getattr(receipt, "ocr_run", None) or {}).get("run_uuid")
+            telemetry.adopt_run_uuid(run_uuid)
+            if (
+                receipt.source_sha256 != message.source_sha256
+                or backlog.scan.sha256_file(path) != message.source_sha256
+            ):
+                raise InvalidReceiptMessage("source contents changed during processing")
+            if message.version in (2, 3) and not cache_reused:
+                _mark_cache_rebuild_complete(cache_dir, cache_path, message)
+            batch_progress = _cache_batch_progress(cache_dir, message)
+            if batch_progress:
+                LOG.info(
+                    "receipt=%s %s status=cache_ready completed=%s/%s",
+                    message.message_id,
+                    _work_log_context(message),
+                    batch_progress[0],
+                    batch_progress[1],
+                )
+            mode = "cache_only" if message.version == 3 else (
+                "reprocess" if message.version == 2 else "normal"
+            )
+            events = result_messages_for_receipt(
+                receipt,
+                cache_path=cache_path,
+                cache_root=cache_dir,
+                persistence_mode=mode,
+                request_id=message.request_id,
+            )
+            # This worker completed computation and confirmed result publication;
+            # only the collector may report durable success after its DB commit.
+            status = (
+                "cache_results_republished" if cache_reused else "cache_results_published"
+            ) if mode == "cache_only" else (
+                "review_results_published"
+                if receipt.extraction_status != "complete"
+                else "results_published"
+            )
+            receipt_trace.finish(status)
+            return status, events
 
 
 def handle_delivery(channel, delivery_tag: int, body: bytes, process, topology: Topology) -> None:
@@ -449,6 +622,12 @@ def handle_worker_delivery(
     message = None
     try:
         message = ReceiptMessage.from_bytes(body)
+        LOG.info(
+            "receipt=%s %s status=active attempt=%s",
+            message.message_id,
+            _work_log_context(message),
+            message.attempt,
+        )
         status, events = process_with_heartbeats(
             connection, executor, process, message,
         )
@@ -469,15 +648,19 @@ def handle_worker_delivery(
             message_type=message.message_type if message else "receipt.process.v1",
         )
         LOG.warning(
-            "receipt=%s routed=%s error=%s",
+            "receipt=%s %s status=%s routed=%s error=%s attempt=%s",
             message.message_id if message else "invalid",
+            _work_log_context(message),
+            "retried" if retry else "failed",
             target,
             type(exc).__name__,
+            message.attempt if message else 0,
         )
     else:
         LOG.info(
-            "receipt=%s status=%s result_events=%s",
+            "receipt=%s %s status=%s result_events=%s",
             message.message_id,
+            _work_log_context(message),
             status,
             len(events),
         )

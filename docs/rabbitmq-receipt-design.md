@@ -7,8 +7,9 @@ Kubernetes rollout instructions, see the
 
 ## Scope
 
-RabbitMQ is the dispatch path for all receipt work. Publishers discover files
-and submit requests; consumers alone invoke OCR and persistence.
+RabbitMQ is the dispatch path for all receipt work and OCR results. Publishers
+discover files and submit requests; workers invoke OCR and publish versioned
+result events; the OCR Results Collector alone persists those results.
 
 - `ledger receipts process` and `publish` queue eligible receipts.
 - `ledger receipts reprocess` and `process --refresh-ocr-cache` queue full refreshes.
@@ -19,9 +20,9 @@ Commands exit after confirmed publication. Broker failures are reported without
 falling back to direct processing. Worker settings control cache location and
 concurrency. The additive request tables track completion and bounded attempts.
 
-The queued mode uses at-least-once delivery. A receipt can be delivered more
-than once, but PostgreSQL state and per-receipt advisory locks prevent
-concurrent or repeated completion.
+The queued mode uses at-least-once delivery. Shared-volume locks serialize OCR
+cache access for one source hash, request markers avoid repeating completed
+refreshes, and collector-side PostgreSQL keys make result replay idempotent.
 
 ## Components
 
@@ -34,12 +35,16 @@ flowchart TB
     work -->|manual delivery| worker[Consumer]
     worker --> files[Shared receipt files]
     worker --> ocr[OCR and extraction]
-    ocr -->|atomic result| db[(PostgreSQL)]
+    ocr -->|confirmed result events| results[OCR result queue]
+    results --> collector[OCR Results Collector]
+    collector -->|atomic transaction| db[(PostgreSQL)]
 ```
 
-The consumer acknowledges the delivery only after PostgreSQL commits the final
-result. Shared storage contains the receipt and OCR cache; RabbitMQ messages
-carry only the receipt hash and relative path.
+The worker acknowledges a work delivery only after every result event has been
+confirmed by RabbitMQ. The collector acknowledges a result delivery only after
+its PostgreSQL transaction commits. Shared storage contains the receipt and OCR
+cache; RabbitMQ messages carry only the receipt hash, relative path, operation,
+request identity, and bounded progress metadata.
 
 In K3s, the `receipt-processor` CronJob is the publisher. Every 15 minutes it
 checks inbox receipts against PostgreSQL completion status and cache-file
@@ -183,13 +188,12 @@ successful scans can publish additional copies of the same v2 requests.
 The UUID derived from source hash, relative path, and previous completion time
 identifies one logical repair request across those scans. RabbitMQ stores and
 delivers each publication even when its message ID matches an existing message.
-Deduplication happens in the worker against PostgreSQL, under the receipt lock.
-The worker checks `(source_sha256, request_id)` in
-`budget.receipt_reprocess_requests`: once `completed_at` is set, another copy
-returns `status=skipped` and is ACKed without OCR, extraction writes, or another
-processing attempt. An unfinished request can retry within its shared attempt
-budget. A later cache deletion after a new completion creates a new UUID and
-therefore permits another repair.
+Workers serialize the source through a shared-volume lock. Once a v2 or v3
+request produces an atomic cache file, a checksum-bearing request marker lets a
+duplicate reuse the cache and republish the same logical result without
+repeating OCR. The collector checks the request and result identities under its
+PostgreSQL advisory lock. A later cache deletion invalidates the marker and a
+new request can recreate the cache.
 
 For example, if 100 completed receipts still lack caches and no worker starts
 them during three successful discovery runs, RabbitMQ can hold 300 deliveries
@@ -199,11 +203,11 @@ slowly while OCR runs, then fall rapidly as workers reach completed duplicates.
 With workers active during discovery, only sources still eligible at each scan
 contribute to that scan's missing-cache publications.
 
-This trades additional broker deliveries and database lookups for recovery
-through repeated discovery without a separate queued-state reconciliation
-mechanism. Queue depth measures outstanding deliveries, not unique receipts or
-remaining OCR runs. An empty work queue can coexist with `review_required`
-receipts or dead-letter messages; those outcomes still need operator attention.
+This trades additional broker deliveries and inexpensive cache/result
+idempotency checks for recovery through repeated discovery. Queue depth measures
+outstanding deliveries, not unique receipts or remaining OCR runs. An empty
+work queue can coexist with `review_required` receipts or dead-letter messages;
+those outcomes still need operator attention.
 
 ## Consumer transaction and ACK boundaries
 
@@ -214,49 +218,48 @@ disabled. It acknowledges only after the durable outcome is known.
 sequenceDiagram
     participant R as RabbitMQ
     participant W as Worker
+    participant F as Shared cache
+    participant C as Collector
     participant D as PostgreSQL
     participant O as OCR pipeline
 
     R->>W: Deliver message, unacknowledged
-    W->>D: Acquire per-receipt advisory lock
-    W->>D: Recheck completion and attempt state
-    alt already complete
-        W->>R: ACK duplicate
-    else eligible
-        W->>D: Mark processing and commit attempt
+    W->>F: Acquire source-hash lock
+    alt valid request marker and cache
+        W->>F: Read existing atomic cache
+    else cache missing or changed
         W->>O: Verify file, OCR, normalize, validate
-        W->>D: Write evidence, expenses, and final status
-        W->>D: Commit final transaction
-        W->>R: ACK success
+        W->>F: Atomically replace cache and marker
     end
+    W->>R: Publish result events with confirms
+    W->>R: ACK work delivery
+    R->>C: Deliver result event, unacknowledged
+    C->>D: Lock, validate, and commit durable writes
+    C->>R: ACK result delivery
 ```
 
-The processing marker is committed before OCR so attempts survive worker
-failure. Evidence, expense changes, and the final receipt status are committed
-together. A crash before the final commit leaves no partial completed result. A
-crash after that commit but before the ACK causes redelivery; the next worker
-sees the completed status and ACKs without repeating OCR.
+An interrupted worker leaves its work delivery unacknowledged. If its cache and
+request marker were completed, the replacement worker reuses them; otherwise it
+rebuilds under the same source lock. A result publication survives worker loss.
+The collector commits evidence, expense changes, request completion, artifacts,
+and event audit state transactionally. A collector crash after commit but before
+ACK causes an idempotent result replay.
 
 OCR runs on a worker thread while the AMQP thread continues servicing the
 connection. This prevents long OCR calls from starving RabbitMQ heartbeats.
 
 ## Idempotency and concurrency
 
-PostgreSQL provides the distributed coordination boundary. A worker obtains a
-session advisory lock derived from `source_sha256`, then checks the receipt
-status while holding that lock. Only one worker can process a given receipt at
-a time, even if duplicate messages are in the queue or several consumer
-replicas are running.
+The shared receipt volume provides the worker coordination boundary. Every work
+version uses a source-hash file lock, so different receipts run concurrently
+while one receipt's cache is serialized across pods. Refresh requests use their
+request UUID and cache checksum as a completion marker; changing or deleting the
+cache invalidates it.
 
-The lock is per receipt. Different receipts can run concurrently. Normal,
-full-reprocess, and cache-only messages use the same lock. Manual commands
-publish requests and never create a separate local worker pool.
-
-The completed database state is the idempotency record. Normal v1 messages for
-receipts in `succeeded` or `review_required` are acknowledged as duplicates.
-Full-reprocess v2 and cache-only v3 messages check completion of their specific
-request UUID in the corresponding request table; a new request can intentionally
-process an already-completed receipt. The design does not depend on RabbitMQ
+PostgreSQL provides the durable result boundary. The collector uses the same
+source identity plus event IDs and `(run_uuid, pass_id)` uniqueness to make
+result replay idempotent. Full-reprocess and cache-only completion remains
+tracked in their request tables. The design does not depend on RabbitMQ
 deduplication or message ordering.
 
 ## Retry and dead-letter behavior
@@ -266,7 +269,7 @@ Failures are classified by whether another attempt could reasonably succeed.
 ```mermaid
 stateDiagram-v2
     [*] --> Work
-    Work --> Complete: processing commits
+    Work --> Complete: result publications confirmed
     Work --> Retry: transient failure and attempt less than 3
     Retry --> Work: 60-second TTL
     Work --> DeadLetter: terminal failure
@@ -274,25 +277,24 @@ stateDiagram-v2
     DeadLetter --> Work: operator fixes cause, resets, and republishes
 ```
 
-| Outcome | Database effect | Broker action |
+| Outcome | Durable effect | Broker action |
 | --- | --- | --- |
-| Success or review required | Final status and evidence commit | ACK work message. |
-| Duplicate completion | No new processing | ACK work message. |
-| Transient failure before attempt 3 | Failure state is recorded | Confirm retry publish, then ACK work message. |
-| Transient failure on attempt 3 | Failure state is recorded | Confirm dead-letter publish, then ACK work message. |
-| Invalid contract, unsafe path, or hash mismatch | No receipt completion; a failure is recorded when processing had started | Confirm dead-letter publish, then ACK work message. |
+| Success or review required | Result events are persistent in RabbitMQ; the collector commits PostgreSQL separately | ACK work message. |
+| Duplicate refresh completion | Valid cache is reused and idempotent result events are republished | ACK work message after confirms. |
+| Transient failure before attempt 3 | Cache/marker may be reused by the retry | Confirm retry publish, then ACK work message. |
+| Transient failure on attempt 3 | Diagnostic message is retained in the DLQ | Confirm dead-letter publish, then ACK work message. |
+| Invalid contract, unsafe path, or hash mismatch | No result event is published | Confirm dead-letter publish, then ACK work message. |
 | Retry or dead-letter publish cannot be confirmed | Existing delivery stays unacknowledged | Let connection closure return the original message to work. |
 
 The original delivery is never acknowledged before the replacement retry or
 dead-letter message is confirmed. This closes the gap in which work could be
 lost between consuming one message and publishing its successor.
 
-The message attempt and database attempt counters cover different failures. The
-message counter limits application-level retry routing. The database counter
-limits OCR processing starts, including starts interrupted by a worker crash.
-A connection failure before processing can consume broker deliveries without
-incrementing the database counter. The work queue also has a delivery limit of
-20 to bound repeated crashes that never reach application settlement.
+The message attempt limits application-level retry routing. Request completion
+is stored when the collector commits the run result. A connection failure before
+processing can consume broker deliveries without advancing the body attempt, so
+the work queue also has a delivery limit of 20 to bound repeated crashes that
+never reach application settlement.
 
 ## Failure recovery
 
@@ -302,15 +304,15 @@ The design expects crashes and network failures at every boundary:
 | --- | --- |
 | Before a publish is confirmed | The command fails; a later discovery scan can publish again. |
 | After publish confirmation | RabbitMQ retains the persistent message; a duplicate publication is safe. |
-| Before the processing marker commits | RabbitMQ redelivers; the database has no new attempt. |
-| During OCR after the marker commits | The attempt remains visible and the message is retried or redelivered. |
-| Before the final database commit | Transaction rollback prevents partial evidence or completion. |
-| After final commit but before ACK | Redelivery is acknowledged as an already-complete duplicate. |
+| Before the cache marker is replaced | RabbitMQ redelivers; the replacement worker rebuilds under the source lock. |
+| After the cache marker but before result confirmation | The retry reuses the checksum-matched cache and republishes results. |
+| Before the collector database commit | Transaction rollback prevents partial evidence or completion. |
+| After collector commit but before result ACK | Result redelivery is handled idempotently. |
 | During retry or dead-letter publication | The original delivery is requeued unless replacement publication is confirmed. |
 | Worker shutdown | The worker stops accepting work, drains its current delivery, then closes cleanly. |
 
-RabbitMQ protects queued messages, while PostgreSQL protects processing state.
-The receipt filesystem needs its own durable storage and backup policy.
+RabbitMQ protects queued messages, the shared volume protects cache artifacts,
+and PostgreSQL protects authoritative processing state.
 
 ## Kubernetes deployment
 
@@ -320,24 +322,25 @@ adds:
 
 - a RabbitMQ StatefulSet and persistent volume claim;
 - a publisher patch for the scheduled backlog job;
-- a long-running consumer Deployment;
+- a long-running consumer Deployment and KEDA `ScaledObject`;
 - broker configuration plus credentials and URL sourced from Kubernetes configuration.
 
 The base manifests stay usable without RabbitMQ. Applying the overlay opts the
 deployment into queued processing. Publisher and workers must mount the same
-receipt source and evidence storage, and all workers must connect to the same
-PostgreSQL database.
+receipt source and cache storage. Only the publisher and OCR Results Collector
+receive PostgreSQL credentials.
 
-Scaling the consumer Deployment increases parallelism across receipts. Prefetch
-one limits each replica to one active delivery, while advisory locks serialize
-duplicates for the same receipt.
+KEDA scales the consumer from one to two replicas using ready work-queue depth.
+Prefetch one limits each replica to one active delivery, while shared-volume
+locks serialize duplicates for the same receipt. The Deployment omits
+`spec.replicas` so Argo CD does not overwrite the HPA-owned value.
 
 ## Guarantees and limits
 
 | Property | Guarantee |
 | --- | --- |
 | Delivery | At least once. |
-| Duplicate safety | Database completion checks and per-receipt advisory locks. |
+| Duplicate safety | Shared cache locks and request markers plus collector database uniqueness. |
 | Concurrent processing | Parallel across receipts; serialized for one SHA-256 identity. |
 | Result atomicity | Evidence, expense writes, and final status commit together. |
 | Ordering | No ordering guarantee across different receipts. |
@@ -351,26 +354,31 @@ duplicates for the same receipt.
 | --- | --- | --- |
 | Contract and path validation | [`message.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/receipts/message.py) | `tests/test_receipt_queue.py` |
 | Publisher, topology, ACK, retry, and DLQ | [`queue_ingest.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/receipts/queue_ingest.py) | `tests/test_receipt_queue.py`, `tests/test_receipt_queue_rabbitmq.py` |
-| Processing transaction and advisory lock | [`backlog_ingest.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/receipts/backlog_ingest.py) | `tests/test_receipt_queue_postgres.py` |
+| Cache locking, markers, and result publication | [`queue_ingest.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/receipts/queue_ingest.py) | `tests/test_ocr_results_collector.py` |
+| Result transaction and advisory lock | [`ocr_collector.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/receipts/ocr_collector.py) | `tests/test_ocr_result_collector_integration.py` |
 | CLI commands | [`cli.py`](https://github.com/larocquemb/home-budget-pipeline/blob/main/src/home_budget_pipeline/cli.py) | `tests/test_receipt_retry_cli.py` |
 | Kubernetes overlay | [`deploy/rabbitmq`](https://github.com/larocquemb/home-budget-pipeline/tree/main/deploy/rabbitmq) | `tests/test_receipt_queue_deployment.py` |
 
-The PostgreSQL integration tests exercise competing workers and verify that a
-receipt is processed once. The RabbitMQ integration tests exercise confirmed
-publication, manual acknowledgements, retry delay, and dead-letter routing
-against a real broker.
+The PostgreSQL integration tests verify idempotent result persistence and
+commit-before-ACK replay. RabbitMQ integration tests exercise confirmed
+publication, manual acknowledgements, retry delay, dead-letter routing, and
+replacement consumers against a real broker.
 
 ## Cache-only requests
 
-Version 3 uses the v2 fields with AMQP type `receipt.cache-rebuild.v3`. The worker
-refreshes the cache under the receipt lock and verifies the source hash before
-and after OCR. It records bounded attempts and completion in
-`budget.receipt_cache_requests`, preserving extraction and ingest status. Cache
-writes use atomic file replacement. Completed-request redelivery skips OCR; an
-uncommitted completion may repeat OCR safely. Retries preserve the request ID.
+Version 3 uses the v2 fields with AMQP type `receipt.cache-rebuild.v3`. New
+batches also carry `batch_id`, `batch_index`, and `batch_total`; legacy v3 bodies
+without progress fields remain valid. The worker refreshes the cache under the
+source-hash shared-volume lock and verifies the source hash before and after
+OCR. Cache writes and checksum request markers use atomic file replacement.
+Completed-request redelivery reuses the cache and republishes idempotent result
+events instead of repeating OCR. The collector records completion in
+`budget.receipt_cache_requests`, preserving extraction and ingest status.
 
 Batch publishers derive per-source UUIDs from a batch request UUID, operation,
 and relative path. Reusing a batch UUID after uncertain publication reuses each
-request. The command reports confirmed counts on partial failure. Full refresh
-batches use v2; cache-only batches use v3. Roll out consumer support through
-Argo CD before publishing a new message version.
+request. Operators can select one source or only sources with missing caches.
+The command reports confirmed counts on partial failure. Shared batch markers
+let logs report `completed/total` across worker pods. Full refresh batches use
+v2; cache-only batches use v3. Roll out consumer support through Argo CD before
+publishing messages with the optional batch progress fields.
