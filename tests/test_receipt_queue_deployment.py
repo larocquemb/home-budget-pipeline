@@ -29,6 +29,10 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     assert worker["args"] == ["receipts", "consume", "/data/receipts/raw/scanned/inbox"]
     assert publisher["image"] == worker["image"] == collector["image"]
     assert "latest" not in worker["image"]
+    assert worker["resources"] == {
+        "requests": {"cpu": "1", "memory": "4Gi"},
+        "limits": {"cpu": "4", "memory": "8Gi"},
+    }
     assert worker_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "home-budget-data"
     assert worker_spec["terminationGracePeriodSeconds"] == 900
     for container in (publisher, worker, collector):
