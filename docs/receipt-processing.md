@@ -274,9 +274,9 @@ Deploy `deploy/rabbitmq` through Argo CD to supply the broker, long-running
 `receipt-worker` Deployment, and its KEDA `ScaledObject`. The `brownrook-root`
 GitOps application manages the KEDA operator and CRDs. Base manifests require
 the same RabbitMQ secret and a running consumer. Each worker handles one receipt
-at a time with shared-PV locks. A worker requests 2 CPUs and 4Gi memory, with
+at a time with shared-PV locks. A worker requests 1 CPU and 4Gi memory, with
 limits of 4 CPUs and 8Gi. KEDA keeps one worker warm and scales to at most two,
-for a maximum reservation of 4 CPUs and 8Gi. See the
+for a maximum reservation of 2 CPUs and 8Gi. See the
 [RabbitMQ runbook](rabbitmq-receipts.md) for rollout, monitoring, scaling
 validation, and recovery.
 

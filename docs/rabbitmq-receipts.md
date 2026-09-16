@@ -302,7 +302,9 @@ KEDA reads `RABBITMQ_URL` from the worker environment and scales against
 `receipts.v1.work` at one ready message per worker. Git declares a minimum of
 one and maximum of two workers. The Deployment deliberately omits `replicas`,
 so Argo CD does not fight the HPA. Raising the maximum requires a reviewed Git
-change and enough additional capacity for 2 CPUs and 4Gi memory per pod.
+change and enough additional capacity for 1 CPU and 4Gi memory per pod. The
+two-worker ceiling reserves 2 CPUs and 8Gi memory, while the 4-CPU limit per pod
+allows unused node CPU to accelerate an individual OCR operation.
 
 The RabbitMQ overlays explicitly set `receipt-processor.spec.suspend: false`.
 Once synced, the **`receipt-processor` CronJob** runs `ledger receipts publish`
