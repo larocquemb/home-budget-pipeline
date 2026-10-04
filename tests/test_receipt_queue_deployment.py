@@ -31,7 +31,7 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     assert "latest" not in worker["image"]
     assert worker["resources"] == {
         "requests": {"cpu": "1", "memory": "8Gi"},
-        "limits": {"cpu": "2", "memory": "8Gi"},
+        "limits": {"cpu": "6", "memory": "8Gi"},
     }
     assert worker_spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"] == {
         "nodeSelectorTerms": [{"matchExpressions": [{
@@ -61,7 +61,26 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
         "name": "receipt-worker",
         "envSourceContainerName": "receipt-worker",
     }
-    assert (scaler["minReplicaCount"], scaler["maxReplicaCount"]) == (1, 4)
+    assert (scaler["minReplicaCount"], scaler["maxReplicaCount"]) == (1, 3)
+    assert worker_spec["nodeSelector"] == {"kubernetes.io/hostname": "arsene"}
+    longbow_deployment = resources["Deployment", "receipt-worker-longbow"]["spec"]
+    longbow_spec = longbow_deployment["template"]["spec"]
+    longbow_worker = longbow_spec["containers"][0]
+    assert longbow_deployment["replicas"] == 1
+    assert longbow_spec["nodeSelector"] == {"kubernetes.io/hostname": "longbow"}
+    assert longbow_worker["resources"] == {
+        "requests": {"cpu": "1", "memory": "8Gi"},
+        "limits": {"cpu": "2", "memory": "8Gi"},
+    }
+    assert {key: value for key, value in longbow_worker.items() if key != "resources"} == {
+        key: value for key, value in worker.items() if key != "resources"
+    }
+    assert longbow_spec["volumes"] == worker_spec["volumes"]
+    for deployment in (worker_deployment, longbow_deployment):
+        assert deployment["template"]["metadata"]["labels"]["workload"] == "receipt-worker"
+    # Preserve the existing immutable selector, and keep the new pool disjoint.
+    assert worker_deployment["selector"] == {"matchLabels": {"app": "receipt-worker"}}
+    assert longbow_deployment["selector"] == {"matchLabels": {"app": "receipt-worker-longbow"}}
     assert scaler["cooldownPeriod"] == 600
     assert scaler["advanced"]["horizontalPodAutoscalerConfig"]["behavior"]["scaleDown"] == {
         "stabilizationWindowSeconds": 600,
@@ -106,6 +125,34 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     )
     assert ("Secret", "rabbitmq-secret") not in resources
     assert ("ConfigMap", "receipt-runtime-config") not in resources
+
+
+@pytest.mark.parametrize("overlay", [
+    "rabbitmq", "rabbitmq-private", "rabbitmq-private-logging", "rabbitmq-private-telemetry",
+])
+def test_worker_pools_share_configuration_and_immutable_images(overlay):
+    if not shutil.which("kubectl"):
+        pytest.skip("kubectl is not installed")
+    rendered = subprocess.check_output(["kubectl", "kustomize", str(ROOT / "deploy" / overlay)], text=True)
+    resources = {(obj["kind"], obj["metadata"]["name"]): obj for obj in yaml.safe_load_all(rendered)}
+    arsene = resources["Deployment", "receipt-worker"]["spec"]["template"]["spec"]
+    longbow = resources["Deployment", "receipt-worker-longbow"]["spec"]["template"]["spec"]
+    publisher = resources["CronJob", "receipt-processor"]["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+    assert len(arsene["containers"]) == len(longbow["containers"]) == 1
+    arsene_worker, longbow_worker = arsene["containers"][0], longbow["containers"][0]
+    assert {key: value for key, value in arsene_worker.items() if key != "resources"} == {
+        key: value for key, value in longbow_worker.items() if key != "resources"
+    }
+    assert arsene_worker["resources"]["limits"]["cpu"] == "6"
+    assert longbow_worker["resources"]["limits"]["cpu"] == "2"
+    assert arsene["volumes"] == longbow["volumes"]
+    assert longbow["containers"][0]["image"] == publisher["image"]
+    if overlay == "rabbitmq-private-telemetry":
+        env = {item["name"]: item for item in longbow["containers"][0]["env"]}
+        assert env["HOME_BUDGET_TELEMETRY_ENABLED"]["value"] == "true"
+        assert env["K8S_NODE_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == "spec.nodeName"
+        assert any(volume.get("secret", {}).get("secretName") == "receipt-telemetry-client-tls"
+                   for volume in longbow["volumes"])
 
 
 def test_rabbitmq_secret_example_uses_cross_namespace_service_dns():

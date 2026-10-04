@@ -1,11 +1,12 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: receipt-worker
+  name: receipt-worker-longbow
   namespace: home-budget
   labels:
     workload: receipt-worker
 spec:
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -14,16 +15,16 @@ spec:
       maxUnavailable: 1
   selector:
     matchLabels:
-      app: receipt-worker
+      app: receipt-worker-longbow
   template:
     metadata:
       labels:
-        app: receipt-worker
+        app: receipt-worker-longbow
         workload: receipt-worker
     spec:
       terminationGracePeriodSeconds: 900
       nodeSelector:
-        kubernetes.io/hostname: arsene
+        kubernetes.io/hostname: longbow
       # Keep OCR memory pressure away from the control plane, database and broker.
       affinity:
         nodeAffinity:
@@ -75,7 +76,7 @@ spec:
               # Reserve the full memory limit so two workers cannot fit Longbow.
               memory: 8Gi
             limits:
-              cpu: "6"
+              cpu: "2"
               memory: 8Gi
           volumeMounts:
             - name: receipt-data
