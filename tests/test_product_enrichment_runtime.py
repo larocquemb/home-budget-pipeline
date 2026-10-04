@@ -39,3 +39,20 @@ def test_log_flushes_immediately(monkeypatch):
     runtime._log("progress")
 
     assert calls == [("progress", True)]
+
+
+def test_ai_wrapper_calls_original_function_after_runtime_patch(monkeypatch):
+    import openai
+    from types import SimpleNamespace
+
+    calls = []
+    def original(item, merchant, *, client):
+        calls.append((item, merchant))
+        return ("expanded product",)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(openai, "OpenAI", lambda **kw: SimpleNamespace())
+    monkeypatch.setattr(runtime, "_core_ai_product_queries", original)
+    monkeypatch.setattr(runtime.core, "ai_product_queries", runtime.ai_product_queries)
+    assert runtime.core.ai_product_queries("abbreviated", "Sobeys") == ("expanded product",)
+    assert calls == [("abbreviated", "Sobeys")]

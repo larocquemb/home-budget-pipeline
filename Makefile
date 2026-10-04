@@ -11,7 +11,9 @@ KUBE_CONTEXT ?= brownrook-k3s1
 NODE ?=
 DRY_RUN ?= 0
 RECEIPT ?=
-export RECEIPT
+COMPARE ?= 0
+LIMIT ?=
+export RECEIPT COMPARE LIMIT DRY_RUN
 ARGO_APP ?= ledger
 ARGO_SERVER ?= argocd.brownrook.net
 export ARGO_APP ARGO_SERVER
@@ -131,12 +133,7 @@ receipts-worker-test:
 	@RECEIPT_JOB_DRY_RUN="$(DRY_RUN)" bash scripts/receipt_job.sh worker-test "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)" "$(NODE)"
 
 enrich-products:
-	@set -eu; \
-	kubectl -n "$(KUBE_NAMESPACE)" get cronjob product-enrichment >/dev/null || { echo "Missing CronJob: product-enrichment"; exit 2; }; \
-	kubectl -n "$(KUBE_NAMESPACE)" create job --from=cronjob/product-enrichment "$(ENRICH_JOB)" >/dev/null; \
-	echo "Started $(ENRICH_JOB) from CronJob/product-enrichment"; \
-	kubectl -n "$(KUBE_NAMESPACE)" wait --for=condition=Ready pod -l job-name="$(ENRICH_JOB)" --timeout=120s >/dev/null 2>&1 || true; \
-	kubectl -n "$(KUBE_NAMESPACE)" logs -f job/"$(ENRICH_JOB)"
+	@bash scripts/enrichment_job.sh "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)" "$(ENRICH_JOB)"
 
 test:
 	$(PYTHON) -m pytest -q -m "not integration"

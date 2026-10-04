@@ -62,6 +62,7 @@ nav:
       - Kubernetes log comparison: log-collection-comparison.md
       - Kubernetes log runbook: log-forwarding.md
       - Receipt OpenTelemetry: opentelemetry.md
+      - Product model comparison: product-model-comparison.md
       - Public telemetry demo: live-telemetry-demo.md
       - Grafana Entra SSO: grafana-entra-sso.md
       - Troubleshooting: troubleshooting.md

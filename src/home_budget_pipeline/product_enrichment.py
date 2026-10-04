@@ -316,10 +316,24 @@ def main() -> int:
     parser.add_argument("--threshold", type=float, default=0.85)
     parser.add_argument("--item-id", type=int, action="append", default=[])
     parser.add_argument("--write-db", action="store_true")
+    parser.add_argument("--compare-models", action="store_true",
+                        help="Run OpenAI and Qwen on the same items; store comparison evidence only")
+    parser.add_argument("--receipt", help="Restrict enrichment to a receipt filename or database id")
     args = parser.parse_args()
     dsn = os.environ.get("DATABASE_URL", "")
     api_key = os.environ.get("BRAVE_SEARCH_API_KEY", "")
     if not dsn or not api_key:
         raise RuntimeError("DATABASE_URL and BRAVE_SEARCH_API_KEY are required")
-    print(json.dumps(run(dsn=dsn, api_key=api_key, limit=args.limit, threshold=args.threshold, write_db=args.write_db, item_ids=tuple(args.item_id)), sort_keys=True))
-    return 0
+    item_ids = tuple(args.item_id)
+    if args.receipt:
+        from .receipt_enrichment import resolve_item_ids
+        item_ids = resolve_item_ids(dsn, args.receipt)
+        if not item_ids:
+            raise RuntimeError(f"No line items found for receipt {args.receipt!r}")
+    runner = run
+    if args.compare_models:
+        from .product_comparison import run as runner
+    result = runner(dsn=dsn, api_key=api_key, limit=args.limit, threshold=args.threshold,
+                    write_db=args.write_db, item_ids=item_ids)
+    print(json.dumps(result, sort_keys=True))
+    return 1 if result.get("incomplete", 0) else 0

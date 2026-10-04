@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import urllib.parse
 import urllib.request
 from typing import Optional
 
 from home_budget_pipeline import product_enrichment as core
+
+_core_ai_product_queries = core.ai_product_queries
 
 
 def _log(message: str) -> None:
@@ -85,7 +88,7 @@ def ai_product_queries(item_name: str, merchant: str) -> tuple[str, ...]:
         from openai import OpenAI
 
         client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
-        queries = core.ai_product_queries(item_name, merchant, client=client)[:max_queries]
+        queries = _core_ai_product_queries(item_name, merchant, client=client)[:max_queries]
     except Exception as exc:
         elapsed = time.monotonic() - started
         _log(
@@ -103,6 +106,9 @@ def ai_product_queries(item_name: str, merchant: str) -> tuple[str, ...]:
 
 
 def main() -> int:
+    if "--compare-models" in sys.argv:
+        # Comparison must distinguish search failures from legitimate no matches.
+        return core.main()
     core.brave_search = brave_search
     core.ai_product_queries = ai_product_queries
     _log(
