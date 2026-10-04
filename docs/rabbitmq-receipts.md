@@ -160,7 +160,7 @@ Winnipeg on September 12, 2026, is 10:00 UTC:
 
 ```sh
 kubectl --context brownrook-k3s1 -n home-budget logs \
-  -l app=receipt-worker \
+  -l workload=receipt-worker \
   --since-time='2026-09-12T10:00:00Z' \
   --tail=-1 --timestamps=true --prefix=true
 ```
@@ -299,13 +299,19 @@ kubectl --context brownrook-k3s1 -n home-budget get scaledobject, hpa
 ```
 
 KEDA reads `RABBITMQ_URL` from the worker environment and scales against
-`receipts.v1.work` at one ready message per worker. Git declares a minimum of
-one and maximum of four workers. The Deployment deliberately omits `replicas`,
-so Argo CD does not fight the HPA. Raising the maximum requires a reviewed Git
+`receipts.v1.work` at one ready message per worker. The `receipt-worker` pool is
+pinned to Arsene and scales from one to three workers. Its Deployment omits
+`replicas`, so Argo CD does not fight the HPA. The separate
+`receipt-worker-longbow` Deployment keeps one worker on Longbow, including when
+the queue is empty. Both pools share the same work queue and application
+configuration. Together they run two to four workers across the two agents
+when both nodes are available. Raising the maximum requires a reviewed Git
 change and enough additional capacity for 1 CPU and 8Gi memory per pod. At the
 four-worker ceiling, OCR reserves 4 CPUs and 32Gi memory and is capped at
-8 CPUs and 32Gi memory. The memory request equals the limit so scheduling
-budgets for each worker's full memory allowance; CPU can burst to 2 cores.
+20 CPUs and 32Gi memory: three Arsene workers can each use up to 6 CPU cores,
+and the Longbow worker can use up to 2. The memory request equals the limit so
+scheduling budgets for each worker's full memory allowance. Both pools retain
+a 1-CPU request; actual CPU usage depends on the OCR stage and its parallelism.
 Required node affinity excludes control-plane nodes, protecting k3s1's
 database, broker and cluster services.
 
@@ -341,10 +347,11 @@ and approximately 11Gi allocatable memory), `arsene` (agent, 32 logical CPUs
 and approximately 91Gi), and `longbow` (agent, 4 CPUs and approximately 13Gi).
 All run K3s `v1.36.4+k3s1` on RHEL 10.2. Workers use the same pinned amd64
 application image, reserve 1 CPU and 8Gi memory, and have no GPU requirement.
-Only the agents are eligible for regular OCR workers. Longbow can accommodate
-one 8Gi reservation; extra workers can use Arsene, subject to its other pod
-reservations. Placement is selected by Kubernetes and does not guarantee a
-worker on each agent.
+Only Arsene and Longbow are eligible for regular OCR workers, each through its
+own node-pinned Deployment. Longbow runs one 8Gi reservation; Arsene runs one
+to three, subject to its other pod reservations. This explicit split keeps a
+worker on each agent even when KEDA scales the Arsene pool down. Both pools
+have the `workload=receipt-worker` label for combined status and log commands.
 
 The four-worker maximum is an initial capacity budget based on the October 4
 snapshot: Arsene used approximately 41.5Gi memory, Longbow 1.9Gi, and k3s1
@@ -402,7 +409,7 @@ the queue, scaler, and pods:
 kubectl --context brownrook-k3s1 -n home-budget get scaledobject receipt-worker
 kubectl --context brownrook-k3s1 -n home-budget get hpa
 kubectl --context brownrook-k3s1 -n home-budget get \
-  pod -l app=receipt-worker -w
+  pod -l workload=receipt-worker -w
 ```
 
 In another terminal, publish the disposable batch and follow request-correlated
@@ -412,12 +419,13 @@ logs:
 kubectl --context brownrook-k3s1 -n home-budget exec deploy/receipt-worker -- \
   ledger ocr-cache rebuild --missing-only --verbose
 kubectl --context brownrook-k3s1 -n home-budget logs \
-  -l app=receipt-worker --prefix --follow
+  -l workload=receipt-worker --prefix --follow
 ```
 
 Record that two distinct pod names report `status=active`, batch log lines reach
-`completed=TOTAL/TOTAL`, and the HPA returns to one replica after the configured
-stabilization window. Record pod-to-node placement with `get pods -o wide`:
+`completed=TOTAL/TOTAL`, and the Arsene HPA returns to one replica after the
+configured stabilization window while Longbow retains its one worker.
+Record pod-to-node placement with `get pods -o wide`:
 two pods on one node do not establish cross-node processing. Request logs
 include `worker_host`, `worker_pid`, `worker_node`, source reference, request
 identifier, and outcome. During a disposable run, delete one active worker pod;

@@ -4,6 +4,7 @@ resources:
   - ../../k8s
   - rabbitmq.yaml
   - receipt-worker.yaml
+  - receipt-worker-longbow.yaml
   - receipt-worker-scaler.yaml
   - ocr-results-collector.yaml
 patches:
@@ -18,6 +19,11 @@ replacements:
       - select:
           kind: Deployment
           name: receipt-worker
+        fieldPaths:
+          - spec.template.spec.containers.[name=receipt-worker].image
+      - select:
+          kind: Deployment
+          name: receipt-worker-longbow
         fieldPaths:
           - spec.template.spec.containers.[name=receipt-worker].image
       - select:

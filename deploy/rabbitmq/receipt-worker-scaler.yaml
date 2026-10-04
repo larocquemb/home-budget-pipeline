@@ -11,7 +11,8 @@ spec:
   cooldownPeriod: 600
   initialCooldownPeriod: 60
   minReplicaCount: 1
-  maxReplicaCount: 4
+  # Longbow runs one additional fixed worker, keeping the total ceiling at four.
+  maxReplicaCount: 3
   advanced:
     horizontalPodAutoscalerConfig:
       behavior:
