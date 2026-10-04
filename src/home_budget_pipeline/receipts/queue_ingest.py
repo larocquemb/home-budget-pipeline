@@ -120,14 +120,18 @@ def _cache_batch_progress(cache_dir: Path, message: ReceiptMessage) -> tuple[int
 
 
 def _work_log_context(message: ReceiptMessage | None) -> str:
+    worker = (
+        f"worker_host={socket.gethostname()} worker_pid={os.getpid()} "
+        f"worker_node={os.getenv('K8S_NODE_NAME', 'unknown')}"
+    )
     if message is None:
-        return f"worker_host={socket.gethostname()} worker_pid={os.getpid()}"
+        return worker
     progress = (
         f" batch_id={message.batch_id} progress={message.batch_index}/{message.batch_total}"
         if message.batch_id else ""
     )
     return (
-        f"worker_host={socket.gethostname()} worker_pid={os.getpid()} "
+        f"{worker} "
         f"source_reference={message.source_reference} request_id={message.request_id}{progress}"
     )
 

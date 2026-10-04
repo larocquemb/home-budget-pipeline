@@ -40,6 +40,7 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
         assert env["RABBITMQ_URL"]["valueFrom"]["secretKeyRef"]["name"] == "rabbitmq-secret"
     publisher_env = {entry["name"]: entry for entry in publisher["env"]}
     worker_env = {entry["name"]: entry for entry in worker["env"]}
+    assert worker_env["K8S_NODE_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == "spec.nodeName"
     collector_env = {entry["name"]: entry for entry in collector["env"]}
     assert publisher_env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] == "postgres-secret"
     assert "DATABASE_URL" not in worker_env

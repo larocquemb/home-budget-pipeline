@@ -239,6 +239,7 @@ def test_ocr_worker_produces_results_without_opening_database(tmp_path, monkeypa
 
 
 def test_duplicate_cache_request_reuses_locked_valid_artifact(tmp_path, monkeypatch, caplog):
+    monkeypatch.setenv("K8S_NODE_NAME", "receipt-node-2")
     source = tmp_path / "receipt.pdf"
     source.write_bytes(b"receipt")
     receipt = result_receipt(source)
@@ -282,6 +283,7 @@ def test_duplicate_cache_request_reuses_locked_valid_artifact(tmp_path, monkeypa
     assert marker.is_file()
     assert "worker_host=" in caplog.text
     assert "worker_pid=" in caplog.text
+    assert "worker_node=receipt-node-2" in caplog.text
     assert "source_reference=receipt.pdf" in caplog.text
     assert f"request_id={message.request_id}" in caplog.text
     assert "status=cache_ready" in caplog.text
