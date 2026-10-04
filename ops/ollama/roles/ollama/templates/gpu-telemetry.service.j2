@@ -1,0 +1,16 @@
+[Unit]
+Description=Private Ollama host GPU telemetry
+After=network-online.target ollama.service
+
+[Service]
+User={{ ollama_service_user.stdout | default('root', true) }}
+ExecStart=/usr/bin/python3 /usr/local/libexec/ollama-gpu-telemetry.py --host {{ ollama_listen_address }} --port {{ ollama_gpu_telemetry_port }}
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

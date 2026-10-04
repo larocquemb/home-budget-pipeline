@@ -33,4 +33,10 @@ CREATE TABLE IF NOT EXISTS enrichment.product_comparisons (
 CREATE INDEX IF NOT EXISTS idx_product_comparisons_item
     ON enrichment.product_comparisons (expense_item_id, compared_at DESC);
 
+CREATE TABLE IF NOT EXISTS enrichment.product_comparison_runs (
+    run_uuid UUID PRIMARY KEY,
+    summary JSONB NOT NULL,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 COMMIT;

@@ -42,6 +42,12 @@ spec:
               env:
                 - name: OLLAMA_BASE_URL
                   value: http://192.168.2.201:11434
+                - name: OLLAMA_GPU_METRICS_URL
+                  value: http://192.168.2.201:11435/gpu
+                - name: GPU_SAMPLE_INTERVAL_SECONDS
+                  value: "1"
+                - name: OLLAMA_CONTEXT_TOKENS
+                  value: "4096"
                 - name: OLLAMA_PRODUCT_MODEL
                   value: qwen3:30b
                 - name: COMPARISON_TIMEOUT_SECONDS

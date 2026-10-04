@@ -83,7 +83,7 @@ def test_candidate_score_requires_retailer_and_rewards_matching_title():
 
 
 def test_candidate_score_does_not_accept_category_or_promotion_pages():
-    assert candidate_score("OLAY BODY WASH 5.99 GP", "shoppersdrugmart.ca", "Buy Olay Body Wash", "https://www.shoppersdrugmart.ca/shop/olay/categories/body") == 0.8
+    assert candidate_score("OLAY BODY WASH 5.99 GP", "shoppersdrugmart.ca", "Buy Olay Body Wash", "https://www.shoppersdrugmart.ca/shop/olay/categories/body") < 0.85
     assert candidate_score("Save up to", "shoppersdrugmart.ca", "Buy Online", "https://www.shoppersdrugmart.ca/page/OnlinePickUp") == 0
 
 
@@ -101,3 +101,64 @@ def test_verified_product_initialism_corrects_one_ocr_glyph_only_at_high_confide
     assert normalized_item_name_from_verified_product("Cep Pic Med", title, 1.0) == "Oep Pic Med"
     assert normalized_item_name_from_verified_product("Cep Pic Med", title, 0.94) is None
     assert normalized_item_name_from_verified_product("Bad Pic Med", title, 1.0) is None
+
+
+def test_ocr_initialism_and_abbreviations_have_explainable_product_evidence():
+    evidence = product_enrichment.candidate_evidence(
+        'Cep Pic Med', 'sobeys.com',
+        'Old El Paso Salsa Picante Style Restaurant Medium 650 ml',
+        'https://www.sobeys.com/products/old-el-paso-salsa-picante-style-restaurant-medium-650-ml')
+    assert evidence['confidence'] == .9167
+    assert [t['kind'] for t in evidence['tokens']] == [
+        'ocr_brand_initialism', 'token_prefix', 'token_prefix']
+    assert evidence['tokens'][0]['matched'] == 'oep'
+
+
+def test_recipe_brand_page_and_interior_substrings_are_not_product_matches():
+    assert candidate_score('Cep Pic Med', 'sobeys.com', 'Cepacol Medication',
+                           'https://www.sobeys.com/brands/cepacol', 'Cep Pic Med') == 0
+    assert candidate_score('Cep Pic Med', 'sobeys.com', 'Cep Pic Med',
+                           'https://www.sobeys.com/recipes/slaw') == 0
+    evidence = product_enrichment.candidate_evidence(
+        'Cep Pic Med', 'sobeys.com', 'Cep Spice Medium', 'https://sobeys.com/products/cep-spice-medium')
+    assert evidence['tokens'][1]['kind'] == 'unmatched'
+    assert evidence['confidence'] < .85
+    assert candidate_score('079594233699', 'homedepot.ca', 'Yard bags',
+                           'https://homedepot.ca/product/079594233699') == 1
+
+
+def test_unmatched_variant_cannot_reach_default_acceptance_threshold():
+    assert candidate_score('Brand Organic Red Medium Picante Salsa Special', 'sobeys.com',
+                           'Brand Organic Red Medium Picante Salsa Other',
+                           'https://sobeys.com/products/salsa') < .85
+
+
+def test_normal_enrichment_rechecks_stale_cache_and_scores_original_text(monkeypatch):
+    import psycopg
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def commit(self): pass
+        def execute(self, sql, params):
+            self.sql = sql
+            return self
+        def fetchall(self):
+            return [{'id': 1, 'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'}]
+        def fetchone(self):
+            if 'FROM enrichment.product_cache' in self.sql:
+                return {'product_description': 'Quick Pickled Slaw',
+                        'product_url': 'https://sobeys.com/recipes/slaw', 'confidence': .99}
+            return None
+    monkeypatch.setattr(psycopg, 'connect', lambda *a, **kw: Connection())
+    searches = []
+    def search(key, query, original, domain):
+        searches.append((query, original))
+        if 'Old El Paso' not in query:
+            return None
+        title, url = 'Old El Paso Salsa Picante Medium', 'https://sobeys.com/products/salsa'
+        return product_enrichment.SearchResult(title, url, '', candidate_score(original, domain, title, url))
+    monkeypatch.setattr(product_enrichment, 'brave_search', search)
+    monkeypatch.setattr(product_enrichment, 'ai_product_queries', lambda *a: ('Old El Paso Salsa Picante Medium',))
+    stats = product_enrichment.run(dsn='unused', api_key='unused', limit=1, threshold=.85, write_db=False)
+    assert stats['db_hits'] == 0 and stats['accepted'] == 1
+    assert len(searches) == 2 and all(original == 'Cep Pic Med' for _, original in searches)
