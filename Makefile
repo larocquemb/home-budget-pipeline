@@ -24,6 +24,7 @@ LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
 .PHONY: help docs-build docs-serve test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
 
 .PHONY: receipts-publish receipts-worker-test
+.PHONY: ollama-gitops-syntax ollama-gitops-check ollama-gitops-apply
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
@@ -71,6 +72,15 @@ monitoring-gitops-check:
 
 monitoring-gitops-apply:
 	@$(MONITORING_GITOPS) apply
+
+ollama-gitops-syntax:
+	@bash scripts/ollama_gitops.sh syntax
+
+ollama-gitops-check:
+	@bash scripts/ollama_gitops.sh check
+
+ollama-gitops-apply:
+	@bash scripts/ollama_gitops.sh apply
 
 log-collection-compare:
 	@test -n "$(MARKER)" || (echo "Usage: make log-collection-compare MARKER=NAME [SINCE=1h]" >&2; exit 2)

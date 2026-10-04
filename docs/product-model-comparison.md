@@ -53,20 +53,20 @@ ollama list
 ss -ltnp | grep 11434
 ```
 
-The job must reach the service from Kubernetes. If Ollama only listens on
-localhost, bind it to Arsene's LAN address using its systemd override:
+The job must reach the service from Kubernetes. Manage Arsene's listener and
+source-restricted firewalld rules through the Git-controlled Ansible playbook:
 
 ```sh
-sudo mkdir -p /etc/systemd/system/ollama.service.d
-printf '[Service]\nEnvironment="OLLAMA_HOST=192.168.2.201:11434"\n' |
-  sudo tee /etc/systemd/system/ollama.service.d/listen.conf
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
+make ollama-gitops-check
+make ollama-gitops-apply
 ```
 
-Allow TCP 11434 from the cluster through the host's managed firewall if needed;
-keep this unauthenticated Ollama endpoint on the private network. Check
-reachability from your Mac before running the job:
+Run these Make commands on your Mac. The role configures the existing service at
+`192.168.2.201:11434`; when firewalld is active it allows the private LAN and K3s
+pod network in the default zone. For a dedicated LAN zone, set
+`ollama_firewall_zone` in `ops/ollama/inventory/production.yml`. Other firewall
+implementations require their own managed rule. Keep the unauthenticated endpoint
+on the private network. Check reachability from your Mac before running the job:
 
 ```sh
 curl --fail --max-time 5 http://192.168.2.201:11434/api/tags

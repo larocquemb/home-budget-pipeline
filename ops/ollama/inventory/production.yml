@@ -1,0 +1,11 @@
+all:
+  children:
+    ollama_hosts:
+      hosts:
+        arsene:
+          ansible_host: 192.168.2.201
+          ansible_user: paul
+          ollama_listen_address: 192.168.2.201
+          ollama_allowed_sources:
+            - 192.168.2.0/24
+            - 10.42.0.0/16

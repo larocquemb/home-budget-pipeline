@@ -94,6 +94,7 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make dev-db-reset` | Rebuild the local development database configured in `.env.dev`. |
 | `make status` | Report deployment and recent workflow status. |
 | `make enrich-products` | Start and follow a one-off Kubernetes product-enrichment job. |
+| `make ollama-gitops-check` / `make ollama-gitops-apply` | Review/reconcile Arsene's Ollama LAN listener and source-restricted firewalld access. |
 | `make enrich-products COMPARE=1 LIMIT=10 RECEIPT='receipt.pdf'` | Compare OpenAI and Qwen matches without changing accepted products; see [model comparison](product-model-comparison.md). |
 | `make receipts-publish NODE=longbow` | Start and follow a receipt publisher Job on Longbow using the live `receipt-processor` CronJob. Omit `NODE` to let Kubernetes select a node. |
 | `make receipts-worker-test NODE=longbow` | Run a temporary OCR consumer on Longbow using the live `receipt-worker` Deployment configuration. Ctrl+C deletes the Job and initiates graceful worker shutdown. |

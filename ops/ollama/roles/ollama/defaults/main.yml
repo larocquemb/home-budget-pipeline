@@ -1,0 +1,4 @@
+---
+ollama_port: 11434
+# Empty means use firewalld's default zone; override for a dedicated LAN zone.
+ollama_firewall_zone: ""
