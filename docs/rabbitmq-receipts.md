@@ -331,6 +331,56 @@ removes at most one pod every five minutes. The 15-minute termination grace
 period lets a SIGTERM'd worker finish its current delivery before exiting, and
 RabbitMQ retains any delivery that is not acknowledged.
 
+### Additional receipt-worker nodes
+
+The October 2026 cluster has two Ready amd64 nodes: `k3s1` (server) and
+`arsene` (agent, 32 logical CPUs and approximately 91Gi allocatable memory).
+Both run K3s `v1.36.4+k3s1` on RHEL 10.2. Workers use the same pinned amd64
+application image, require 1 CPU and 4Gi memory, and have no GPU requirement.
+Keep the two-worker maximum until representative OCR measurements justify a
+different limit. Check node allocations as well as free memory before adding
+workers; the OCR memory limit is 8Gi per pod.
+
+For a reproducible replacement agent, use a unique hostname, an SSD-backed
+Linux installation, and the same K3s version as the server. On RHEL 10, install
+`kernel-modules-extra` and the K3s SELinux policy, retaining SELinux enforcement.
+Allow agent-to-server TCP 6443, inter-node VXLAN UDP 8472, and inter-node kubelet
+TCP 10250 on the private LAN. Allow SMB TCP 445 to the file server. Follow the
+[K3s requirements](https://docs.k3s.io/installation/requirements) for the host
+firewall and actual cluster pod/service CIDRs.
+
+Provision the agent join token through the approved secrets mechanism into a
+root-owned `0600` file at `/etc/rancher/k3s/agent-token`. Do not put it in Git or
+shell history. Download and review the installer, then run it on the agent:
+
+```sh
+curl -fsSL https://get.k3s.io -o /tmp/install-k3s.sh
+sudo env INSTALL_K3S_VERSION='v1.36.4+k3s1' sh /tmp/install-k3s.sh agent \
+  --server https://k3s1.brownrook.net:6443 \
+  --token-file /etc/rancher/k3s/agent-token --node-name arsene
+```
+
+This is the [K3s agent join procedure](https://docs.k3s.io/quick-start) with a
+pinned version and file-based token. Use the current server version and the
+replacement node's unique name when rebuilding later. Verify `Ready`,
+`kubernetes.io/arch=amd64`, sufficient allocatable resources, and no taint that
+prevents receipt-worker scheduling. The SMB CSI node DaemonSet must be Ready on
+the new node. A disposable pod using `home-budget-data` must resolve cluster
+DNS, connect to RabbitMQ, and read/write its own test directory on the RWX
+volume. Verify a held receipt lock prevents another node from acquiring it,
+then verify acquisition after release and valid cache checksums from both
+nodes. Never test by editing a production receipt or its cache.
+
+To retire an agent, drain it while watching unfinished RabbitMQ deliveries,
+using `kubectl --context brownrook-k3s1 drain NODE --ignore-daemonsets`.
+Resolve any drain blocker rather than forcing production data loss. Once
+replacement workers are Ready and their unacknowledged work is recovered, stop
+the agent service, run `/usr/local/bin/k3s-agent-uninstall.sh` on the retired
+host, and delete its Node object. The
+[uninstall procedure](https://docs.k3s.io/installation/uninstall) removes local
+K3s data; it does not remove the shared SMB receipt volume. For temporary
+maintenance, use drain followed by `uncordon`, without uninstalling the agent.
+
 ### Autoscaling validation
 
 Use a cache-only batch with at least four test receipts. In one terminal, watch
@@ -355,7 +405,10 @@ kubectl --context brownrook-k3s1 -n home-budget logs \
 
 Record that two distinct pod names report `status=active`, batch log lines reach
 `completed=TOTAL/TOTAL`, and the HPA returns to one replica after the configured
-stabilization window. During a disposable run, delete one active worker pod;
+stabilization window. Record pod-to-node placement with `get pods -o wide`:
+two pods on one node do not establish cross-node processing. Request logs
+include `worker_host`, `worker_pid`, `worker_node`, source reference, request
+identifier, and outcome. During a disposable run, delete one active worker pod;
 its unacknowledged request must be processed by the replacement pod. Confirm
 the cache checksum marker remains valid and canonical extraction rows are
 unchanged. Do not perform the interruption test against irreplaceable input or
