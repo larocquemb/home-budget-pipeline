@@ -57,8 +57,10 @@ class ResultTopology:
         return self.prefix + ".dead"
 
 
-def declare_result_topology(channel, topology: ResultTopology) -> None:
-    """Declare durable result, bounded-retry, and diagnostic DLQ queues."""
+def declare_result_topology(
+    channel, topology: ResultTopology, *, enable_confirms: bool = True,
+) -> None:
+    """Declare result queues; enable confirms unless the caller already did so."""
     for name in (topology.work, topology.retry, topology.dead):
         channel.exchange_declare(exchange=name, exchange_type="direct", durable=True)
     for name in (topology.dead, topology.work, topology.retry):
@@ -80,7 +82,8 @@ def declare_result_topology(channel, topology: ResultTopology) -> None:
             arguments["x-message-ttl"] = topology.retry_delay_ms
         channel.queue_declare(queue=name, durable=True, arguments=arguments)
         channel.queue_bind(queue=name, exchange=name, routing_key="ocr-result")
-    channel.confirm_delivery()
+    if enable_confirms:
+        channel.confirm_delivery()
 
 
 def publish_result(channel, exchange: str, message: OcrResultMessage) -> None:

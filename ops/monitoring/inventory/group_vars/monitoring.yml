@@ -6,11 +6,15 @@ monitoring_loki_hostname: monitoring.idc.brownrook.net
 monitoring_loki_port: 3100
 monitoring_loki_allowed_ipv4_sources:
   - 192.168.2.230/32
+  - 192.168.2.201/32
+  - 192.168.2.175/32
 
 monitoring_otel_hostname: monitoring.idc.brownrook.net
 monitoring_otel_port: 4317
 monitoring_otel_allowed_ipv4_sources:
   - 192.168.2.230/32
+  - 192.168.2.201/32
+  - 192.168.2.175/32
 
 monitoring_kubernetes_namespace: home-budget
 monitoring_kubernetes_admin_context: brownrook-k3s1
@@ -39,3 +43,4 @@ monitoring_grafana_public_demo_access_token: "08396daff846416b806d71cd965a6c6e"
 monitoring_grafana_public_proxy_ipv4_sources:
   - 192.168.2.210/32
   - 192.168.2.230/32
+  - 192.168.2.201/32
