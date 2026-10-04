@@ -58,7 +58,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "avg_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider,confidence | unwrap confidence | __error__=\"\" [$__range]) by (provider)",
+                        "expr": "avg_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider,confidence | unwrap confidence | __error__=\"\" [$__range]) by (provider)",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -121,7 +121,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | accepted=\"true\" | keep provider [$__range])) or (sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider [$__range])) * 0)",
+                        "expr": "sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | accepted=\"true\" | keep provider [$__range])) or (sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider [$__range])) * 0)",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -184,7 +184,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum by (winner) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_comparison\" | winner!=\"incomplete\" | keep winner [$__range]))",
+                        "expr": "sum by (winner) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_comparison\" | winner!=\"incomplete\" | keep winner [$__range]))",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -247,7 +247,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum by (agreement) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_comparison\" | winner!=\"incomplete\" | keep agreement [$__range]))",
+                        "expr": "sum by (agreement) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_comparison\" | winner!=\"incomplete\" | keep agreement [$__range]))",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -310,7 +310,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "avg_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider,model_seconds | unwrap model_seconds | __error__=\"\" [$__range]) by (provider)",
+                        "expr": "avg_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider,model_seconds | unwrap model_seconds | __error__=\"\" [$__range]) by (provider)",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -373,7 +373,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "max_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | provider=\"qwen\" | gpu_vram_bytes!=\"\" | keep provider,gpu_vram_bytes | unwrap gpu_vram_bytes | __error__=\"\" [$__range]) by (provider)",
+                        "expr": "max_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | provider=\"qwen\" | gpu_vram_bytes!=\"\" | keep provider,gpu_vram_bytes | unwrap gpu_vram_bytes | __error__=\"\" [$__range]) by (provider)",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -436,7 +436,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum by (provider,error_type) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status=\"error\" | keep provider,error_type [$__range]))",
+                        "expr": "sum by (provider,error_type) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status=\"error\" | keep provider,error_type [$__range]))",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -499,7 +499,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "(sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | accepted=\"true\" | keep provider [$__range])) or (sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider [$__range])) * 0)) / sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider [$__range]))",
+                        "expr": "(sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | accepted=\"true\" | keep provider [$__range])) or (sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider [$__range])) * 0)) / sum by (provider) (count_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | status!=\"error\" | keep provider [$__range]))",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -562,7 +562,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_comparison\" | line_format \"{% raw %}{{.item_name}} | receipt={{.receipt}} | OpenAI={{.openai_confidence}} Qwen={{.qwen_confidence}} | winner={{.winner}} delta={{.confidence_delta}} sameURL={{.agreement}} | item={{.item_id}} run={{.run_uuid}}{% endraw %}\"",
+                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_comparison\" | line_format \"{% raw %}{{.item_name}} | receipt={{.receipt}} | OpenAI={{.openai_confidence}} Qwen={{.qwen_confidence}} | winner={{.winner}} delta={{.confidence_delta}} sameURL={{.agreement}} | item={{.item_id}} run={{.run_uuid}}{% endraw %}\"",
                         "queryType": "range",
                         "legendFormat": ""
                       }
@@ -621,7 +621,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{.message}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\"",
+                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\"",
                         "queryType": "range",
                         "legendFormat": ""
                       }

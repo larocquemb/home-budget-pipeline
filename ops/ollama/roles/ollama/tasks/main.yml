@@ -1,0 +1,133 @@
+---
+- name: Read host services
+  ansible.builtin.service_facts:
+
+- name: Require the existing Ollama installation
+  ansible.builtin.assert:
+    that:
+      - "'ollama.service' in ansible_facts.services"
+      - ollama_listen_address == ansible_host
+      - ollama_allowed_sources | length > 0
+    fail_msg: Install Ollama first and configure its private host address and allowed sources in the inventory.
+
+- name: Create Ollama systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/ollama.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Manage the private Ollama listener
+  ansible.builtin.template:
+    src: listen.conf.j2
+    dest: /etc/systemd/system/ollama.service.d/listen.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Ollama
+
+- name: Configure source restricted access when firewalld is running
+  when: (ansible_facts.services.get('firewalld.service', {})).get('state', '') == 'running'
+  block:
+    - name: Read the default firewall zone
+      ansible.builtin.command:
+        argv: [firewall-cmd, --get-default-zone]
+      register: ollama_default_zone
+      changed_when: false
+      check_mode: false
+
+    - name: Define Ollama firewall rules
+      ansible.builtin.set_fact:
+        ollama_effective_zone: "{{ ollama_firewall_zone | default('', true) or ollama_default_zone.stdout }}"
+        ollama_firewall_rules: []
+
+    - name: Build rules for the approved private networks
+      ansible.builtin.set_fact:
+        ollama_firewall_rules: >-
+          {{ ollama_firewall_rules + ['rule family="ipv4" source address="' + item
+             + '" port port="' + (ollama_port | string) + '" protocol="tcp" accept'] }}
+      loop: "{{ ollama_allowed_sources }}"
+
+    - name: Check persistent Ollama firewall rules
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - "--zone={{ ollama_effective_zone }}"
+          - --permanent
+          - "--query-rich-rule={{ item }}"
+      loop: "{{ ollama_firewall_rules }}"
+      register: ollama_persistent_rules
+      changed_when: false
+      failed_when: ollama_persistent_rules.rc not in [0, 1]
+      check_mode: false
+
+    - name: Add missing persistent Ollama firewall rules
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - "--zone={{ ollama_effective_zone }}"
+          - --permanent
+          - "--add-rich-rule={{ item.item }}"
+      loop: "{{ ollama_persistent_rules.results }}"
+      when: item.rc == 1
+      changed_when: true
+
+    - name: Check active Ollama firewall rules
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - "--zone={{ ollama_effective_zone }}"
+          - "--query-rich-rule={{ item }}"
+      loop: "{{ ollama_firewall_rules }}"
+      register: ollama_active_rules
+      changed_when: false
+      failed_when: ollama_active_rules.rc not in [0, 1]
+      check_mode: false
+
+    - name: Add missing active Ollama firewall rules
+      ansible.builtin.command:
+        argv:
+          - firewall-cmd
+          - "--zone={{ ollama_effective_zone }}"
+          - "--add-rich-rule={{ item.item }}"
+      loop: "{{ ollama_active_rules.results }}"
+      when: item.rc == 1
+      changed_when: true
+
+    - name: Report missing firewall rules in check mode
+      ansible.builtin.debug:
+        msg: "Would add Ollama access in {{ ollama_effective_zone }}: {{ item.item }}"
+      loop: "{{ ollama_persistent_rules.results + ollama_active_rules.results }}"
+      when:
+        - ansible_check_mode
+        - item.rc == 1
+      changed_when: true
+
+- name: Apply listener changes before verifying the API
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure Ollama is enabled and running
+  ansible.builtin.systemd_service:
+    name: ollama
+    enabled: true
+    state: started
+
+- name: Verify the Ollama API on its private address
+  ansible.builtin.uri:
+    url: "http://{{ ollama_listen_address }}:{{ ollama_port }}/api/tags"
+    return_content: true
+    use_proxy: false
+    status_code: 200
+  register: ollama_api
+  retries: 10
+  delay: 2
+  until: ollama_api.status == 200
+  when: not ansible_check_mode
+
+- name: Confirm Ollama returned its model inventory
+  ansible.builtin.assert:
+    that:
+      - ollama_api.json.models is defined
+    quiet: true
+  when: not ansible_check_mode

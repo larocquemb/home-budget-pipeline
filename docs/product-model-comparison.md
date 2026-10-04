@@ -5,8 +5,11 @@ receipt items**. This is product enrichment after OCR, not a comparison of OCR
 engines. It calls OpenAI and Arsene's Ollama service on every selected item,
 including items already enriched. It does not wait for the normal AI fallback.
 
-Both models receive identical prompts and JSON schemas and may propose at most
-three searches. Brave retrieves retailer evidence. The existing match scorer
+Both models receive identical prompts and JSON schemas and must propose one to
+three searches. An empty response gets one retry with a shared clarification;
+two empty responses are recorded as a model-output error with null confidence,
+not a zero-score product match. Neither provider borrows the other's proposals.
+Brave retrieves retailer evidence. The existing match scorer
 evaluates that evidence against the **original item text**, not the model's
 expanded words. Identical queries share their search response within an item.
 Confidence is a token/barcode matching heuristic, **not a calibrated probability
@@ -44,29 +47,41 @@ It uses the existing Loki datasource and Fluent Bit logs. Select a time range
 covering the experiment; paste its `run_uuid` into the dashboard filter to isolate
 one run. Logs are limited by Loki retention, while the database pairs remain.
 
+If panels show no data, set the time range to **Last 6 hours** and the Run UUID
+filter to `.*`. In Grafana Explore, select Loki and check the raw events:
+
+```logql
+{namespace="home-budget", container="enrich", collection="fluent-bit"}
+  |= "enrichment_model_result"
+  | json
+```
+
+Fluent Bit emits the application JSON directly. The dashboard also handles
+wrapped `message` JSON by unwrapping only when that field exists. If Explore
+finds no events, check log collection before rerunning the experiment.
+
 ## Make Ollama reachable
 
-On Arsene, inspect the listener and installed model:
+On Arsene, inspect the listener:
 
 ```sh
-ollama list
 ss -ltnp | grep 11434
 ```
 
-The job must reach the service from Kubernetes. If Ollama only listens on
-localhost, bind it to Arsene's LAN address using its systemd override:
+The job must reach the service from Kubernetes. Manage Arsene's listener and
+source-restricted firewalld rules through the Git-controlled Ansible playbook:
 
 ```sh
-sudo mkdir -p /etc/systemd/system/ollama.service.d
-printf '[Service]\nEnvironment="OLLAMA_HOST=192.168.2.201:11434"\n' |
-  sudo tee /etc/systemd/system/ollama.service.d/listen.conf
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
+make ollama-gitops-check
+make ollama-gitops-apply
 ```
 
-Allow TCP 11434 from the cluster through the host's managed firewall if needed;
-keep this unauthenticated Ollama endpoint on the private network. Check
-reachability from your Mac before running the job:
+Run these Make commands on your Mac. The role configures the existing service at
+`192.168.2.201:11434`; when firewalld is active it allows the private LAN and K3s
+pod network in the default zone. For a dedicated LAN zone, set
+`ollama_firewall_zone` in `ops/ollama/inventory/production.yml`. Other firewall
+implementations require their own managed rule. Keep the unauthenticated endpoint
+on the private network. Check reachability from your Mac before running the job:
 
 ```sh
 curl --fail --max-time 5 http://192.168.2.201:11434/api/tags
@@ -79,9 +94,13 @@ The caller Pod needs no GPU allocation; Ollama on Arsene owns the RTX 3090.
 Check actual offload on Arsene during the experiment:
 
 ```sh
+export OLLAMA_HOST=http://192.168.2.201:11434
 ollama ps
-watch -n 1 nvidia-smi
+watch -n 1 'ollama ps; nvidia-smi'
 ```
+
+The CLI defaults to localhost. Set `OLLAMA_HOST` to the managed LAN listener;
+do not start a second `ollama serve` process to inspect the running service.
 
 The dashboard's GPU model memory panel comes from Ollama `/api/ps` `size_vram`;
 it is observed allocation, not GPU utilization or proof of a speedup.
@@ -104,7 +123,9 @@ make enrich-products COMPARE=1 LIMIT=10 \
 
 `LIMIT` caps the selected line items even for a receipt. Comparison defaults to
 10 items; normal enrichment keeps its existing default of 100. Each comparison
-item uses two model calls and up to six Brave searches. OpenAI and Brave usage
+item normally uses two model calls and up to six Brave searches. Each provider
+may retry an empty response once; token totals and latency include that retry.
+OpenAI and Brave usage
 can incur charges. Run one experiment at a time to keep GPU and service load
 bounded. The Make target follows logs and reports completion/failure; Ctrl+C
 stops log following but leaves this finite Job running.

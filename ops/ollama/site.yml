@@ -1,0 +1,6 @@
+---
+- name: Configure the existing Ollama service for product comparisons
+  hosts: ollama_hosts
+  become: true
+  roles:
+    - ollama
