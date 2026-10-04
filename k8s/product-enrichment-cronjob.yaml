@@ -32,7 +32,20 @@ spec:
                 - --threshold
                 - "0.85"
                 - --write-db
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 512Mi
               env:
+                - name: OLLAMA_BASE_URL
+                  value: http://192.168.2.201:11434
+                - name: OLLAMA_PRODUCT_MODEL
+                  value: qwen3:30b
+                - name: COMPARISON_TIMEOUT_SECONDS
+                  value: "180"
                 - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:

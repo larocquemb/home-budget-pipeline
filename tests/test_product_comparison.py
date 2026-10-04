@@ -1,0 +1,148 @@
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from jinja2 import Environment, StrictUndefined
+
+from home_budget_pipeline import product_comparison as comparison
+from home_budget_pipeline import product_enrichment as core
+
+
+def test_queries_are_bounded_and_deduplicated():
+    assert comparison.parse_queries('{"queries":["Yard bags","Yard bags"]}') == ["Yard bags"]
+    for payload in ({"queries": [1]}, {"queries": ["a"] * 4}, {"queries": "a"}):
+        with pytest.raises(ValueError):
+            comparison.parse_queries(json.dumps(payload))
+
+
+def test_both_models_share_prompt_search_and_original_item_scoring(monkeypatch):
+    prompts, searches = [], []
+    def generate(provider, text):
+        prompts.append((provider, text))
+        return {"queries": ["Kraft yard bags"], "model": provider}
+    def search(key, query, item, domain):
+        searches.append((query, item, domain))
+        return core.SearchResult("Kraft yard bags", "https://homedepot.ca/product/bags", "", .95)
+    monkeypatch.setattr(comparison, "generate", generate)
+    monkeypatch.setattr(core, "brave_search", search)
+    cache = {}
+    results = [comparison.evaluate(p, "5PK YARD BAG", "Home Depot", "secret", .85, cache)
+               for p in ("openai", "qwen")]
+    assert prompts[0][1] == prompts[1][1]
+    assert searches == [("site:homedepot.ca Kraft yard bags", "5PK YARD BAG", "homedepot.ca")]
+    assert all(r["accepted"] for r in results)
+    assert comparison.compare(results) == {"winner": "tie", "confidence_delta": 0., "agreement": True}
+
+
+def test_failures_are_not_zero_scores_or_wins_and_secrets_are_not_logged(monkeypatch):
+    def fail(*args):
+        raise TimeoutError("api-key-secret")
+    monkeypatch.setattr(comparison, "generate", fail)
+    error = comparison.evaluate("qwen", "a", "Sobeys", "secret", .85, {})
+    assert error["confidence"] is None
+    assert error["error_type"] == "TimeoutError"
+    assert "api-key-secret" not in json.dumps(error)
+    success = {"status": "matched", "confidence": .95, "candidate_url": "https://sobeys.com/products/a"}
+    assert comparison.compare([success, error])["winner"] == "incomplete"
+
+
+def test_search_failure_marks_provider_incomplete(monkeypatch):
+    monkeypatch.setattr(comparison, "generate", lambda *a: {"queries": ["Yard bags"]})
+    def fail(*args):
+        raise TimeoutError()
+    monkeypatch.setattr(core, "brave_search", fail)
+    assert comparison.evaluate("openai", "Yard bags", "Home Depot", "key", .85, {})["status"] == "error"
+
+
+def test_unmatched_is_complete_and_different_products_can_tie(monkeypatch):
+    monkeypatch.setattr(comparison, "generate", lambda *a: {"queries": []})
+    result = comparison.evaluate("qwen", "Yard bags", "Home Depot", "key", .85, {})
+    assert result["status"] == "no_match"
+    assert result["confidence"] == 0
+    assert comparison.compare([result, result])["agreement"] is False
+    left = {"status": "matched", "confidence": .95, "candidate_url": "https://sobeys.com/products/a"}
+    right = {**left, "candidate_url": "https://sobeys.com/products/b"}
+    assert comparison.compare([left, right]) == {"winner": "tie", "confidence_delta": 0., "agreement": False}
+
+
+def test_ollama_structured_chat_observes_gpu_memory(monkeypatch):
+    calls = []
+    class Response:
+        def __init__(self, data): self.data = data
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self): return json.dumps(self.data).encode()
+    def urlopen(request, timeout):
+        calls.append((request, timeout))
+        if isinstance(request, str):
+            return Response({"models": [{"name": "qwen3:30b", "size_vram": 18000000000}]})
+        return Response({"message": {"content": '{"queries":["Yard bags"]}'},
+                         "prompt_eval_count": 42, "eval_count": 12})
+    monkeypatch.setattr(comparison.urllib.request, "urlopen", urlopen)
+    result = comparison.generate("qwen", "same prompt")
+    request = json.loads(calls[0][0].data)
+    assert request["format"] == comparison.QUERY_SCHEMA
+    assert request["messages"][0]["content"] == "same prompt"
+    assert request["stream"] is False and request["think"] is False
+    assert result["gpu_vram_bytes"] == 18000000000
+    assert result["input_tokens"] == 42
+
+
+def test_openai_uses_same_schema_and_reports_usage(monkeypatch):
+    import openai
+    calls = []
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(output_text='{"queries":["Yard bags"]}',
+                               usage=SimpleNamespace(input_tokens=22, output_tokens=11))
+    monkeypatch.setattr(openai, "OpenAI", lambda **kw: SimpleNamespace(responses=SimpleNamespace(create=create)))
+    result = comparison.generate("openai", "same prompt")
+    assert calls[0]["text"]["format"]["schema"] == comparison.QUERY_SCHEMA
+    assert calls[0]["input"] == "same prompt"
+    assert result["output_tokens"] == 11
+
+
+def test_run_persists_comparisons_only_and_emits_paired_events(monkeypatch, capsys):
+    import psycopg
+    calls = []
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def commit(self): pass
+        def execute(self, sql, params):
+            calls.append((sql, params))
+            return self
+        def fetchall(self):
+            return [{"id": 42, "item_name": "Yard bags", "store_name": "Home Depot",
+                     "receipt_filename": "receipt.pdf", "source_reference": None}]
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setattr(psycopg, "connect", lambda *a, **kw: Connection())
+    monkeypatch.setattr(comparison, "evaluate", lambda provider, *a: {
+        "provider": provider, "status": "matched", "confidence": .95,
+        "accepted": True, "candidate_url": "https://homedepot.ca/product/bags"})
+    stats = comparison.run(dsn="unused", api_key="unused", limit=1, threshold=.85, write_db=True)
+    assert stats["compared"] == 1 and stats["incomplete"] == 0
+    mutations = [sql for sql, _ in calls if not sql.lstrip().startswith("SELECT")]
+    assert len(mutations) == 1 and "INSERT INTO enrichment.product_comparisons" in mutations[0]
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [e["event"] for e in events] == [
+        "enrichment_comparison_started", "enrichment_model_started", "enrichment_model_result",
+        "enrichment_model_started", "enrichment_model_result", "enrichment_model_comparison"]
+    assert all(e["run_uuid"] == stats["run_uuid"] for e in events)
+
+
+def test_dashboard_renders_wrapped_fluent_bit_json_and_excludes_errors():
+    root = Path(__file__).resolve().parents[1]
+    template = (root / "ops/monitoring/roles/monitoring/templates/grafana-product-comparison-dashboard.json.j2").read_text()
+    rendered = Environment(undefined=StrictUndefined).from_string(template).render(
+        monitoring_grafana_home_budget_folder_uid_effective="home-budget",
+        monitoring_grafana_datasource_uid="loki")
+    dashboard = json.loads(rendered)
+    assert dashboard["metadata"]["annotations"]["grafana.app/folder"] == "home-budget"
+    panels = dashboard["spec"]["elements"]
+    expressions = [p["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]["expr"] for p in panels.values()]
+    assert all('| line_format "{{.message}}" | json' in expr for expr in expressions)
+    assert 'status!="error"' in expressions[0]
+    assert 'winner!="incomplete"' in expressions[2]
+    assert 'gpu_vram_bytes' in expressions[5]

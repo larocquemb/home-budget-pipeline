@@ -21,4 +21,16 @@ CREATE TABLE IF NOT EXISTS enrichment.product_cache (
 CREATE INDEX IF NOT EXISTS idx_product_cache_lookup
     ON enrichment.product_cache (merchant_key, receipt_text_norm, status, confidence DESC);
 
+-- Append-only experiments: never update canonical product fields or accepted cache.
+CREATE TABLE IF NOT EXISTS enrichment.product_comparisons (
+    id BIGSERIAL PRIMARY KEY,
+    run_uuid UUID NOT NULL,
+    expense_item_id BIGINT NOT NULL REFERENCES budget.expense_items(id) ON DELETE CASCADE,
+    payload JSONB NOT NULL,
+    compared_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (run_uuid, expense_item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_product_comparisons_item
+    ON enrichment.product_comparisons (expense_item_id, compared_at DESC);
+
 COMMIT;
