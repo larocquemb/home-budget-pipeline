@@ -19,6 +19,14 @@ spec:
         app: receipt-worker
     spec:
       terminationGracePeriodSeconds: 900
+      # Keep OCR memory pressure away from the control plane, database and broker.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: OnRootMismatch
@@ -59,9 +67,10 @@ spec:
           resources:
             requests:
               cpu: "1"
-              memory: 4Gi
+              # Reserve the full memory limit so two workers cannot fit Longbow.
+              memory: 8Gi
             limits:
-              cpu: "4"
+              cpu: "2"
               memory: 8Gi
           volumeMounts:
             - name: receipt-data

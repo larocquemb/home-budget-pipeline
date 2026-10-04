@@ -300,11 +300,14 @@ kubectl --context brownrook-k3s1 -n home-budget get scaledobject, hpa
 
 KEDA reads `RABBITMQ_URL` from the worker environment and scales against
 `receipts.v1.work` at one ready message per worker. Git declares a minimum of
-one and maximum of two workers. The Deployment deliberately omits `replicas`,
+one and maximum of four workers. The Deployment deliberately omits `replicas`,
 so Argo CD does not fight the HPA. Raising the maximum requires a reviewed Git
-change and enough additional capacity for 1 CPU and 4Gi memory per pod. The
-two-worker ceiling reserves 2 CPUs and 8Gi memory, while the 4-CPU limit per pod
-allows unused node CPU to accelerate an individual OCR operation.
+change and enough additional capacity for 1 CPU and 8Gi memory per pod. At the
+four-worker ceiling, OCR reserves 4 CPUs and 32Gi memory and is capped at
+8 CPUs and 32Gi memory. The memory request equals the limit so scheduling
+budgets for each worker's full memory allowance; CPU can burst to 2 cores.
+Required node affinity excludes control-plane nodes, protecting k3s1's
+database, broker and cluster services.
 
 The RabbitMQ overlays explicitly set `receipt-processor.spec.suspend: false`.
 Once synced, the **`receipt-processor` CronJob** runs `ledger receipts publish`
@@ -333,13 +336,22 @@ RabbitMQ retains any delivery that is not acknowledged.
 
 ### Additional receipt-worker nodes
 
-The October 2026 cluster has two Ready amd64 nodes: `k3s1` (server) and
-`arsene` (agent, 32 logical CPUs and approximately 91Gi allocatable memory).
-Both run K3s `v1.36.4+k3s1` on RHEL 10.2. Workers use the same pinned amd64
-application image, require 1 CPU and 4Gi memory, and have no GPU requirement.
-Keep the two-worker maximum until representative OCR measurements justify a
-different limit. Check node allocations as well as free memory before adding
-workers; the OCR memory limit is 8Gi per pod.
+The October 2026 cluster has three Ready amd64 nodes: `k3s1` (server, 4 CPUs
+and approximately 11Gi allocatable memory), `arsene` (agent, 32 logical CPUs
+and approximately 91Gi), and `longbow` (agent, 4 CPUs and approximately 13Gi).
+All run K3s `v1.36.4+k3s1` on RHEL 10.2. Workers use the same pinned amd64
+application image, reserve 1 CPU and 8Gi memory, and have no GPU requirement.
+Only the agents are eligible for regular OCR workers. Longbow can accommodate
+one 8Gi reservation; extra workers can use Arsene, subject to its other pod
+reservations. Placement is selected by Kubernetes and does not guarantee a
+worker on each agent.
+
+The four-worker maximum is an initial capacity budget based on the October 4
+snapshot: Arsene used approximately 41.5Gi memory, Longbow 1.9Gi, and k3s1
+5.5Gi. These observations are not OCR peak measurements. Check node usage,
+reservations, OCR duration, OOM events, and shared-storage throughput before
+raising the ceiling again. Include temporary validation workers and workloads
+outside Kubernetes in the node budget.
 
 For a reproducible replacement agent, use a unique hostname, an SSD-backed
 Linux installation, and the same K3s version as the server. On RHEL 10, install

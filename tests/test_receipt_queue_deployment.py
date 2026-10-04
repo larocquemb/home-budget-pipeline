@@ -30,8 +30,13 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     assert publisher["image"] == worker["image"] == collector["image"]
     assert "latest" not in worker["image"]
     assert worker["resources"] == {
-        "requests": {"cpu": "1", "memory": "4Gi"},
-        "limits": {"cpu": "4", "memory": "8Gi"},
+        "requests": {"cpu": "1", "memory": "8Gi"},
+        "limits": {"cpu": "2", "memory": "8Gi"},
+    }
+    assert worker_spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"] == {
+        "nodeSelectorTerms": [{"matchExpressions": [{
+            "key": "node-role.kubernetes.io/control-plane", "operator": "DoesNotExist",
+        }]}],
     }
     assert worker_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "home-budget-data"
     assert worker_spec["terminationGracePeriodSeconds"] == 900
@@ -56,7 +61,7 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
         "name": "receipt-worker",
         "envSourceContainerName": "receipt-worker",
     }
-    assert (scaler["minReplicaCount"], scaler["maxReplicaCount"]) == (1, 2)
+    assert (scaler["minReplicaCount"], scaler["maxReplicaCount"]) == (1, 4)
     assert scaler["cooldownPeriod"] == 600
     assert scaler["advanced"]["horizontalPodAutoscalerConfig"]["behavior"]["scaleDown"] == {
         "stabilizationWindowSeconds": 600,
