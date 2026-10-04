@@ -132,7 +132,7 @@ def test_run_persists_comparisons_only_and_emits_paired_events(monkeypatch, caps
     assert all(e["run_uuid"] == stats["run_uuid"] for e in events)
 
 
-def test_dashboard_renders_wrapped_fluent_bit_json_and_excludes_errors():
+def test_dashboard_preserves_raw_json_and_unwraps_message_json():
     root = Path(__file__).resolve().parents[1]
     template = (root / "ops/monitoring/roles/monitoring/templates/grafana-product-comparison-dashboard.json.j2").read_text()
     rendered = Environment(undefined=StrictUndefined).from_string(template).render(
@@ -142,7 +142,11 @@ def test_dashboard_renders_wrapped_fluent_bit_json_and_excludes_errors():
     assert dashboard["metadata"]["annotations"]["grafana.app/folder"] == "home-budget"
     panels = dashboard["spec"]["elements"]
     expressions = [p["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]["expr"] for p in panels.values()]
-    assert all('| line_format "{{.message}}" | json' in expr for expr in expressions)
+    assert all('| line_format "{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}" | json' in expr
+               for expr in expressions)
+    # Fluent Bit strips metadata and emits the single message value directly.
+    collector = (root / "deploy/fluent-bit/fluent-bit.yaml").read_text()
+    assert "Drop_Single_Key            raw" in collector
     assert 'status!="error"' in expressions[0]
     assert 'winner!="incomplete"' in expressions[2]
     assert 'gpu_vram_bytes' in expressions[5]

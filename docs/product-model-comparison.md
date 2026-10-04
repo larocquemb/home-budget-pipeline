@@ -44,12 +44,24 @@ It uses the existing Loki datasource and Fluent Bit logs. Select a time range
 covering the experiment; paste its `run_uuid` into the dashboard filter to isolate
 one run. Logs are limited by Loki retention, while the database pairs remain.
 
+If panels show no data, set the time range to **Last 6 hours** and the Run UUID
+filter to `.*`. In Grafana Explore, select Loki and check the raw events:
+
+```logql
+{namespace="home-budget", container="enrich", collection="fluent-bit"}
+  |= "enrichment_model_result"
+  | json
+```
+
+Fluent Bit emits the application JSON directly. The dashboard also handles
+wrapped `message` JSON by unwrapping only when that field exists. If Explore
+finds no events, check log collection before rerunning the experiment.
+
 ## Make Ollama reachable
 
-On Arsene, inspect the listener and installed model:
+On Arsene, inspect the listener:
 
 ```sh
-ollama list
 ss -ltnp | grep 11434
 ```
 
@@ -79,9 +91,13 @@ The caller Pod needs no GPU allocation; Ollama on Arsene owns the RTX 3090.
 Check actual offload on Arsene during the experiment:
 
 ```sh
+export OLLAMA_HOST=http://192.168.2.201:11434
 ollama ps
-watch -n 1 nvidia-smi
+watch -n 1 'ollama ps; nvidia-smi'
 ```
+
+The CLI defaults to localhost. Set `OLLAMA_HOST` to the managed LAN listener;
+do not start a second `ollama serve` process to inspect the running service.
 
 The dashboard's GPU model memory panel comes from Ollama `/api/ps` `size_vram`;
 it is observed allocation, not GPU utilization or proof of a speedup.

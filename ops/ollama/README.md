@@ -35,3 +35,10 @@ make enrich-products COMPARE=1 LIMIT=1
 
 The first model request loads Qwen automatically. No `ollama run` is necessary.
 An existing manual `listen.conf` at the same path becomes managed by this role.
+
+On Arsene, point the CLI at the managed listener before inspecting models:
+
+```sh
+export OLLAMA_HOST=http://192.168.2.201:11434
+ollama ps
+```
