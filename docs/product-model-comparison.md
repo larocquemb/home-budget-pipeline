@@ -5,8 +5,11 @@ receipt items**. This is product enrichment after OCR, not a comparison of OCR
 engines. It calls OpenAI and Arsene's Ollama service on every selected item,
 including items already enriched. It does not wait for the normal AI fallback.
 
-Both models receive identical prompts and JSON schemas and may propose at most
-three searches. Brave retrieves retailer evidence. The existing match scorer
+Both models receive identical prompts and JSON schemas and must propose one to
+three searches. An empty response gets one retry with a shared clarification;
+two empty responses are recorded as a model-output error with null confidence,
+not a zero-score product match. Neither provider borrows the other's proposals.
+Brave retrieves retailer evidence. The existing match scorer
 evaluates that evidence against the **original item text**, not the model's
 expanded words. Identical queries share their search response within an item.
 Confidence is a token/barcode matching heuristic, **not a calibrated probability
@@ -120,7 +123,9 @@ make enrich-products COMPARE=1 LIMIT=10 \
 
 `LIMIT` caps the selected line items even for a receipt. Comparison defaults to
 10 items; normal enrichment keeps its existing default of 100. Each comparison
-item uses two model calls and up to six Brave searches. OpenAI and Brave usage
+item normally uses two model calls and up to six Brave searches. Each provider
+may retry an empty response once; token totals and latency include that retry.
+OpenAI and Brave usage
 can incur charges. Run one experiment at a time to keep GPU and service load
 bounded. The Make target follows logs and reports completion/failure; Ctrl+C
 stops log following but leaves this finite Job running.

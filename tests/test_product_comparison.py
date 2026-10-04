@@ -56,7 +56,8 @@ def test_search_failure_marks_provider_incomplete(monkeypatch):
 
 
 def test_unmatched_is_complete_and_different_products_can_tie(monkeypatch):
-    monkeypatch.setattr(comparison, "generate", lambda *a: {"queries": []})
+    monkeypatch.setattr(comparison, "generate", lambda *a: {"queries": ["Yard bags"]})
+    monkeypatch.setattr(core, "brave_search", lambda *a: None)
     result = comparison.evaluate("qwen", "Yard bags", "Home Depot", "key", .85, {})
     assert result["status"] == "no_match"
     assert result["confidence"] == 0
@@ -64,6 +65,43 @@ def test_unmatched_is_complete_and_different_products_can_tie(monkeypatch):
     left = {"status": "matched", "confidence": .95, "candidate_url": "https://sobeys.com/products/a"}
     right = {**left, "candidate_url": "https://sobeys.com/products/b"}
     assert comparison.compare([left, right]) == {"winner": "tie", "confidence_delta": 0., "agreement": False}
+
+
+@pytest.mark.parametrize("provider", ["openai", "qwen"])
+def test_empty_model_response_retries_once_with_shared_policy(monkeypatch, provider):
+    calls = []
+    def generate_once(selected, text):
+        calls.append((selected, text))
+        return {"queries": [] if len(calls) == 1 else ["Expanded grocery product"],
+                "model": selected, "input_tokens": 10, "output_tokens": 6}
+    monkeypatch.setattr(comparison, "_generate_once", generate_once)
+    initial = comparison.prompt("Cep Pic Med", "Sobeys")
+    result = comparison.generate(provider, initial)
+    assert result["queries"] == ["Expanded grocery product"]
+    assert result["attempts"] == 2
+    assert result["input_tokens"] == 20 and result["output_tokens"] == 12
+    assert calls[0] == (provider, initial)
+    assert "previous response contained no queries" in calls[1][1]
+    assert comparison.QUERY_SCHEMA["properties"]["queries"]["minItems"] == 1
+
+
+def test_repeated_empty_queries_are_an_incomplete_error_not_a_zero_match(monkeypatch):
+    calls = []
+    def generate_once(provider, text):
+        calls.append(text)
+        return {"queries": [], "model": "qwen3:30b", "input_tokens": 10,
+                "output_tokens": 6}
+    monkeypatch.setattr(comparison, "_generate_once", generate_once)
+    def forbidden_search(*args):
+        pytest.fail("No search should run without model proposals")
+    monkeypatch.setattr(core, "brave_search", forbidden_search)
+    result = comparison.evaluate("qwen", "Cep Pic Med", "Sobeys", "key", .85, {})
+    assert len(calls) == 2
+    assert result["status"] == "error" and result["confidence"] is None
+    assert result["error_type"] == "NoProductQueriesError" and result["attempts"] == 2
+    assert result["queries"] == [] and result["output_tokens"] == 12
+    success = {"status": "matched", "confidence": .5, "candidate_url": "https://sobeys.com/products/a"}
+    assert comparison.compare([success, result])["winner"] == "incomplete"
 
 
 def test_ollama_structured_chat_observes_gpu_memory(monkeypatch):
