@@ -7,6 +7,11 @@ RECEIPT_TEST_ROOT ?= .receipt-test
 RECEIPT_TEST_WORKERS ?= 6
 RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 KUBE_NAMESPACE ?= home-budget
+KUBE_CONTEXT ?= brownrook-k3s1
+NODE ?=
+DRY_RUN ?= 0
+RECEIPT ?=
+export RECEIPT
 ARGO_APP ?= ledger
 ARGO_SERVER ?= argocd.brownrook.net
 export ARGO_APP ARGO_SERVER
@@ -16,12 +21,15 @@ LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
 
 .PHONY: help docs-build docs-serve test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
 
+.PHONY: receipts-publish receipts-worker-test
+
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
 	@echo "Local logs:  dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down"
 	@echo "Documentation: docs-build docs-serve"
 	@echo "Tests:       test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
 	@echo "Operations:  status otlp-demo enrich-products"
+	@echo "Receipts:    receipts-publish [NODE=name] [RECEIPT=relative/path.pdf] receipts-worker-test NODE=name"
 	@echo "Deployment:  deploy-k3s k3s-config-check k3s-config-apply (uses .env.k3s)"
 	@echo "PostgreSQL:  postgres-config-check postgres-config-apply postgres-password-rotate"
 	@echo "Monitoring:  monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare"
@@ -115,6 +123,12 @@ dev-logging-logs:
 
 dev-logging-down:
 	@./scripts/local_logging_down.sh
+
+receipts-publish:
+	@RECEIPT_JOB_DRY_RUN="$(DRY_RUN)" bash scripts/receipt_job.sh publish "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)" "$(NODE)"
+
+receipts-worker-test:
+	@RECEIPT_JOB_DRY_RUN="$(DRY_RUN)" bash scripts/receipt_job.sh worker-test "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)" "$(NODE)"
 
 enrich-products:
 	@set -eu; \

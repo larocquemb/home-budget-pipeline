@@ -13,12 +13,13 @@ configuration:
 - Loki listens on `0.0.0.0:3100` so the K3s node can reach it.
 - Loki requires a client certificate signed by the Brown Rook CA.
 - Alloy and Grafana use their dedicated verified client identities.
-- nftables permits only loopback and the approved K3s node on port 3100.
+- nftables permits only loopback and the approved K3s nodes (k3s1, Arsene,
+  and Longbow) on port 3100.
 - The `fluent-bit-loki-tls` Secret is reconciled from external files, but the
   Fluent Bit overlay remains opt-in.
 - Alloy accepts OTLP/gRPC with mTLS on `0.0.0.0:4317`; nftables admits only the
-  approved K3s node and loopback.
-- Tempo `3.0.3` runs in monolithic mode on loopback, stores traces under
+  approved K3s nodes and loopback.
+- Tempo `3.1.0` runs in monolithic mode on loopback, stores traces under
   `/var/lib/tempo`, and retains blocks for 14 days.
 - Alloy sends traces to loopback Tempo and writes converted application metrics
   to Prometheus's loopback-only remote-write receiver. Prometheus independently
@@ -131,6 +132,23 @@ Secret-bearing tasks use Ansible's `no_log` protection.
 
 Running `make monitoring-gitops-check` and then
 `make monitoring-gitops-apply` again should report no configuration drift.
+
+For a firewall-only update, use the `monitoring_firewall` tag. This reads the
+committed allowlists, validates `/etc/nftables.conf` with `nft --check`, and
+restarts nftables when the policy changes. It does not require Grafana credentials
+or certificate inputs. With SSH key authentication, run from the repository root:
+
+```sh
+ANSIBLE_CONFIG=ops/monitoring/ansible.cfg ansible-playbook \
+  -i ops/monitoring/inventory/production.yml ops/monitoring/site.yml \
+  --tags monitoring_firewall --ask-become-pass --check --diff
+ANSIBLE_CONFIG=ops/monitoring/ansible.cfg ansible-playbook \
+  -i ops/monitoring/inventory/production.yml ops/monitoring/site.yml \
+  --tags monitoring_firewall --ask-become-pass
+```
+
+The Grafana reverse-proxy allowlist includes Arsene (`192.168.2.201/32`) for
+TCP port 3000.
 
 After an apply, verify the effective limits and current footprint without
 printing log contents:

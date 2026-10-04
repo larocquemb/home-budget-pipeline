@@ -240,7 +240,7 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     site = yaml.safe_load((ROOT / "ops/monitoring/site.yml").read_text())
     validator = (ROOT / "scripts/validate_observability_configs.sh").read_text()
 
-    assert defaults["monitoring_tempo_version"] == "3.0.3"
+    assert defaults["monitoring_tempo_version"] == "3.1.0"
     assert defaults["monitoring_tempo_storage_path"] == "/var/lib/tempo"
     assert defaults["monitoring_tempo_retention_period"] == "336h"
     assert "--web.listen-address=127.0.0.1:9090" in defaults[
@@ -256,7 +256,9 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
 
     assert inventory["monitoring_otel_port"] == 4317
     assert inventory["monitoring_otel_allowed_ipv4_sources"] == [
-        "192.168.2.230/32"
+        "192.168.2.230/32",
+        "192.168.2.201/32",
+        "192.168.2.175/32",
     ]
     assert inventory["monitoring_grafana_tempo_datasource_uid"]
 
@@ -645,6 +647,7 @@ def test_public_live_demo_is_sanitized_and_revocable():
     assert inventory["monitoring_grafana_public_proxy_ipv4_sources"] == [
         "192.168.2.210/32",
         "192.168.2.230/32",
+        "192.168.2.201/32",
     ]
 
     dashboard_spec = _v2_dashboard_spec(dashboard)

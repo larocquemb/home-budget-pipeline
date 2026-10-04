@@ -49,6 +49,21 @@ def test_broker_failure_never_falls_back_to_local_ocr(queued_cli, monkeypatch, c
     assert not capsys.readouterr().out
 
 
+def test_consumer_enables_confirms_once_for_work_and_results(queued_cli, monkeypatch):
+    _, broker = queued_cli
+    consume = MagicMock()
+    monkeypatch.setattr(queue, "consume_worker", consume)
+
+    assert cli.main(["receipts", "consume"]) == 0
+
+    channel = broker.channel.return_value
+    channel.confirm_delivery.assert_called_once()
+    consume.assert_called_once()
+    from home_budget_pipeline.receipts.ocr_collector import ResultTopology
+    declared = {call.kwargs["queue"] for call in channel.queue_declare.call_args_list}
+    assert {queue.Topology().work, ResultTopology().work} <= declared
+
+
 def test_batch_retry_reuses_each_request_and_partial_failure_is_reported(queued_cli, capsys):
     source, broker = queued_cli
     (source.parent / "second.pdf").write_bytes(b"second")

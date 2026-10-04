@@ -792,7 +792,8 @@ def run(args) -> int:
             from .ocr_collector import ResultTopology, declare_result_topology
 
             result_topology = ResultTopology()
-            declare_result_topology(channel, result_topology)
+            # Work topology already enabled confirmations on this same channel.
+            declare_result_topology(channel, result_topology, enable_confirms=False)
             stop = Event()
             previous = {sig: signal.signal(sig, lambda signum, frame: stop.set()) for sig in (signal.SIGINT, signal.SIGTERM)}
             try:

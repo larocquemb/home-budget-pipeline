@@ -94,12 +94,34 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make dev-db-reset` | Rebuild the local development database configured in `.env.dev`. |
 | `make status` | Report deployment and recent workflow status. |
 | `make enrich-products` | Start and follow a one-off Kubernetes product-enrichment job. |
+| `make receipts-publish NODE=longbow` | Start and follow a receipt publisher Job on Longbow using the live `receipt-processor` CronJob. Omit `NODE` to let Kubernetes select a node. |
+| `make receipts-worker-test NODE=longbow` | Run a temporary OCR consumer on Longbow using the live `receipt-worker` Deployment configuration. Ctrl+C deletes the Job and initiates graceful worker shutdown. |
 | `make deploy-k3s` | Apply PostgreSQL credentials and the OCR cache path from `.env.k3s`, then sync the Argo CD application. Matching settings are reused. |
 | `make k3s-config-check` | Validate the K3s OCR cache setting in `.env.k3s` without cluster access. |
 | `make k3s-config-apply` | Update `receipt-runtime-config` from `.env.k3s` and restart Deployment clients when the cache path changes. |
 | `make postgres-config-check` | Validate PostgreSQL deployment settings in `.env.k3s` without cluster access. |
 | `make postgres-config-apply` | Provision `postgres-secret` from `.env.k3s` for a new deployment. |
 | `make postgres-password-rotate` | Rotate an existing database password and Secret, verify authentication, and restart database clients. |
+
+Both manual receipt targets default to context `brownrook-k3s1` and namespace
+`home-budget`; override with `KUBE_CONTEXT` and `KUBE_NAMESPACE`. Add `DRY_RUN=1`
+to validate the generated Job with the API server without creating it. The
+publisher queues eligible receipts; it does not run OCR itself. The worker test
+consumes real queued receipts continuously, including result publication to the
+collector. It waits if the queue is empty, so start it before publishing work.
+Stopping the test allows the current receipt to finish within the deployed
+termination grace period. Publisher Jobs expire 24 hours after completion.
+
+To queue a full OCR refresh for exactly one receipt, including a completed
+receipt, specify its path relative to the receipt inbox:
+
+```sh
+make receipts-publish NODE=longbow RECEIPT='2026-08-14/receipts_20260814_0001.pdf'
+```
+
+This replaces that receipt's saved OCR and extraction results after processing.
+The shared queue allows any active worker to claim it; `NODE` selects the
+publisher's node. Watch the Longbow worker logs to confirm where OCR runs.
 
 The `test-db*` targets destroy and recreate schemas only in `TEST_DB`, which
 defaults to `home_budget_test`. `make test-receipts` also recreates
