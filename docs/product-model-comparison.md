@@ -261,6 +261,16 @@ without loading the entire source into a Python byte buffer. Uploaded evidence
 remains limited to two page images, each at most 2048 pixels per dimension.
 Image failures include a machine-readable reason such as `source_too_large` or
 `source_hash_mismatch`; source paths and credentials are not logged.
+
+Model prompts group duplicate readings and use compact citation metadata. Full
+artifact URIs, digests and pass provenance remain in the saved evidence bundle
+and graph instead of being repeated for every observation in the prompt. The
+character budget and request guard reserve 4096 tokens per attached image plus
+the configured output budget; these are conservative estimates, not exact model
+tokenization. Prompts request concise readings, explanations and citations.
+Logs include `prompt_bytes`, `reserved_image_tokens`, and Ollama `finish_reason`
+for incomplete outputs. A prompt-budget or truncation failure remains incomplete
+and cannot become an accepted recommendation.
 Brave searches those proposals; round two exposes every provider's proposal and
 the ranked product candidates to every reviewer. Responses cannot cite unseen
 sources or invent candidate IDs.

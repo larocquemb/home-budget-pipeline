@@ -81,6 +81,30 @@ def test_packing_preserves_duplicate_observations_and_reports_omissions():
     assert coverage['included_sources'] < 3
 
 
+def test_model_prompt_retains_all_citations_without_repeating_artifact_metadata():
+    sources = [{'id': f'pass:00000000-0000-0000-0000-000000000000:{i}:line:1',
+                'kind': 'ocr_pass', 'engine': 'tesseract', 'text': 'Oep Pic Med',
+                'ocr_run_uuid': '00000000-0000-0000-0000-000000000000',
+                'text_artifact': {'uri': 'pvc://home-budget/receipts/derived/ocr-cache/receipt.pdf.json',
+                                  'sha256': 'a' * 64}, 'quality': {'irrelevant': 'x' * 1000}}
+               for i in range(41)]
+    packed, coverage = collab.pack_sources(sources, 12480)
+    assert coverage['included_sources'] == 41
+    assert len(packed) == 1
+    assert {o['id'] for o in packed[0]['observations']} == {s['id'] for s in sources}
+    assert 'text_artifact' not in json.dumps(packed)
+    assert coverage['text_characters'] < 7000
+    assert sources[0]['text_artifact']['sha256'] == 'a' * 64
+
+
+def test_image_context_reservation_rejects_prompt_before_model_request(monkeypatch):
+    monkeypatch.setattr(providers, 'request', lambda *args: pytest.fail('Prompt exceeds reserved image budget'))
+    profile = providers.Profile('openai', 'openai', 'test', context_tokens=8192, output_tokens=2048, vision=True)
+    result = collab.call(profile, 'proposal', 'x' * 5000, set(), set(), [{'id': 'image:1:1'}], {})
+    assert result['error_type'] == 'ContextBudgetError'
+    assert result['reserved_image_tokens'] == 4096
+
+
 def test_two_rounds_share_ocr_then_pool_all_provider_queries(monkeypatch, capsys):
     row = {'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'}
     context = {'run_uuid': 'test-run', 'item_id': 1, 'receipt': 'a.pdf'}
