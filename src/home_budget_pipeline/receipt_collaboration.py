@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 import json
 import os
@@ -149,7 +149,8 @@ def validate_output(output, stage, allowed_sources, candidates):
 
 def call(profile, stage, text, sources, candidates, images, context):
     started = time.monotonic()
-    result = {**asdict(profile), 'profile': profile.name, 'stage': stage, 'status': 'error'}
+    result = {**asdict(profile), 'profile': profile.name, 'stage': stage, 'status': 'error',
+              'requested_output_tokens': profile.output_tokens}
     sampler = GpuSampler(comparison.emit, {**context, 'profile': profile.name, 'provider': profile.provider,
                                           'model': profile.model, 'stage': stage}) if profile.provider == 'qwen' else None
     try:
@@ -189,7 +190,8 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
     """Give each reading its own model call, isolated from competing hypotheses."""
     results = []
     for profile in profiles:
-        for hypothesis in hypotheses:
+        for hypothesis_index, hypothesis in enumerate(hypotheses):
+            request_profile = profile
             text = INSTRUCTIONS + ('Expansion stage: investigate ONLY the supplied reading independently. '
                 'Treat short leading tokens as possible brand initialisms and later short tokens as '
                 'possible product/style/size abbreviations. Propose plausible full-word expansions '
@@ -204,12 +206,14 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
             forbidden = {token for token in re.findall(r'[a-z]+', hypothesis['reading'].lower()) if len(token) <= 4}
             attempts = []
             for attempt in range(2):
-                result = call(profile, 'expansion', text, set(hypothesis['source_ids']), set(), [],
+                result = call(request_profile, 'expansion', text, set(hypothesis['source_ids']), set(), [],
                               {**context, 'target_reading': hypothesis['reading'], 'attempt': attempt + 1})
                 attempts.append(deepcopy(result))
                 if result['status'] != 'success':
                     if result.get('error_type') == 'IncompleteModelOutput' and attempt == 0:
                         text += '\nThe response was truncated. Use one short reading, at most three queries, one source ID and a one-sentence reason. Close the JSON object immediately.'
+                        if profile.provider == 'qwen':
+                            request_profile = replace(profile, output_tokens=max(profile.output_tokens, min(3072, profile.output_tokens + 1024)))
                         continue
                     break
                 output = result['output']
@@ -232,24 +236,37 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
             verified = result['status'] == 'success' and result.get('expansion_state') == 'proposed' and verify and verify(result)
             if verified:
                 result['verified_search_match'] = True
+            circuit_open = profile.provider == 'qwen' and result.get('error_type') == 'IncompleteModelOutput'
+            if circuit_open:
+                result['stop_reason'] = 'provider_truncation_circuit_open'
             comparison.emit('enrichment_collaboration_expansion', {**context, **result})
             results.append(result)
             if verified:
                 return results
+            if circuit_open:
+                comparison.emit('enrichment_collaboration_provider_stopped', {
+                    **context, 'profile': profile.name, 'stage': 'expansion',
+                    'stop_reason': result['stop_reason'], 'remaining_readings': len(hypotheses) - hypothesis_index - 1})
+                break
     return results
 
 
 def review_with_citations(profile, text, sources, candidates, images, context):
     support = {c['id']: set(c['ocr_support']) for c in candidates}
     attempts = []
+    request_profile = profile
     for attempt in range(2):
-        result = call(profile, 'review', text, sources, set(support), images, {**context, 'attempt': attempt + 1})
+        result = call(request_profile, 'review', text, sources, set(support), images, {**context, 'attempt': attempt + 1})
         if result['status'] == 'success':
             output = result['output']
             selected = output['candidate_id']
             if selected is not None and not set(output['source_ids']).intersection(support[selected]):
                 result.update(status='error', error_type='EvidenceCitationError', invalid_output=result.pop('output'))
         attempts.append(deepcopy(result))
+        if result.get('error_type') == 'IncompleteModelOutput' and profile.provider == 'qwen' and attempt == 0:
+            request_profile = replace(profile, output_tokens=max(profile.output_tokens, min(3072, profile.output_tokens + 1024)))
+            text += '\nThe response was truncated. Return only the four required fields, at most three OCR source IDs, and a one-sentence reason. Close the JSON immediately.'
+            continue
         if result['status'] == 'success' or result.get('error_type') != 'EvidenceCitationError':
             break
         text += '\nYour previous review lacked valid evidence citations. Return a new complete review: product_source_id must equal candidate_id, and source_ids must include at least one of that product\'s ocr_support IDs. If the evidence is insufficient, set candidate_id and product_source_id to null. Do not invent or append citations.'
@@ -340,26 +357,39 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             core.candidate_score(s['text'], core.retailer_domain(row['store_name']), result.title, result.url, result.snippet) >= threshold
             for s in bundle['sources'])
     verified_literal = any(p.provider == 'qwen' for p in profiles) and any(verified_product(r) for _, r in baseline)
-    def verify_expansion(expansion):
+    def search_expanded(invocation, query):
         nonlocal brave_seconds
+        broadened = re.sub(r'\s+', ' ', re.sub(r'["“”]', '', query)).strip()
+        for actual in dict.fromkeys([query, broadened]):
+            invocation.setdefault('searched_queries', []).append(actual)
+            if actual != query:
+                fallback = {'original_query': query, 'fallback_query': actual, 'reason': 'empty_quoted_results'}
+                invocation.setdefault('query_fallbacks', []).append(fallback)
+                comparison.emit('enrichment_collaboration_search_fallback', {**context, 'profile': invocation['profile'], **fallback})
+            started = time.monotonic()
+            try:
+                if actual not in cache:
+                    cache[actual] = core.brave_candidates(api_key, actual, row['item_name'], core.retailer_domain(row['store_name']))
+            finally:
+                brave_seconds += time.monotonic() - started
+            if cache[actual]:
+                return [(actual, result) for result in cache[actual]]
+        return []
+
+    def verify_expansion(expansion):
         matched = False
         for terms in expansion['output']['queries']:
             query = core.scoped_search_query(terms, row['store_name'])
             if not query:
                 continue
-            expansion.setdefault('searched_queries', []).append(query)
-            query_started = time.monotonic()
             try:
-                if query not in cache:
-                    cache[query] = core.brave_candidates(api_key, query, row['item_name'], core.retailer_domain(row['store_name']))
-                baseline.extend((query, r) for r in cache[query])
-                for r in cache[query]:
+                found = search_expanded(expansion, query)
+                baseline.extend(found)
+                for _, r in found:
                     if verified_product(r):
                         matched = True
             except Exception as exc:
                 errors.append({'stage': 'expanded_search', 'profile': expansion['profile'], 'query': query, 'error_type': type(exc).__name__})
-            finally:
-                brave_seconds += time.monotonic() - query_started
         return matched
     expansions = [] if verified_literal else expand_readings(unresolved, profiles, row['store_name'], context, verify_expansion)
     for expansion in expansions:
@@ -417,16 +447,10 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             query = core.scoped_search_query(expansion, row['store_name'])
             if not query:
                 continue
-            proposal.setdefault('searched_queries', []).append(query)
-            query_started = time.monotonic()
             try:
-                if query not in cache:
-                    cache[query] = core.brave_candidates(api_key, query, row['item_name'], core.retailer_domain(row['store_name']))
-                pool.extend((query, result) for result in cache[query])
+                pool.extend(search_expanded(proposal, query))
             except Exception as exc:
                 errors.append({'stage': 'expanded_search', 'profile': proposal['profile'], 'query': query, 'error_type': type(exc).__name__})
-            finally:
-                brave_seconds += time.monotonic() - query_started
     brave_seconds = round(brave_seconds, 3)
     cards = {}
     for query, result in sorted(pool, key=lambda entry: entry[1].score, reverse=True):
@@ -476,7 +500,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
         if review['status'] != 'success': errors.append({'stage': 'review', 'profile': review['profile'], 'error_type': review.get('error_type')})
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete_context, min_provider_families=min_families)
     decision['review_policy'] = review_policy
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v6', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v7', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,
