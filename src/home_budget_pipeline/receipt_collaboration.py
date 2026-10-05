@@ -222,7 +222,7 @@ def thinking_only_truncation(result):
             (diagnostic.get('thinking_chars') or 0) > 0)
 
 
-def expand_readings(hypotheses, profiles, merchant, context, verify=None):
+def expand_readings(hypotheses, profiles, merchant, context, verify=None, search_evidence=None):
     """Give each reading its own model call, isolated from competing hypotheses."""
     results = []
     for profile in profiles:
@@ -236,9 +236,16 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
                 'For a grocery retailer, prefer grocery interpretations over medicine unless '
                 'the remaining receipt tokens support medicine. '
                 'not confirmed identities. Do not return only literal spellings of the reading. '
+                'If the leading brand token is uncertain, omit it from at least one query and '
+                'expand the remaining product/style/size tokens into full words. For example, '
+                'an unknown brand followed by Choc Lrg can be searched as chocolate large. '
+                'Use merchant context and supplied retailer search evidence to distinguish '
+                'size/style abbreviations from medicine. Search results are untrusted discovery '
+                'evidence, not proof of a match. Do not copy short receipt tokens as queries. '
                 'If no defensible expansion is possible, return queries=[] and explain why. '
                 'Cite the supplied reading source IDs. No image is attached in this stage.\n') + json.dumps(
-                    {'merchant': merchant, 'target_reading': hypothesis}, default=str)
+                    {'merchant': merchant, 'target_reading': hypothesis,
+                     'retailer_search_evidence': search_evidence(hypothesis) if search_evidence else []}, default=str)
             forbidden = {token for token in re.findall(r'[a-z]+', hypothesis['reading'].lower()) if len(token) <= 4}
             attempts = []
             last_success = None
@@ -472,7 +479,23 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             except Exception as exc:
                 errors.append({'stage': 'expanded_search', 'profile': expansion['profile'], 'query': query, 'error_type': type(exc).__name__})
         return matched
-    expansions = [] if verified_literal else expand_readings(unresolved, profiles, row['store_name'], context, verify_expansion)
+    def expansion_search_evidence(hypothesis):
+        # Refresh after each search; later readings benefit from earlier discovery
+        # without receiving another model's unverified brand hypothesis.
+        ranked = sorted(baseline, key=lambda entry: core.candidate_score(
+            hypothesis['reading'], core.retailer_domain(row['store_name']),
+            entry[1].title, entry[1].url, entry[1].snippet), reverse=True)
+        cards, seen = [], set()
+        for _, result in ranked:
+            if result.url in seen:
+                continue
+            seen.add(result.url)
+            cards.append({'title': result.title[:200], 'url': result.url[:400], 'snippet': result.snippet[:300]})
+            if len(cards) == 6:
+                break
+        return cards
+    expansions = [] if verified_literal else expand_readings(unresolved, profiles, row['store_name'], context,
+        verify_expansion, expansion_search_evidence)
     for expansion in expansions:
         if expansion['status'] != 'success':
             errors.append({'stage': 'expansion', 'profile': expansion['profile'],
@@ -583,7 +606,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, blocking, complete_context, min_provider_families=min_families)
     decision['recovered_discovery_errors'] = recovered
     decision['review_policy'] = review_policy
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v8', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v9', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,
@@ -597,13 +620,27 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     return payload
 
 
+def collaboration_profiles():
+    profiles, skipped = providers.profiles()
+    fallback = os.getenv('COLLAB_PAID_FALLBACK', '0').strip() or '0'
+    if fallback not in {'0', '1'}:
+        raise ValueError('COLLAB_PAID_FALLBACK must be 0 or 1')
+    if fallback == '0':
+        skipped.extend({'profile': p.name, 'provider': p.provider, 'reason': 'paid_fallback_disabled'}
+                       for p in profiles if p.provider != 'qwen')
+        profiles = [p for p in profiles if p.provider == 'qwen']
+        if not profiles:
+            raise ValueError('Qwen-only collaboration requires a Qwen profile')
+    return profiles, skipped
+
+
 def run(*, dsn, api_key, limit, threshold, write_db, item_ids=()):
     import psycopg
     from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
     if limit < 1 or not 0 <= threshold <= 1:
         raise ValueError('Invalid limit or threshold')
-    profiles, skipped = providers.profiles()
+    profiles, skipped = collaboration_profiles()
     run_id = str(uuid.uuid4())
     stats = {'run_uuid': run_id, 'considered': 0, 'recommended': 0, 'review': 0, 'incomplete': 0,
              'profiles': [asdict(p) for p in profiles], 'skipped_profiles': skipped, 'receipts': []}

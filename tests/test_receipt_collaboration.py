@@ -409,7 +409,7 @@ def test_collaboration_persists_only_evidence_and_run_summary(monkeypatch, capsy
         def execute(self, sql, params): calls.append((sql, params)); return self
         def fetchall(self): return [row]
     monkeypatch.setattr(psycopg, 'connect', lambda *a, **kw: Connection())
-    monkeypatch.setattr(providers, 'profiles', lambda: ([providers.Profile('test', 'openai', 'test')], []))
+    monkeypatch.setattr(providers, 'profiles', lambda: ([providers.Profile('test', 'qwen', 'test')], []))
     monkeypatch.setattr(shared, 'load', lambda *a: bundle())
     monkeypatch.setattr(collab, 'collaborate_item', lambda *a: {
         'decision': {'disposition': 'review'}, 'errors': [{'stage': 'expansion'}], 'blocking_errors': [], 'item_seconds': 2.5})
@@ -768,3 +768,46 @@ def test_review_overflow_preserves_audit_and_support_but_rejects_unknown_tail(mo
         assert result['citation_normalization']['original_source_ids'] == refs
         assert result['citation_normalization']['original_count'] == 23
         assert result['output_tokens'] == 1157
+
+
+@pytest.mark.parametrize('paid_fallback', ['0', '1'])
+def test_collaboration_uses_qwen_only_unless_paid_fallback_is_explicit(monkeypatch, paid_fallback):
+    profiles = [providers.Profile('openai', 'openai', 'paid'),
+                providers.Profile('qwen', 'qwen', 'local'),
+                providers.Profile('anthropic', 'anthropic', 'paid')]
+    monkeypatch.setattr(providers, 'profiles', lambda: (profiles[:], []))
+    monkeypatch.setenv('COLLAB_PAID_FALLBACK', paid_fallback)
+    selected, skipped = collab.collaboration_profiles()
+    assert [p.provider for p in selected] == (['qwen'] if paid_fallback == '0' else ['openai', 'qwen', 'anthropic'])
+    assert {p['provider'] for p in skipped} == ({'openai', 'anthropic'} if paid_fallback == '0' else set())
+
+
+def test_evidence_guided_qwen_resolves_without_any_paid_model_call(monkeypatch):
+    calls, searches = [], []
+    def search(key, query, item, domain):
+        searches.append(query)
+        if 'picante medium' in query.lower():
+            return [core.SearchResult(TITLE, URL, '', .9167)]
+        return [core.SearchResult('Salsa Picante range', 'https://sobeys.com/recipes/salsa', 'Medium salsa', .2)]
+    def request(profile, text, schema, images):
+        calls.append((profile.provider, schema))
+        assert profile.provider == 'qwen'
+        if schema == collab.EXPANSION_SCHEMA:
+            evidence = json.loads(text.splitlines()[-1])
+            assert evidence['retailer_search_evidence'][0]['title'] == 'Salsa Picante range'
+            assert 'omit it from at least one query' in text
+            return {'output': {'reading': 'Unverified salsa hypothesis', 'queries': ['picante medium'],
+                'source_ids': ['item:canonical'], 'reason': 'Search the product/style tokens; brand uncertain'}}
+        return {'output': review('qwen', refs=[SOURCE])['output']}
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(providers, 'request', request)
+    monkeypatch.setattr(shared, 'render_images', lambda _: ([{'id': 'image:1:1', 'data': 'image'}], []))
+    evidence = bundle()
+    evidence['validations']['item_arithmetic'] = 'pass'
+    payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'}, evidence,
+        [providers.Profile('qwen', 'qwen', 'local', vision=True)], 'key', .85, {'receipt': 'a.pdf'})
+    assert payload['decision']['disposition'] == 'recommended'
+    assert payload['decision']['candidate_title'] == TITLE
+    assert len(calls) == 2 and all(p == 'qwen' for p, _ in calls)
+    assert payload['decision']['canonical_updated'] is False
+    assert any('picante medium' in q for q in searches)

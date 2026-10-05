@@ -13,3 +13,4 @@ data:
   # Ollama thinking and its answer share the output budget; keep paid budgets separate.
   QWEN_CONTEXT_TOKENS: "32768"
   QWEN_OUTPUT_TOKENS: "8192"
+  COLLAB_PAID_FALLBACK: "0"

@@ -332,11 +332,13 @@ or model agreement alone does not approve a product.
 Before the shared proposal/review rounds, each unresolved reading receives a
 separate text-only expansion call, trying configured models in order until
 discovery finds a strong retailer product match with supporting OCR. That call receives
-only the target reading, its citations and the merchant, avoiding anchoring on
-other OCR spellings or unrelated literal-search results. Queries retaining short
-receipt tokens (up to four letters) are rejected; the model retries once with
-full-expansion instructions, or explicitly returns no queries when it cannot
-infer an expansion. The heuristic can also reject real short product words;
+the target reading, its citations, the merchant and up to six ranked Brave
+results. The result list refreshes after each discovery search; titles, URLs and
+snippets are untrusted evidence, not other models' unverified brand guesses.
+When the brand is uncertain, the model is asked to search expanded product/style/size
+words without the brand rather than repeat the literal abbreviations. Partial queries are tested against retailer and OCR evidence first. Unverified
+queries retaining short receipt tokens are omitted from full expansions; Qwen
+moves to another reading while paid fallback, when enabled, may correct once. The heuristic can also reject real short product words;
 an unresolved expansion is recorded rather than accepted as a product fact.
 Expanded queries are pooled and deduplicated for Brave verification, with scores
 still calculated against the original receipt item. Only product pages can be
@@ -344,8 +346,9 @@ selected in the final review; brand indexes and store pages remain discovery
 evidence. Calls run sequentially, so ambiguous items take more time and model
 usage when discovery remains unresolved. Brave checks expansions as they arrive;
 once a strong match is found, remaining expansions and the shared proposal round
-are skipped. Qwen reviews the pooled evidence first. Additional model reviews run only when
-the Qwen-only recommendation checks are not satisfied. If literal Brave results
+are skipped. Qwen reviews the pooled evidence first. Paid models are disabled by default for collaboration, including discovery and
+review. Set `PAID_FALLBACK=1` to opt into paid fallback when local recommendation
+checks are not satisfied. If literal Brave results
 already supply a supported product page, discovery model calls are skipped too.
 The decision records `review_policy.skipped_profiles` and `fallback_reasons` so
 paid-model use or omission can be inspected in logs and the graph. `enrichment_collaboration_discovery` records the
@@ -484,3 +487,22 @@ SELECT run_uuid, expense_item_id, completed_at,
 FROM enrichment.receipt_collaborations
 ORDER BY completed_at DESC;
 ```
+
+### Local-only collaboration
+
+```sh
+make enrich-products COLLABORATE=1 LIMIT=1
+```
+
+Production collaboration uses Qwen, receipt images/OCR and Brave without calling
+OpenAI, Anthropic or Gemini. Skipped paid profiles are recorded with
+`paid_fallback_disabled`. A local-only run requires at least one Qwen profile;
+insufficient evidence remains in review without changing the accepted product.
+Explicit opt-in restores paid discovery and review fallback:
+
+```sh
+make enrich-products COLLABORATE=1 LIMIT=1 PAID_FALLBACK=1
+```
+
+`COMPARE=1` still compares OpenAI and Qwen; this local-only policy applies to
+collaboration, not comparison or other receipt pipeline stages.
