@@ -353,13 +353,26 @@ stop reason, expansion call count and whether the proposal round was skipped.
 
 Qwen receives the JSON schema in its prompt as well as Ollama's `format` argument.
 Expansion reading/query strings are limited to 160 characters, reasons to 300,
-and citations to six. Truncated expansion responses get one concise retry at the
-same output-token budget; incomplete responses are never parsed as valid evidence.
+and citations to six. Truncated expansion responses get one concise retry. Qwen recovery requests may
+increase the output budget by up to 1024 tokens, capped at 3072 (larger configured
+budgets are preserved); the existing context and image budget guard still applies.
+If both attempts truncate, expansion calls stop for that Qwen profile rather than
+repeating failures across every remaining OCR reading. Other configured profiles
+can continue discovery. Qwen reviews also get one bounded truncation retry.
+Incomplete responses are never parsed as valid evidence, and persistent failures
+remain recorded.
 Reviews require `product_source_id` to equal `candidate_id` (both null when
 abstaining); `source_ids` must cite supporting OCR evidence. The schema restricts
 both product fields to supplied candidate IDs. Missing or mismatched product
 citations or missing supporting OCR citations get one new model review. Both attempts remain recorded; citations are never inserted
 by the application. Persistent failures continue to block recommendations.
+
+A model-generated quoted Brave search with no results gets one retry after
+removing phrase quotes. Every search term and the retailer site restriction remain;
+the broader query uses the original receipt item for scoring. Successful quoted
+searches are not broadened. Both queries are cached and retained, with
+`query_fallbacks` and `enrichment_collaboration_search_fallback` recording the
+reason. Search errors remain errors and do not masquerade as empty results.
 
 Inspect `enrichment_collaboration_expansion` for `target_reading`, `attempts`,
 `expansion_state`, queries and GPU usage. The payload retains expansions, and

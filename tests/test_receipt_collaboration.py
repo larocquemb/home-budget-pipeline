@@ -491,3 +491,82 @@ def test_historical_reviews_still_reconcile_with_product_in_source_ids():
     reviews = [review('qwen'), review('openai')]
     for result in reviews: result['output'].pop('product_source_id')
     assert collab.reconcile([candidate()], reviews, {}, .85, [], True)['disposition'] == 'recommended'
+
+
+@pytest.mark.parametrize('recovered', [True, False])
+def test_qwen_expansion_recovery_increases_budget_once_then_stops_profile(monkeypatch, recovered):
+    calls = []
+    def request(profile, text, schema, images):
+        calls.append((profile.provider, profile.output_tokens))
+        if profile.provider == 'qwen' and (len(calls) == 1 or not recovered):
+            raise providers.IncompleteModelOutput({'output_tokens': profile.output_tokens, 'finish_reason': 'length'})
+        target = json.loads(text.splitlines()[-1])['target_reading'] if 'truncated' not in text else {'source_ids': [SOURCE]}
+        return {'output': {'reading': TITLE, 'queries': [TITLE], 'source_ids': target['source_ids'][:1], 'reason': 'hypothesis'}}
+    monkeypatch.setattr(providers, 'request', request)
+    profile = providers.Profile('qwen', 'qwen', 'test')
+    hypotheses = [{'reading': reading, 'source_ids': [SOURCE]} for reading in ['Oep Pic Med', 'Cep Pic Med', 'Gep Pic Med']]
+    results = collab.expand_readings(hypotheses, [profile, providers.Profile('openai', 'openai', 'test')],
+        'Sobeys', {}, verify=lambda result: True)
+    assert calls[:2] == [('qwen', 2048), ('qwen', 3072)]
+    assert profile.output_tokens == 2048
+    assert results[0]['attempts'][0]['finish_reason'] == 'length'
+    if recovered:
+        assert len(calls) == 2 and results[0]['status'] == 'success'
+    else:
+        assert calls == [('qwen', 2048), ('qwen', 3072), ('openai', 2048)]
+        assert results[0]['stop_reason'] == 'provider_truncation_circuit_open'
+        assert results[0]['status'] == 'error'
+        assert results[1]['verified_search_match'] is True
+
+
+@pytest.mark.parametrize('recovered', [True, False])
+def test_qwen_review_retries_truncation_once_with_bounded_budget(monkeypatch, recovered):
+    budgets = []
+    def request(profile, text, schema, images):
+        budgets.append(profile.output_tokens)
+        if len(budgets) == 1 or not recovered:
+            raise providers.IncompleteModelOutput({'output_tokens': profile.output_tokens, 'finish_reason': 'length'})
+        assert 'response was truncated' in text
+        return {'output': review('qwen', refs=[SOURCE])['output']}
+    monkeypatch.setattr(providers, 'request', request)
+    result = collab.review_with_citations(providers.Profile('qwen', 'qwen', 'test'), 'evidence',
+        {SOURCE}, [candidate()], [], {})
+    assert budgets == [2048, 3072]
+    assert result['attempts'][1]['requested_output_tokens'] == 3072
+    assert result['status'] == ('success' if recovered else 'error')
+    assert result['attempts'][0]['finish_reason'] == 'length'
+    if recovered: assert result['output']['source_ids'] == [SOURCE]
+
+
+@pytest.mark.parametrize('quoted_has_match', [True, False])
+def test_empty_quoted_expansion_search_broadens_once_and_keeps_evidence(monkeypatch, quoted_has_match):
+    quoted = 'site:sobeys.com "Old El Paso" "Medium Picante"'
+    broad = 'site:sobeys.com Old El Paso Medium Picante'
+    searches = []
+    def search(key, query, item, domain):
+        searches.append(query)
+        assert item == 'Cep Pic Med' and domain == 'sobeys.com'
+        return [core.SearchResult(TITLE, URL, '', .9167)] if query == broad or (query == quoted and quoted_has_match) else []
+    def request(profile, text, schema, images):
+        assert profile.provider == 'qwen'
+        if schema == collab.EXPANSION_SCHEMA:
+            target = json.loads(text.splitlines()[-1])['target_reading']
+            output = {'reading': TITLE, 'queries': [quoted], 'source_ids': target['source_ids'][:1], 'reason': 'hypothesis'}
+        else: output = review('qwen', refs=[SOURCE])['output']
+        return {'output': output}
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(providers, 'request', request)
+    data = bundle()
+    data['validations']['item_arithmetic'] = 'pass'
+    payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'}, data,
+        [providers.Profile('openai', 'openai', 'test'), providers.Profile('qwen', 'qwen', 'test')],
+        'key', .85, {'receipt': 'a.pdf'})
+    assert payload['decision']['disposition'] == 'recommended'
+    assert payload['decision']['review_policy']['skipped_profiles'] == ['openai']
+    assert searches.count(quoted) == 1 and searches.count(broad) == (0 if quoted_has_match else 1)
+    expansion = payload['expansions'][0]
+    if not quoted_has_match:
+        assert expansion['searched_queries'] == [quoted, broad]
+        assert expansion['query_fallbacks'] == [{'original_query': quoted, 'fallback_query': broad, 'reason': 'empty_quoted_results'}]
+        recorded = {q['query']: q['candidate_ids'] for q in payload['search_queries']}
+        assert recorded[quoted] == [] and recorded[broad] == [collab.candidate_id(URL)]
