@@ -218,6 +218,20 @@ Round one gives each available model the same retrieved text and Brave baseline.
 Vision profiles also receive up to two receipt page images, verified against the
 source SHA-256 and read from the mounted receipt inbox. Text-only Qwen sees the
 OCR evidence. Models propose readings and search queries with source citations.
+
+The production collaboration profile uses `qwen3-vl:30b` so Qwen receives the
+same page images as OpenAI. Before syncing this profile, install the model on
+Arsene (set `OLLAMA_HOST` to the managed service address):
+
+```sh
+OLLAMA_HOST=http://192.168.2.201:11434 ollama pull qwen3-vl:30b
+```
+
+Large scanned PDFs up to 128 MiB are hash-verified in a stream and rendered
+without loading the entire source into a Python byte buffer. Uploaded evidence
+remains limited to two page images, each at most 2048 pixels per dimension.
+Image failures include a machine-readable reason such as `source_too_large` or
+`source_hash_mismatch`; source paths and credentials are not logged.
 Brave searches those proposals; round two exposes every provider's proposal and
 the ranked product candidates to every reviewer. Responses cannot cite unseen
 sources or invent candidate IDs.
