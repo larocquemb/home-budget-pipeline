@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import asdict
 import hashlib
 import json
@@ -57,6 +58,19 @@ class EvidenceCitationError(ValueError):
 
 def candidate_id(url):
     return 'product:' + hashlib.sha256(url.encode()).hexdigest()[:16]
+
+
+def reading_hypotheses(sources, merchant):
+    """Keep distinct retrieved readings separate, without counting repeated passes."""
+    grouped = {}
+    for source in sources:
+        query = core.product_query(source['text'], merchant)
+        if not query:
+            continue
+        key = query.casefold()
+        entry = grouped.setdefault(key, {'reading': source['text'], 'query': query, 'source_ids': []})
+        entry['source_ids'].append(source['id'])
+    return list(grouped.values())
 
 
 def pack_sources(sources: list[dict], char_budget: int) -> tuple[list[dict], dict]:
@@ -128,7 +142,10 @@ def call(profile, stage, text, sources, candidates, images, context):
         if len(text.encode()) > max(0, profile.context_tokens - profile.output_tokens - image_reserve) * 2:
             raise ContextBudgetError('Evidence prompt exceeds conservative context budget')
         with sampler if sampler else nullcontext():
-            response = providers.request(profile, text, PROPOSAL_SCHEMA if stage == 'proposal' else REVIEW_SCHEMA, images)
+            schema = deepcopy(PROPOSAL_SCHEMA if stage == 'proposal' else REVIEW_SCHEMA)
+            if stage == 'review':
+                schema['properties']['candidate_id']['enum'] = [None, *sorted(candidates)]
+            response = providers.request(profile, text, schema, images)
         raw_output = response.pop('output')
         result.update(response)
         try:
@@ -186,6 +203,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     image_metadata = [{k: v for k, v in image.items() if k != 'data'} for image in images]
     cache, errors = {}, [{'stage': 'ocr_artifact', **error} for error in bundle.get('artifact_errors', [])]
     learned = core.learned_discovery(row['item_name'], row['store_name'], prior_matches)
+    hypotheses = reading_hypotheses(bundle['sources'], row['store_name'])
     brave_started = time.monotonic()
     try:
         baseline = comparison.baseline_search(row['item_name'], row['store_name'], api_key, cache, prior_matches)
@@ -193,15 +211,40 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
         baseline = [(q, r) for q, results in cache.items() for r in results]
         errors.append({'stage': 'baseline', 'error_type': type(exc).__name__})
     brave_seconds = time.monotonic() - brave_started
+    # Search each distinct OCR reading before model proposals. Keep scoring tied
+    # to the original item, and retain failed alternatives as explicit errors.
+    for hypothesis in hypotheses[:8]:
+        query = hypothesis['query']
+        query_started = time.monotonic()
+        try:
+            if query not in cache:
+                cache[query] = core.brave_candidates(api_key, query, row['item_name'], core.retailer_domain(row['store_name']))
+                baseline.extend((query, result) for result in cache[query])
+        except Exception as exc:
+            errors.append({'stage': 'ocr_alternative_search', 'query': query, 'error_type': type(exc).__name__})
+        finally:
+            brave_seconds += time.monotonic() - query_started
+    if len(hypotheses) > 8:
+        errors.append({'stage': 'ocr_alternative_search', 'error_type': 'HypothesisBudgetExceeded'})
     # A conservative character budget leaves room for proposals/candidates in
     # round two. It is a retrieval budget, not an exact provider token counter.
     char_budget = max(0, min(p.context_tokens - p.output_tokens -
         (IMAGE_TOKEN_RESERVE * len(images) if p.vision else 0) for p in profiles) * 2 - 8000)
     packed, coverage = pack_sources(bundle['sources'], char_budget)
     known_sources = {s['id'] for entry in packed for s in entry['observations']}
+    prompt_hypotheses = [{**h, 'source_ids': [s for s in h['source_ids'] if s in known_sources][:6]}
+                         for h in hypotheses[:8]]
     baseline_cards = []
     seen_urls = set()
-    for query, result in sorted(baseline, key=lambda entry: entry[1].score, reverse=True):
+    ranked_baseline = sorted(baseline, key=lambda entry: entry[1].score, reverse=True)
+    # Give competing OCR searches a visible result before filling by score, so
+    # many canonical-reading hits cannot hide an alternative's product page.
+    diverse_baseline = []
+    for hypothesis in hypotheses[:8]:
+        match = next((entry for entry in ranked_baseline if entry[0] == hypothesis['query']), None)
+        if match:
+            diverse_baseline.append(match)
+    for query, result in diverse_baseline + ranked_baseline:
         if result.url not in seen_urls and len(baseline_cards) < 5:
             seen_urls.add(result.url)
             baseline_cards.append({'id': candidate_id(result.url), 'title': result.title,
@@ -209,15 +252,19 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     baseline_ids = {card['id'] for card in baseline_cards}
     evidence = {'item': row['item_name'], 'merchant': row['store_name'], 'receipt': context['receipt'],
         'receipt_totals': bundle['receipt_totals'], 'arithmetic': bundle['validations'],
-        'receipt_sources': packed, 'coverage': coverage, 'retailer_results': baseline_cards}
+        'receipt_sources': packed, 'coverage': coverage, 'retailer_results': baseline_cards,
+        'reading_hypotheses': prompt_hypotheses}
     comparison.emit('enrichment_collaboration_evidence', {**context, 'coverage': {**bundle['coverage'], **coverage},
         'ocr_engines': sorted({s['engine'] for s in bundle['sources'] if s.get('engine')}),
         'images': image_metadata, 'image_errors': image_errors, 'artifact_errors': bundle.get('artifact_errors', []),
-        'learned_searches': learned, 'arithmetic': bundle['validations']})
+        'learned_searches': learned, 'reading_hypotheses': hypotheses,
+        'arithmetic': bundle['validations']})
     proposals = []
     for profile in profiles:
         visible_images = images if profile.vision else []
-        text = INSTRUCTIONS + 'Round 1: propose an expanded reading and up to three retailer searches.\n' + json.dumps(
+        text = INSTRUCTIONS + ('Round 1: assess the reading_hypotheses separately. Do not collapse conflicting lines into the canonical reading or favor a reading because it occurs in more passes. '
+            'Propose up to three retailer searches, prioritizing unresolved alternative readings and plausible brand initialisms and abbreviation expansions. '
+            'Do not spend every search on the canonical reading. Explain which alternatives remain unresolved.\n') + json.dumps(
             {**evidence, 'attached_images': [{k: v for k, v in i.items() if k != 'data'} for i in visible_images]}, default=str)
         proposal = call(profile, 'proposal', text, known_sources | baseline_ids | {i['id'] for i in visible_images},
                         set(), images, context)
@@ -252,25 +299,27 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             'snippet': result.snippet[:300], 'confidence': score['confidence'], 'evidence': score, 'ocr_support': support}
     # Bound review context and record any excluded candidates rather than
     # pretending that a capped prompt contains every search result.
-    candidates = list(cards.values())[:8]
+    preferred_ids = [card['id'] for card in baseline_cards]
+    candidates = sorted(cards.values(), key=lambda card: card['id'] not in preferred_ids)[:8]
     candidate_ids = {c['id'] for c in candidates}
     peer_proposals = [{key: value for key, value in p.items() if key in {'profile', 'provider', 'model', 'status', 'output'}} for p in proposals]
     reviews = []
     for profile in profiles:
         visible_images = images if profile.vision else []
-        text = INSTRUCTIONS + 'Round 2: review ALL proposals and candidates. Choose a supplied candidate ID or null. Cite both the product ID and supporting receipt observations; explain any disagreement.\n' + json.dumps(
+        text = INSTRUCTIONS + 'Round 2: review ALL proposals, reading hypotheses and candidates. Choose a product: ID from retailer_results or null; receipt observation IDs are never product candidates. Cite both the product ID and supporting receipt observations; explain conflicting readings and any disagreement.\n' + json.dumps(
             {**evidence, 'retailer_results': candidates, 'peer_proposals': peer_proposals,
              'attached_images': [{k: v for k, v in i.items() if k != 'data'} for i in visible_images]}, default=str)
         reviews.append(call(profile, 'review', text, known_sources | candidate_ids | {i['id'] for i in visible_images},
                             candidate_ids, images, context))
     for review in reviews:
         if review['status'] != 'success': errors.append({'stage': 'review', 'profile': review['profile'], 'error_type': review.get('error_type')})
-    complete_context = coverage['included_sources'] == coverage['available_sources'] and not any(c['confidence'] >= threshold for c in list(cards.values())[8:]) and bundle['coverage']['available_passes'] == bundle['coverage']['included_passes'] and bundle['coverage']['available_documents'] == bundle['coverage']['included_documents']
+    complete_context = coverage['included_sources'] == coverage['available_sources'] and not any(c['confidence'] >= threshold for c in cards.values() if c['id'] not in candidate_ids) and bundle['coverage']['available_passes'] == bundle['coverage']['included_passes'] and bundle['coverage']['available_documents'] == bundle['coverage']['included_documents']
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete_context)
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v2', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v3', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,
+        'reading_hypotheses': hypotheses,
         'candidates': candidates, 'search_results': list(cards.values()), 'available_candidates': len(cards), 'proposals': proposals, 'reviews': reviews,
         'search_queries': [{'query': query, 'candidate_ids': [candidate_id(r.url) for r in results]} for query, results in cache.items()],
         'decision': decision, 'errors': errors, 'shared_brave_seconds': brave_seconds,
