@@ -24,6 +24,25 @@ class IncompleteModelOutput(ValueError):
         self.usage = usage
 
 
+def incomplete_ollama_output(message):
+    """Capture at most 1024 response characters; count reasoning without storing it."""
+    message = message if isinstance(message, dict) else {}
+    content = message.get('content')
+    thinking = message.get('thinking')
+    head, tail = None, ''
+    if isinstance(content, str):
+        head = content if len(content) <= 1024 else content[:768]
+        tail = content[-256:] if len(content) > 1024 else ''
+    return {
+        'sample_limit_chars': 1024,
+        'content_chars': len(content) if isinstance(content, str) else None,
+        'thinking_chars': len(thinking) if isinstance(thinking, str) else None,
+        'content_head': head,
+        'content_tail': tail,
+        'omitted_content_chars': max(0, len(content) - 1024) if isinstance(content, str) else None,
+    }
+
+
 def profiles() -> tuple[list[Profile], list[dict]]:
     """Explicit profiles override defaults; missing credentials never look like votes."""
     configured = os.getenv('RECEIPT_MODEL_PROFILES', '').strip()
@@ -147,12 +166,11 @@ def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> di
     data = post(base + '/api/chat', {'model': profile.model, 'messages': [message],
         'stream': False, 'think': False, 'format': schema, 'keep_alive': 0,
         'options': {'temperature': 0, 'num_ctx': profile.context_tokens, 'num_predict': profile.output_tokens}})
-    if not data.get('done') or data.get('done_reason') != 'stop':
-        raise IncompleteModelOutput({'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count'),
-                                     'finish_reason': data.get('done_reason')})
-    result = {'output': json.loads(data['message']['content']),
-              'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count')}
+    usage = {'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count')}
     for field in ('total_duration', 'load_duration', 'prompt_eval_duration', 'eval_duration'):
         value = data.get(field)
-        result['ollama_' + field.replace('duration', 'seconds')] = value / 1e9 if isinstance(value, (int, float)) else None
-    return result
+        usage['ollama_' + field.replace('duration', 'seconds')] = value / 1e9 if isinstance(value, (int, float)) else None
+    if not data.get('done') or data.get('done_reason') != 'stop':
+        raise IncompleteModelOutput({**usage, 'finish_reason': data.get('done_reason'),
+                                     'incomplete_output': incomplete_ollama_output(data.get('message'))})
+    return {'output': json.loads(data['message']['content']), **usage}

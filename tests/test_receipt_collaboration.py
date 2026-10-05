@@ -645,3 +645,19 @@ def test_recovered_expansion_is_audited_without_redundant_openai_review(monkeypa
     assert payload['decision']['review_policy']['skipped_profiles'] == ['openai']
     assert len(payload['errors']) == 1 and payload['recovered_errors'] == payload['errors']
     assert payload['blocking_errors'] == []
+
+
+def test_truncated_qwen_sample_survives_logging_and_attempt_history(monkeypatch, capsys):
+    monkeypatch.setattr(providers, 'post', lambda *args: {
+        'done': True, 'done_reason': 'length', 'message': {'content': '{"reading":"' + 'repeat ' * 1000},
+        'eval_count': 2048, 'prompt_eval_count': 623})
+    result = collab.expand_readings([{'reading': 'Oep Pic Med', 'source_ids': [SOURCE]}],
+        [providers.Profile('qwen', 'qwen', 'test')], 'Sobeys', {})[0]
+    assert result['status'] == 'error' and 'output' not in result
+    assert len(result['attempts']) == 2
+    for attempt in result['attempts']:
+        sample = attempt['incomplete_output']
+        assert sample['content_chars'] > 1024
+        assert len(sample['content_head']) + len(sample['content_tail']) == 1024
+    logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert any(log.get('incomplete_output') == result['incomplete_output'] for log in logs)
