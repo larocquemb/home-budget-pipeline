@@ -16,7 +16,7 @@ from .. import receipt_graph as graph
 
 PERSPECTIVES = {
     'lineage': None,
-    'topology': {'Receipt', 'Message', 'ProcessingAttempt', 'AttemptEvent', 'Worker', 'Node', 'OCRRun', 'OCRPass', 'OCRMethod', 'Model', 'ModelInvocation', 'Provider', 'GPU', 'InferenceHost', 'ExtractionResult', 'Guardrail', 'Decision', 'Collaboration', 'PostgreSQLRecord'},
+    'topology': {'Receipt', 'Message', 'MessageEvent', 'BrokerRoute', 'ResultMessage', 'ProcessingAttempt', 'AttemptEvent', 'Worker', 'Node', 'OCRRun', 'OCRPass', 'OCRMethod', 'Model', 'ModelInvocation', 'Provider', 'GPU', 'InferenceHost', 'ExtractionResult', 'Guardrail', 'Decision', 'Collaboration', 'PostgreSQLRecord'},
     'domain': {'Receipt', 'CanonicalReceipt', 'Merchant', 'Item', 'Category', 'ProductPage', 'SearchResult', 'Decision', 'Collaboration'},
 }
 

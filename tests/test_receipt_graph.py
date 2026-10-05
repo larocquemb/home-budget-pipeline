@@ -103,3 +103,20 @@ ORIGINAL_READ = web.read
 def test_evidence_links_do_not_allow_script_urls():
     node = {'kind': 'SearchResult', 'properties': {'url': 'javascript:alert(1)'}}
     assert all(not l['url'].startswith('javascript:') for l in web.links(node))
+
+
+def test_http_graph_routes_require_identity_and_keep_credentials_server_side(monkeypatch):
+    from fastapi.testclient import TestClient
+    from home_budget_pipeline.web.receipt_app import app
+    monkeypatch.delenv('LEDGER_PROXY_SECRET', raising=False)
+    monkeypatch.setenv('NEO4J_PASSWORD', 'server-only-test-password')
+    monkeypatch.setattr(web, 'read', lambda *a, **kw: [])
+    with TestClient(app) as client:
+        assert client.get(web.BASE_PATH + '/api/graph/receipts').status_code == 401
+        headers = {'X-Forwarded-User': 'test-operator'}
+        assert client.get(web.BASE_PATH + '/api/graph/receipts', headers=headers).json() == []
+        response = client.get(web.BASE_PATH + '/graph', headers=headers)
+        assert response.status_code == 200
+        assert 'server-only-test-password' not in response.text
+        assert 'Explore related receipts' in response.text
+        assert client.get(web.BASE_PATH + '/api/graph/receipts/invalid', headers=headers).status_code == 422

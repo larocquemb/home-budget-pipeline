@@ -208,7 +208,12 @@ def build(data):
         e = event['payload']
         message = graph.node('Message', e['message_id'], e['operation'], message_id=e['message_id'], request_id=e.get('request_id'), operation=e['operation'], batch_id=e.get('batch_id'))
         graph.edge(receipt, 'QUEUED_AS', message)
+        if e.get('queue'):
+            route = graph.node('BrokerRoute', e['queue'], e['queue'], route=e['queue'])
+            graph.edge(message, 'ROUTED_TO', route)
         if not e.get('attempt_id'):
+            publication = graph.node('MessageEvent', str(event['id']), e['status'], occurred_at=event['occurred_at'], **e)
+            graph.edge(message, 'OBSERVED', publication)
             continue
         attempt = graph.node('ProcessingAttempt', e['attempt_id'], f"Attempt {e['attempt']}", attempt_id=e['attempt_id'], operation=e['operation'], attempt=e['attempt'])
         graph.edge(message, 'HAS_ATTEMPT', attempt)
@@ -222,6 +227,13 @@ def build(data):
             graph.edge(previous_retry.pop(e['message_id']), 'RETRIED_AS', attempt)
         if e['status'] == 'retried':
             previous_retry[e['message_id']] = attempt
+    for event in data.get('result_events', []):
+        result = graph.node('ResultMessage', event['message_id'], event['event_type'], **event)
+        run = graph.node('OCRRun', str(event['run_uuid']), 'OCR run', run_uuid=str(event['run_uuid']))
+        graph.edge(run, 'PRODUCED', result)
+        record = graph.node('PostgreSQLRecord', ('budget.ocr_result_events', event['message_id']),
+                            'Persisted OCR result event', table='budget.ocr_result_events', key=event['message_id'], persisted_at=event['persisted_at'])
+        graph.edge(result, 'PERSISTED_AS', record)
     for row in data.get('collaborations', []):
         p = row['payload']
         if p['item_id'] in items:
@@ -238,9 +250,11 @@ def load(conn, sha):
     runs = conn.execute('SELECT * FROM budget.receipt_ocr_runs WHERE source_sha256=%s ORDER BY processed_at,run_uuid', (sha,)).fetchall()
     passes = conn.execute('SELECT p.* FROM budget.receipt_ocr_passes p JOIN budget.receipt_ocr_runs r USING(run_uuid) WHERE r.source_sha256=%s ORDER BY r.processed_at,p.pass_id', (sha,)).fetchall()
     events = conn.execute('SELECT * FROM lineage.receipt_events WHERE source_sha256=%s ORDER BY occurred_at,id', (sha,)).fetchall()
+    result_events = conn.execute('SELECT * FROM budget.ocr_result_events WHERE source_sha256=%s ORDER BY persisted_at,message_id', (sha,)).fetchall()
     items = conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=%s ORDER BY id', (expense['id'],)).fetchall() if expense else []
     collaborations = conn.execute('SELECT c.payload,COALESCE(r.summary,\'{}\'::jsonb) AS summary FROM enrichment.receipt_collaborations c LEFT JOIN enrichment.receipt_collaboration_runs r USING(run_uuid) JOIN budget.expense_items i ON i.id=c.expense_item_id WHERE i.expense_pk=%s ORDER BY c.completed_at,c.id', (expense['id'],)).fetchall() if expense else []
-    return {'receipt': receipt, 'expense': expense, 'items': items, 'ocr_runs': runs, 'ocr_passes': passes, 'events': events, 'collaborations': collaborations}
+    return {'receipt': receipt, 'expense': expense, 'items': items, 'ocr_runs': runs, 'ocr_passes': passes, 'events': events,
+            'result_events': result_events, 'collaborations': collaborations}
 
 
 def driver():

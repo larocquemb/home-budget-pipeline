@@ -23,11 +23,16 @@ def test_real_postgres_attempt_history_is_authoritative(pg_conn):
     event = uuid.uuid4()
     sha = uuid.uuid4().hex * 2
     try:
+        pg_conn.execute('INSERT INTO ingest.receipts(source_sha256,source_reference) VALUES (%s,%s)', (sha,'synthetic-receipt.pdf'))
         pg_conn.execute('INSERT INTO lineage.receipt_events(id,source_sha256,source_reference,payload) VALUES (%s,%s,%s,%s)',
-                        (event, sha, 'synthetic-receipt.pdf', Jsonb({'status': 'failed', 'attempt_id': str(event)})))
+                        (event, sha, 'synthetic-receipt.pdf', Jsonb({'status': 'failed', 'attempt_id': str(event),
+                            'message_id': 'message:'+sha, 'operation': 'receipt.cache-rebuild.v3', 'attempt': 1})))
         row = pg_conn.execute('SELECT payload FROM lineage.receipt_events WHERE id=%s', (event,)).fetchone()
         payload = row['payload'] if isinstance(row, dict) else row[0]
         assert payload['status'] == 'failed'
+        from home_budget_pipeline.receipt_graph import load, build
+        graph = build(load(pg_conn, sha))
+        assert any(n['kind'] == 'AttemptEvent' and n['properties']['status'] == 'failed' for n in graph['nodes'])
     finally:
         pg_conn.rollback()
 
