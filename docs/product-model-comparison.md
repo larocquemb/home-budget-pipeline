@@ -248,12 +248,12 @@ Vision profiles also receive up to two receipt page images, verified against the
 source SHA-256 and read from the mounted receipt inbox. Text-only Qwen sees the
 OCR evidence. Models propose readings and search queries with source citations.
 
-The production collaboration profile uses `qwen3-vl:30b` so Qwen receives the
+The production collaboration profile uses `qwen3-vl:30b-a3b-instruct-q4_K_M` so Qwen receives the
 same page images as OpenAI. Before syncing this profile, install the model on
 Arsene (set `OLLAMA_HOST` to the managed service address):
 
 ```sh
-OLLAMA_HOST=http://192.168.2.201:11434 ollama pull qwen3-vl:30b
+OLLAMA_HOST=http://192.168.2.201:11434 ollama pull qwen3-vl:30b-a3b-instruct-q4_K_M
 ```
 
 Large scanned PDFs up to 128 MiB are hash-verified in a stream and rendered
@@ -360,7 +360,11 @@ If those queries do not verify, Qwen moves to the next OCR reading instead of
 spending another reasoning call on the same partial expansion. Other providers
 retain one semantic correction attempt, and a failed correction preserves the
 valid first response and both attempt records.
-Truncated expansion responses get one concise retry. Qwen recovery requests may
+Production uses the explicitly named Instruct model rather than the ambiguous
+`30b` tag. Thinking-only truncations (no answer content, nonempty thinking)
+skip the larger-budget retry and record `retry_skipped_reason`; expansion then
+opens its existing provider circuit and allows fallback discovery. Review also
+skips that unproductive retry. Other truncated responses get one concise retry. Qwen recovery requests may
 double the output budget, capped at 16384 tokens and the context ceiling.
 A retry is skipped when the budget cannot grow; the existing context and image
 budget guard still applies. Default Qwen profiles use 32768 context tokens and

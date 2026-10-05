@@ -7,7 +7,7 @@ data:
   # Provider API keys remain in their existing/optional Secrets.
   ANTHROPIC_RECEIPT_MODEL: claude-sonnet-4-6
   GEMINI_RECEIPT_MODEL: gemini-3.8-flash
-  OLLAMA_COLLAB_MODELS: qwen3-vl:30b
+  OLLAMA_COLLAB_MODELS: qwen3-vl:30b-a3b-instruct-q4_K_M
   COLLAB_CONTEXT_TOKENS: "16384"
   COLLAB_OUTPUT_TOKENS: "2048"
   # Ollama thinking and its answer share the output budget; keep paid budgets separate.

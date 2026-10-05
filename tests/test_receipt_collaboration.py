@@ -722,3 +722,23 @@ def test_failed_semantic_correction_preserves_valid_first_expansion(monkeypatch)
     assert result['status'] == 'success' and result['correction_failed'] is True
     assert result['output']['queries'] == ['Salsa Pic Med']
     assert result['attempts'][1]['error_type'] == 'IncompleteModelOutput'
+
+
+@pytest.mark.parametrize('stage', ['expansion', 'review'])
+def test_thinking_only_truncation_does_not_repeat_a_larger_budget(monkeypatch, stage):
+    calls = []
+    def request(profile, *args):
+        calls.append(profile.output_tokens)
+        raise providers.IncompleteModelOutput({'finish_reason': 'length', 'output_tokens': profile.output_tokens,
+            'incomplete_output': {'content_chars': 0, 'thinking_chars': 21887}})
+    monkeypatch.setattr(providers, 'request', request)
+    profile = providers.Profile('qwen', 'qwen', 'test', 32768, 8192)
+    if stage == 'expansion':
+        result = collab.expand_readings([{'reading': 'Gep Pic Med', 'source_ids': [SOURCE]}],
+            [profile], 'Sobeys', {})[0]
+        assert result['stop_reason'] == 'provider_truncation_circuit_open'
+    else:
+        result = collab.review_with_citations(profile, 'evidence', {SOURCE}, [candidate()], [], {})
+    assert calls == [8192]
+    assert result['retry_skipped_reason'] == 'thinking_only_truncation'
+    assert result['status'] == 'error' and len(result['attempts']) == 1
