@@ -169,7 +169,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     started = time.monotonic()
     images, image_errors = shared.render_images(bundle) if any(p.vision for p in profiles) else ([], [])
     image_metadata = [{k: v for k, v in image.items() if k != 'data'} for image in images]
-    cache, errors = {}, []
+    cache, errors = {}, [{'stage': 'ocr_artifact', **error} for error in bundle.get('artifact_errors', [])]
     learned = core.learned_discovery(row['item_name'], row['store_name'], prior_matches)
     brave_started = time.monotonic()
     try:
@@ -196,7 +196,8 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
         'receipt_sources': packed, 'coverage': coverage, 'retailer_results': baseline_cards}
     comparison.emit('enrichment_collaboration_evidence', {**context, 'coverage': {**bundle['coverage'], **coverage},
         'ocr_engines': sorted({s['engine'] for s in bundle['sources'] if s.get('engine')}),
-        'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned, 'arithmetic': bundle['validations']})
+        'images': image_metadata, 'image_errors': image_errors, 'artifact_errors': bundle.get('artifact_errors', []),
+        'learned_searches': learned, 'arithmetic': bundle['validations']})
     proposals = []
     for profile in profiles:
         visible_images = images if profile.vision else []

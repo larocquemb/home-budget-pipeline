@@ -212,7 +212,18 @@ make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='20260214_sobeys_363_95.pdf'
 select one mode per Job. The mode reads the latest stored OCR run for each receipt
 source, including Tesseract, Paddle and any persisted vision-engine passes. It
 retrieves probable matching lines, consensus text, line geometry, quantities,
-prices, receipt totals and arithmetic checks. It does not rerun missing OCR engines.
+prices, receipt totals and arithmetic checks. When asynchronous pass records lack
+text, it reads the current run's recorded `ocr-cache` artifact from the mounted
+cache directory. It verifies the recorded file size and SHA-256, source SHA and
+reference, run UUID, and pass identity before recovering alternate text. Sources
+retain their pass/run IDs and artifact URI/digest for audit and graph navigation.
+It does not rerun missing OCR engines or silently substitute older OCR runs.
+
+Only PVC artifacts beneath the configured cache root are supported by this
+reader. Missing, overwritten, unsupported or invalid artifacts are reported in
+`artifact_errors` and block automatic recommendations while leaving available
+text usable for review. Old runs without a recorded artifact are not guessed
+from filenames. The loader never writes recovered text back to PostgreSQL.
 
 Round one gives each available model the same retrieved text and Brave baseline.
 The baseline searches the original phrase and a bounded OCR C/O alternative.

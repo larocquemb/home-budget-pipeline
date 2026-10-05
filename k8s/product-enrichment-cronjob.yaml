@@ -46,6 +46,13 @@ spec:
                       fieldPath: spec.nodeName
                 - name: HOME_BUDGET_RECEIPTS_ROOT
                   value: /data/receipts/raw/scanned/inbox
+                - name: HOME_BUDGET_OCR_CACHE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: receipt-runtime-config
+                      key: HOME_BUDGET_OCR_CACHE
+                - name: OCR_ARTIFACT_URI_PREFIX
+                  value: pvc://home-budget/receipts/derived/ocr-cache
                 - name: OLLAMA_BASE_URL
                   value: http://192.168.2.201:11434
                 - name: OLLAMA_GPU_METRICS_URL
