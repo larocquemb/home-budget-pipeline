@@ -149,11 +149,11 @@ def test_images_require_safe_path_and_matching_source_hash(monkeypatch, tmp_path
     data = bundle()
     data['documents'] = [{'id': 1, 'source_reference': '../outside.png', 'source_sha256': 'a' * 64}]
     images, errors = shared.render_images(data)
-    assert not images and errors[0]['error_type'] == 'ValueError'
+    assert not images and errors[0]['reason'] == 'outside_receipt_root'
     (tmp_path / 'a.png').write_bytes(b'not matching evidence')
     data['documents'][0]['source_reference'] = 'a.png'
     images, errors = shared.render_images(data)
-    assert not images and errors[0]['error_type'] == 'ValueError'
+    assert not images and errors[0]['reason'] == 'source_hash_mismatch'
 
 
 def test_verified_image_is_bounded_and_identified(monkeypatch, tmp_path):
@@ -168,6 +168,34 @@ def test_verified_image_is_bounded_and_identified(monkeypatch, tmp_path):
     images, errors = shared.render_images(data)
     assert not errors and len(images) == 1
     assert images[0]['id'] == 'image:3:1' and len(images[0]['sha256']) == 64
+
+
+def test_large_verified_pdf_is_rendered_from_stream(monkeypatch, tmp_path):
+    import hashlib
+    import pypdfium2
+    from PIL import Image
+    monkeypatch.setenv('HOME_BUDGET_RECEIPTS_ROOT', str(tmp_path))
+    path = tmp_path / 'scan.pdf'
+    Image.new('RGB', (300, 600), 'white').save(path, format='PDF')
+    with path.open('ab') as source:
+        for _ in range(21):
+            source.write(b'\n' * 1024 ** 2)
+    assert path.stat().st_size > 20 * 1024 ** 2
+    with path.open('rb') as source:
+        digest = hashlib.file_digest(source, 'sha256').hexdigest()
+    real_document = pypdfium2.PdfDocument
+    def document(source):
+        assert hasattr(source, 'read') and hasattr(source, 'seek')
+        return real_document(source)
+    monkeypatch.setattr(pypdfium2, 'PdfDocument', document)
+    data = bundle()
+    data['documents'] = [{'id': 3, 'source_reference': 'scan.pdf', 'source_sha256': digest}]
+    images, errors = shared.render_images(data)
+    assert not errors and len(images) == 1
+    assert images[0]['id'] == 'image:3:1'
+    monkeypatch.setattr(shared, 'MAX_SOURCE_BYTES', 20 * 1024 ** 2)
+    images, errors = shared.render_images(data)
+    assert not images and errors[0]['reason'] == 'source_too_large'
 
 
 def test_collaboration_persists_only_evidence_and_run_summary(monkeypatch, capsys):

@@ -86,8 +86,17 @@ def load(conn, row: dict) -> dict:
             ('receipt_item_subtotal', 'receipt_gst', 'receipt_pst', 'receipt_discount_total', 'expense_total', 'total_recon_diff')}}
 
 
+MAX_SOURCE_BYTES = 128 * 1024 ** 2
+
+
+class ReceiptImageError(ValueError):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
 def render_images(bundle: dict) -> tuple[list[dict], list[dict]]:
-    """Read only hash-verified documents beneath the configured receipt root."""
+    """Stream hash-verified sources; send at most two bounded page images."""
     from PIL import Image
     images, errors = [], []
     root = Path(os.getenv('HOME_BUDGET_RECEIPTS_ROOT', '/data/receipts/raw/scanned/inbox')).resolve()
@@ -96,36 +105,48 @@ def render_images(bundle: dict) -> tuple[list[dict], list[dict]]:
             break
         try:
             path = (root / document['source_reference']).resolve()
-            if not path.is_relative_to(root) or path.stat().st_size > 20 * 1024 ** 2:
-                raise ValueError('Source outside receipt root or too large')
+            if not path.is_relative_to(root):
+                raise ReceiptImageError('outside_receipt_root')
             with path.open('rb') as source:
-                source_bytes = source.read(20 * 1024 ** 2 + 1)
-            if len(source_bytes) > 20 * 1024 ** 2 or hashlib.sha256(source_bytes).hexdigest() != document['source_sha256']:
-                raise ValueError('Source hash mismatch')
-            page_numbers = sorted({g['page_number'] for g in bundle['geometry'] if g['evidence_id'] == document['id']}) or [1]
-            if path.suffix.lower() == '.pdf':
-                import pypdfium2 as pdfium
-                pdf = pdfium.PdfDocument(source_bytes)
-                try:
-                    for number in page_numbers[:2 - len(images)]:
-                        page = pdf[number - 1]
-                        scale = min(2, 2048 / max(page.get_size()))
-                        bitmap = page.render(scale=scale)
-                        try:
-                            image = bitmap.to_pil().copy()
-                        finally:
-                            bitmap.close()
-                            page.close()
-                        images.append(encode_image(image, document['id'], number))
-                finally:
-                    pdf.close()
-            elif path.suffix.lower() in {'.png', '.jpg', '.jpeg'}:
-                with Image.open(io.BytesIO(source_bytes)) as image:
-                    images.append(encode_image(image, document['id'], 1))
-            else:
-                raise ValueError('Unsupported receipt image format')
+                if os.fstat(source.fileno()).st_size > MAX_SOURCE_BYTES:
+                    raise ReceiptImageError('source_too_large')
+                digest = hashlib.sha256()
+                size = 0
+                while chunk := source.read(1024 ** 2):
+                    size += len(chunk)
+                    if size > MAX_SOURCE_BYTES:
+                        raise ReceiptImageError('source_too_large')
+                    digest.update(chunk)
+                if digest.hexdigest() != document['source_sha256']:
+                    raise ReceiptImageError('source_hash_mismatch')
+                source.seek(0)
+                page_numbers = sorted({g['page_number'] for g in bundle['geometry'] if g['evidence_id'] == document['id']}) or [1]
+                if path.suffix.lower() == '.pdf':
+                    import pypdfium2 as pdfium
+                    pdf = pdfium.PdfDocument(source)
+                    try:
+                        for number in page_numbers[:2 - len(images)]:
+                            page = pdf[number - 1]
+                            try:
+                                scale = min(2, 2048 / max(page.get_size()))
+                                bitmap = page.render(scale=scale)
+                                try:
+                                    image = bitmap.to_pil().copy()
+                                finally:
+                                    bitmap.close()
+                            finally:
+                                page.close()
+                            images.append(encode_image(image, document['id'], number))
+                    finally:
+                        pdf.close()
+                elif path.suffix.lower() in {'.png', '.jpg', '.jpeg'}:
+                    with Image.open(source) as image:
+                        images.append(encode_image(image, document['id'], 1))
+                else:
+                    raise ReceiptImageError('unsupported_image_format')
         except Exception as exc:
-            errors.append({'evidence_id': document['id'], 'error_type': type(exc).__name__})
+            errors.append({'evidence_id': document['id'], 'error_type': type(exc).__name__,
+                           'reason': getattr(exc, 'reason', 'image_render_failed')})
     return images, errors
 
 
