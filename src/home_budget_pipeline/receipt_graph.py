@@ -56,7 +56,8 @@ def worker(graph, parent, identity):
     host = identity.get('host') or identity.get('worker_host') or identity.get('pod')
     node = identity.get('node') or identity.get('worker_node')
     if host:
-        w = graph.node('Worker', host, host, **identity)
+        w = graph.node('Worker', host, host, **{k: v for k, v in identity.items()
+                       if k in {'host', 'pod', 'worker_host', 'worker_pid', 'node', 'worker_node', 'service', 'pid'}})
         graph.edge(parent, 'EXECUTED_BY', w)
         if node and node != 'unknown':
             n = graph.node('Node', node, node)
@@ -105,8 +106,8 @@ def collaboration(graph, receipt, item, payload, skipped=()):
         phase = invocation['stage']
         profile = invocation['profile']
         i = graph.node('ModelInvocation', (*scope, profile, phase), f"{profile}: {phase}", **{**invocation, 'run_uuid': payload['run_uuid']})
-        model = graph.node('Model', (invocation['provider'], invocation['model']), invocation['model'],
-                           provider=invocation['provider'], model=invocation['model'])
+        model = graph.node('Model', (invocation['provider'], invocation['model'], invocation.get('model_digest')), invocation['model'],
+                           provider=invocation['provider'], model=invocation['model'], digest=invocation.get('model_digest'))
         family = graph.node('Provider', invocation['provider'], invocation['provider'])
         graph.edge(run, 'HAS_INVOCATION', i)
         graph.edge(i, 'USES_MODEL', model)
@@ -115,6 +116,9 @@ def collaboration(graph, receipt, item, payload, skipped=()):
             gpu = graph.node('GPU', (invocation.get('gpu_host'), invocation['gpu_uuid']), invocation['gpu_uuid'],
                              host=invocation.get('gpu_host'), uuid=invocation['gpu_uuid'])
             graph.edge(i, 'OBSERVED_GPU', gpu)
+            if invocation.get('gpu_host'):
+                host = graph.node('InferenceHost', invocation['gpu_host'], invocation['gpu_host'])
+                graph.edge(gpu, 'LOCATED_ON', host)
         output = invocation.get('output') or invocation.get('invalid_output') or {}
         valid = invocation.get('status') == 'success'
         outcome = graph.node('Proposal' if phase == 'proposal' else 'ModelReview', (*scope, profile, phase),
@@ -184,6 +188,10 @@ def build(data):
     for run in data.get('ocr_runs', []):
         attempt = graph.node('OCRRun', str(run['run_uuid']), 'OCR run', **run)
         graph.edge(receipt, 'HAS_OCR_RUN', attempt)
+        extraction = graph.node('ExtractionResult', str(run['run_uuid']), run.get('extraction_status') or 'Unknown extraction outcome',
+                                status=run.get('extraction_status'), confidence=run.get('extraction_confidence'),
+                                evidence_id=run.get('evidence_id'), processing_seconds=run.get('processing_seconds'))
+        graph.edge(attempt, 'PRODUCED', extraction)
         worker(graph, attempt, {**run.get('worker_identity', {}), 'worker_host': run.get('worker_host')})
         traceparent = run.get('traceparent') or ''
         if re.fullmatch(r'[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}', traceparent):

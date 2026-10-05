@@ -48,6 +48,7 @@ def pytest_sessionstart(session) -> None:
         "DROP SCHEMA IF EXISTS ingest CASCADE; "
         "DROP SCHEMA IF EXISTS ops CASCADE; "
         "DROP SCHEMA IF EXISTS enrichment CASCADE; "
+        "DROP SCHEMA IF EXISTS lineage CASCADE; "
         "DROP SCHEMA IF EXISTS budget CASCADE;",
     )
 

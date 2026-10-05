@@ -49,7 +49,7 @@ without a third-party CDN or database credentials in the browser.
 `RUNS_ON`, `HAS_PASS`, `USES_MODEL`, `PRODUCED`, `CITES`, `SUPPORTS`,
 `CONSIDERED_PROPOSAL`, `RESULTED_IN`, `RECOMMENDS`, `RETRIED_AS`, `CONTAINS`,
 `CLASSIFIED_AS` and `PERSISTED_AS`. Model IDs include provider and model name;
-profile/context settings belong to individual invocations, so multiple Qwen
+and recorded digest where available; profile/context settings belong to individual invocations, so multiple Qwen
 profiles do not imply independent providers. Observation/candidate IDs include
 run and item identity. Processing attempt UUIDs distinguish redeliveries.
 
