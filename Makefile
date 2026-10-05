@@ -149,6 +149,13 @@ receipts-worker-test:
 enrich-products:
 	@bash scripts/enrichment_job.sh "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)" "$(ENRICH_JOB)"
 
+.PHONY: receipts-graph receipts-graph-secret
+receipts-graph-secret:
+	@bash scripts/receipt_graph_secret.sh "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)"
+
+receipts-graph:
+	@SHA="$(SHA)" DRY_RUN="$(DRY_RUN)" bash scripts/receipt_graph_job.sh "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)"
+
 test:
 	$(PYTHON) -m pytest -q -m "not integration"
 

@@ -40,6 +40,10 @@ spec:
                   cpu: "1"
                   memory: 512Mi
               env:
+                - name: K8S_NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
                 - name: HOME_BUDGET_RECEIPTS_ROOT
                   value: /data/receipts/raw/scanned/inbox
                 - name: OLLAMA_BASE_URL

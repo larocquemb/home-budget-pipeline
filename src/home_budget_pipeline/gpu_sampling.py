@@ -14,6 +14,8 @@ class GpuSampler:
         self.stop = threading.Event()
         self.samples = []
         self.errors = 0
+        self.identity = {}
+        self.elapsed = 0
 
     def poll(self):
         while not self.stop.is_set():
@@ -28,6 +30,8 @@ class GpuSampler:
                 if self.stop.is_set():
                     break
                 self.samples.append((elapsed, gpu["gpu_util_percent"]))
+                self.identity = {"gpu_host": payload["gpu_host"],
+                                 "gpu_uuid": gpu.get("gpu_uuid"), "gpu_index": gpu["gpu_index"]}
                 self.emit("enrichment_gpu_sample", {**self.context, **gpu,
                           "gpu_host": payload["gpu_host"], "sample_timestamp": payload["timestamp"],
                           "elapsed_seconds": round(elapsed, 3)})
@@ -53,7 +57,7 @@ class GpuSampler:
                              self.samples[index + 1][0] - offset if index + 1 < len(self.samples) else self.interval))
                    for index, (offset, _) in enumerate(self.samples)]
         covered = sum(weights)
-        return {"gpu_sample_count": len(self.samples), "gpu_sampling_errors": self.errors,
+        return {**self.identity, "gpu_sample_count": len(self.samples), "gpu_sampling_errors": self.errors,
                 "gpu_sampled_seconds": round(covered, 3),
                 "gpu_util_avg_percent": round(sum(w * p for w, (_, p) in zip(weights, self.samples)) / covered, 2) if covered else None,
                 "gpu_util_max_percent": max((p for _, p in self.samples), default=None),

@@ -56,6 +56,7 @@ nav:
       - RabbitMQ design: rabbitmq-receipt-design.md
       - RabbitMQ operations: rabbitmq-receipts.md
       - OCR Results Collector: ocr-results-collector.md
+      - Receipt knowledge graph: receipt-knowledge-graph.md
   - Operations:
       - Build and deployment: operations-runbook.md
       - Kubernetes log design: log-forwarding-design.md

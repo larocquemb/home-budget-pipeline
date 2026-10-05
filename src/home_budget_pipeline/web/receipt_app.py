@@ -23,6 +23,7 @@ from .app import (
 )
 from .queries import LedgerQueryService, Page
 from .render import esc, money, page, pager
+from . import receipt_graph as _receipt_graph_routes
 
 _RECEIPT_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _EXPENSE_DETAIL_RE = re.compile(rf"^{re.escape(BASE_PATH)}/expenses/(\d+)$")

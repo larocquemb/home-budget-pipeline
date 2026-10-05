@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../rabbitmq-private-telemetry
+  - neo4j.yaml
+  - projector.yaml
+  - web-rbac.yaml
+  - network-policy.yaml
+patches:
+  - path: web-patch.yaml

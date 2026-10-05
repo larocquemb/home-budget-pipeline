@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-web
+  namespace: home-budget
+spec:
+  template:
+    spec:
+      serviceAccountName: receipt-graph-viewer
+      containers:
+        - name: ledger-web
+          envFrom:
+            - secretRef:
+                name: neo4j-secret
+          env:
+            - name: GRAPH_GRAFANA_URL
+              value: https://grafana.idc.brownrook.net

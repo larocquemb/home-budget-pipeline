@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: neo4j-private
+  namespace: home-budget
+spec:
+  podSelector:
+    matchLabels:
+      app: neo4j
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ledger-web
+        - podSelector:
+            matchLabels:
+              app: receipt-graph
+      ports:
+        - protocol: TCP
+          port: 7687

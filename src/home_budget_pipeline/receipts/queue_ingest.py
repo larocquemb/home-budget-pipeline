@@ -19,6 +19,7 @@ from threading import Event
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from .. import telemetry
+from .. import receipt_lineage
 from . import backlog_ingest as backlog
 from .message import MAX_ATTEMPTS, InvalidReceiptMessage, ReceiptMessage
 from .parallel_ingest import _cache_path, has_ocr_cache
@@ -229,6 +230,13 @@ def publish_confirmed(
             },
         ),
     )
+    if message_type in {'receipt.process.v1', 'receipt.reprocess.v2', 'receipt.cache-rebuild.v3'}:
+        try:
+            observed = ReceiptMessage.from_bytes(body)
+        except InvalidReceiptMessage:
+            pass
+        else:
+            receipt_lineage.record(observed, 'queued', queue=exchange)
 
 
 def publication_plan(
@@ -624,8 +632,10 @@ def handle_worker_delivery(
     from .ocr_collector import publish_result
 
     message = None
+    attempt_id = str(uuid4())
     try:
         message = ReceiptMessage.from_bytes(body)
+        receipt_lineage.record(message, 'active', attempt_id=attempt_id, queue=topology.work)
         LOG.info(
             "receipt=%s %s status=active attempt=%s",
             message.message_id,
@@ -660,7 +670,11 @@ def handle_worker_delivery(
             type(exc).__name__,
             message.attempt if message else 0,
         )
+        receipt_lineage.record(message, 'retried' if retry else 'failed', attempt_id=attempt_id,
+                              error_type=type(exc).__name__, queue=target)
     else:
+        receipt_lineage.record(message, status, attempt_id=attempt_id, queue=topology.work,
+                              result_runs=sorted({str(e.run_uuid) for e in events if hasattr(e, 'run_uuid')}))
         LOG.info(
             "receipt=%s %s status=%s result_events=%s",
             message.message_id,
