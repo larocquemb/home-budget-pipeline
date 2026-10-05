@@ -275,10 +275,13 @@ Brave searches those proposals; round two exposes every provider's proposal and
 the ranked product candidates to every reviewer. Responses cannot cite unseen
 sources or invent candidate IDs.
 
-The decision is `recommended` only when reviewers agree across at least two
-provider families, original receipt scoring reaches the threshold, a retailer
-product page and supporting OCR observation are cited, arithmetic has no detected
-failure, and relevant evidence has not been omitted by the retrieval budget.
+Collaboration tries Qwen first for discovery and review. A valid Qwen review can
+produce a `recommended` result without an OpenAI call when original receipt scoring
+reaches the threshold, a retailer product page and supporting OCR observation are
+explicitly cited, both item and receipt arithmetic pass, required images are
+available, and all relevant evidence is included without search or model errors.
+Otherwise additional configured providers review the evidence and agreement across
+at least two provider families is required; existing evidence checks still apply.
 Qwen variants count as one family. Disagreements, abstentions, errors and weak
 citations stay in `review`. Recommendations **do not overwrite** item names,
 prices, totals, accepted products or product caches. This is evidence gathering
@@ -341,17 +344,21 @@ selected in the final review; brand indexes and store pages remain discovery
 evidence. Calls run sequentially, so ambiguous items take more time and model
 usage when discovery remains unresolved. Brave checks expansions as they arrive;
 once a strong match is found, remaining expansions and the shared proposal round
-are skipped. All configured models still review the pooled evidence independently,
-and agreement, complete citations and the existing evidence requirements remain
-necessary for a recommendation. `enrichment_collaboration_discovery` records the
+are skipped. Qwen reviews the pooled evidence first. Additional model reviews run only when
+the Qwen-only recommendation checks are not satisfied. If literal Brave results
+already supply a supported product page, discovery model calls are skipped too.
+The decision records `review_policy.skipped_profiles` and `fallback_reasons` so
+paid-model use or omission can be inspected in logs and the graph. `enrichment_collaboration_discovery` records the
 stop reason, expansion call count and whether the proposal round was skipped.
 
 Qwen receives the JSON schema in its prompt as well as Ollama's `format` argument.
 Expansion reading/query strings are limited to 160 characters, reasons to 300,
 and citations to six. Truncated expansion responses get one concise retry at the
 same output-token budget; incomplete responses are never parsed as valid evidence.
-Reviews missing the selected product citation or its supporting OCR citation get
-one new model review. Both attempts remain recorded; citations are never inserted
+Reviews require `product_source_id` to equal `candidate_id` (both null when
+abstaining); `source_ids` must cite supporting OCR evidence. The schema restricts
+both product fields to supplied candidate IDs. Missing or mismatched product
+citations or missing supporting OCR citations get one new model review. Both attempts remain recorded; citations are never inserted
 by the application. Persistent failures continue to block recommendations.
 
 Inspect `enrichment_collaboration_expansion` for `target_reading`, `attempts`,

@@ -154,3 +154,18 @@ def test_http_graph_routes_require_identity_and_keep_credentials_server_side(mon
         assert 'server-only-test-password' not in response.text
         assert 'Explore related receipts' in response.text
         assert client.get(web.BASE_PATH + '/api/graph/receipts/invalid', headers=headers).status_code == 422
+
+
+def test_explicit_product_citation_projects_without_mutating_review():
+    data = evidence()
+    for review in data['collaborations'][0]['payload']['reviews']:
+        review['output']['product_source_id'] = 'product:1'
+        review['output']['source_ids'].remove('product:1')
+    before = deepcopy(data)
+    graph = g.build(data)
+    nodes = {n['id']: n for n in graph['nodes']}
+    reviews = {n['id'] for n in graph['nodes'] if n['kind'] == 'ModelReview'}
+    product_links = [e for e in graph['edges'] if e['kind'] == 'CITES' and e['source'] in reviews
+                     and nodes[e['target']]['kind'] == 'SearchResult']
+    assert len(product_links) == 2
+    assert data == before

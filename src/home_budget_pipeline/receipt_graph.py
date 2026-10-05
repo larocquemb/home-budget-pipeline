@@ -142,7 +142,10 @@ def collaboration(graph, receipt, item, payload, skipped=()):
             if query in searched:
                 q = graph.node('SearchQuery', (*scope, query), query)
                 graph.edge(outcome, 'PROPOSED_SEARCH', q)
-        for source_id in output.get('source_ids', []):
+        cited_ids = list(output.get('source_ids', []))
+        if output.get('product_source_id') and output['product_source_id'] not in cited_ids:
+            cited_ids.append(output['product_source_id'])
+        for source_id in cited_ids:
             target = citations.get(source_id)
             if target:
                 graph.edge(outcome, 'CITES' if valid else 'REJECTED_CITATION', target)
