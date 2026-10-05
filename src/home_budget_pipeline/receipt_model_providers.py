@@ -142,7 +142,8 @@ def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> di
         'stream': False, 'think': False, 'format': schema, 'keep_alive': 0,
         'options': {'temperature': 0, 'num_ctx': profile.context_tokens, 'num_predict': profile.output_tokens}})
     if not data.get('done') or data.get('done_reason') != 'stop':
-        raise IncompleteModelOutput({'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count')})
+        raise IncompleteModelOutput({'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count'),
+                                     'finish_reason': data.get('done_reason')})
     result = {'output': json.loads(data['message']['content']),
               'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count')}
     for field in ('total_duration', 'load_duration', 'prompt_eval_duration', 'eval_duration'):
