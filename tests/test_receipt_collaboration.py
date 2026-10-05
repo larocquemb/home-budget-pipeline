@@ -168,7 +168,11 @@ def test_alternative_search_precedes_models_even_when_models_favor_canonical(mon
     def request(profile, text, schema, images):
         assert 'site:sobeys.com Oep Pic Med' in searches
         assert 'site:sobeys.com Jep Pic Med' in searches
-        assert 'reading_hypotheses' in text
+        if schema == collab.EXPANSION_SCHEMA:
+            target = json.loads(next(line for line in text.splitlines() if line.startswith('{')))['target_reading']
+            return {'output': {'reading': target['reading'], 'queries': [],
+                              'source_ids': target['source_ids'][:1], 'reason': 'No defensible expansion'}}
+        assert 'reading_hypotheses' in text or 'expansion_hypotheses' in text
         if schema == collab.PROPOSAL_SCHEMA:
             output = {'reading': 'Cep Pic Med', 'queries': ['Cepacol'],
                       'source_ids': ['item:canonical'], 'reason': 'Uncertain'}
@@ -182,6 +186,76 @@ def test_alternative_search_precedes_models_even_when_models_favor_canonical(mon
     assert searches.count('site:sobeys.com Oep Pic Med') == 1
     assert payload['decision']['disposition'] == 'review'
     assert payload['reading_hypotheses'][1]['source_ids'] == [SOURCE]
+
+
+def test_isolated_expansions_retry_unexpanded_tokens_then_search_full_product(monkeypatch):
+    searches, targets, attempts = [], [], {}
+    def search(key, query, item, domain):
+        searches.append(query)
+        assert item == 'Cep Pic Med'
+        return [core.SearchResult(TITLE, URL, '', .9167)] if 'Old El Paso' in query else []
+    def request(profile, text, schema, images):
+        if schema == collab.EXPANSION_SCHEMA:
+            target = json.loads(next(line for line in text.splitlines() if line.startswith('{')))['target_reading']
+            reading = target['reading']
+            assert images == []
+            assert ('Cep Pic Med' not in text) if reading == 'Oep Pic Med' else ('Oep Pic Med' not in text)
+            targets.append((profile.provider, reading))
+            key = (profile.provider, reading)
+            attempts[key] = attempts.get(key, 0) + 1
+            queries = ['Cepacol Pic Med'] if attempts[key] == 1 else ['Old El Paso medium picante salsa']
+            output = {'reading': TITLE, 'queries': queries, 'source_ids': target['source_ids'][:1], 'reason': 'Unverified expansion'}
+        elif schema == collab.PROPOSAL_SCHEMA:
+            output = {'reading': 'Cep Pic Med', 'queries': ['Cepacol'], 'source_ids': ['item:canonical'], 'reason': 'Uncertain'}
+        else:
+            assert TITLE in text
+            output = review(profile.provider)['output']
+        return {'output': output, 'input_tokens': 100, 'output_tokens': 50}
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(providers, 'request', request)
+    profiles = [providers.Profile('openai', 'openai', 'test'), providers.Profile('qwen', 'qwen', 'test')]
+    payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
+        bundle(), profiles, 'key', .85, {'receipt': 'a.pdf'})
+    assert set(targets) == {(p, r) for p in ('openai', 'qwen') for r in ('Cep Pic Med', 'Oep Pic Med')}
+    assert all(n == 2 for n in attempts.values())
+    assert searches.count('site:sobeys.com Old El Paso medium picante salsa') == 1
+    assert all('Pic Med' not in q for e in payload['expansions'] for q in e['output']['queries'])
+    assert payload['decision']['disposition'] == 'recommended'
+    assert payload['decision']['canonical_updated'] is False
+
+
+def test_expansion_cannot_cite_competing_reading_and_can_abstain(monkeypatch):
+    hypothesis = {'reading': 'Oep Pic Med', 'query': 'site:sobeys.com Oep Pic Med', 'source_ids': [SOURCE]}
+    profile = providers.Profile('openai', 'openai', 'test')
+    monkeypatch.setattr(providers, 'request', lambda *a: {'output': {
+        'reading': TITLE, 'queries': [TITLE], 'source_ids': ['item:canonical'], 'reason': 'Wrong citation'}})
+    result = collab.expand_readings([hypothesis], [profile], 'Sobeys', {})[0]
+    assert result['status'] == 'error' and result['error_type'] == 'EvidenceCitationError'
+    monkeypatch.setattr(providers, 'request', lambda *a: {'output': {
+        'reading': 'Oep Pic Med', 'queries': [], 'source_ids': [SOURCE], 'reason': 'Cannot infer'}})
+    result = collab.expand_readings([hypothesis], [profile], 'Sobeys', {})[0]
+    assert result['status'] == 'success' and result['expansion_state'] == 'unresolved'
+    assert len(result['attempts']) == 1
+
+
+def test_brand_index_is_not_a_selectable_review_product(monkeypatch):
+    monkeypatch.setattr(core, 'brave_candidates', lambda *a: [core.SearchResult(
+        'Cepacol Products', 'https://sobeys.com/products/brand/Cepacol', '', 0)])
+    def request(profile, text, schema, images):
+        if schema == collab.EXPANSION_SCHEMA:
+            h = json.loads(next(line for line in text.splitlines() if line.startswith('{')))['target_reading']
+            output = {'reading': h['reading'], 'queries': [], 'source_ids': h['source_ids'][:1], 'reason': 'Unknown'}
+        elif schema == collab.PROPOSAL_SCHEMA:
+            output = {'reading': 'Cep Pic Med', 'queries': ['Cepacol'], 'source_ids': ['item:canonical'], 'reason': 'Unknown'}
+        else:
+            assert schema['properties']['candidate_id']['enum'] == [None]
+            output = {'candidate_id': None, 'source_ids': [SOURCE], 'reason': 'Only a brand index found'}
+        return {'output': output}
+    monkeypatch.setattr(providers, 'request', request)
+    payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
+        bundle(), [providers.Profile('openai', 'openai', 'test')], 'key', .85, {'receipt': 'a.pdf'})
+    assert payload['candidates'] == [] and len(payload['search_results']) == 1
+    assert payload['decision']['disposition'] == 'review' and payload['errors'] == []
 
 
 def test_failed_provider_does_not_stop_other_workers(monkeypatch):

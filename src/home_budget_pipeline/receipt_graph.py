@@ -113,10 +113,11 @@ def collaboration(graph, receipt, item, payload, skipped=()):
             page = graph.node('ProductPage', prior['product_url'], prior['product_url'], url=prior['product_url'])
             graph.edge(match, 'REFERENCES', page)
     proposals = []
-    for invocation in payload.get('proposals', []) + payload.get('reviews', []):
+    for invocation in payload.get('expansions', []) + payload.get('proposals', []) + payload.get('reviews', []):
         phase = invocation['stage']
         profile = invocation['profile']
-        i = graph.node('ModelInvocation', (*scope, profile, phase), f"{profile}: {phase}", **{**invocation, 'run_uuid': payload['run_uuid']})
+        invocation_scope = (*scope, profile, phase, invocation['target_reading']) if phase == 'expansion' else (*scope, profile, phase)
+        i = graph.node('ModelInvocation', invocation_scope, f"{profile}: {phase}", **{**invocation, 'run_uuid': payload['run_uuid']})
         model = graph.node('Model', (invocation['provider'], invocation['model'], invocation.get('model_digest')), invocation['model'],
                            provider=invocation['provider'], model=invocation['model'], digest=invocation.get('model_digest'))
         family = graph.node('Provider', invocation['provider'], invocation['provider'])
@@ -132,28 +133,33 @@ def collaboration(graph, receipt, item, payload, skipped=()):
                 graph.edge(gpu, 'LOCATED_ON', host)
         output = invocation.get('output') or invocation.get('invalid_output') or {}
         valid = invocation.get('status') == 'success'
-        outcome = graph.node('Proposal' if phase == 'proposal' else 'ModelReview', (*scope, profile, phase),
+        outcome = graph.node('Proposal' if phase in {'proposal', 'expansion'} else 'ModelReview', invocation_scope,
                              output.get('reading') or output.get('reason') or invocation['status'],
                              status=invocation['status'], valid=valid, output=output)
         graph.edge(i, 'PRODUCED', outcome)
+        for query in invocation.get('searched_queries', []):
+            if query in searched:
+                q = graph.node('SearchQuery', (*scope, query), query)
+                graph.edge(outcome, 'PROPOSED_SEARCH', q)
         for source_id in output.get('source_ids', []):
             target = citations.get(source_id)
             if target:
                 graph.edge(outcome, 'CITES' if valid else 'REJECTED_CITATION', target)
             else:
-                unknown = graph.node('UnresolvedCitation', (*scope, profile, phase, source_id), source_id)
+                unknown = graph.node('UnresolvedCitation', (*invocation_scope, source_id), source_id)
                 graph.edge(outcome, 'INVALID_CITATION', unknown)
         selected = output.get('candidate_id')
         if valid and selected in citations:
             graph.edge(outcome, 'SELECTS', citations[selected])
-        if phase == 'proposal':
+        if phase in {'proposal', 'expansion'}:
             proposals.append(outcome)
         else:
             for peer in proposals:
                 graph.edge(i, 'CONSIDERED_PROPOSAL', peer)
         for source in bundle.get('sources', []):
             # Prompt inclusion is bounded; do not claim every stored observation was seen.
-            if source['id'] in payload.get('prompt_source_ids', []):
+            received = invocation.get('input_source_ids', []) if phase == 'expansion' else payload.get('prompt_source_ids', [])
+            if source['id'] in received:
                 graph.edge(i, 'RECEIVED', citations[source['id']])
         if invocation.get('image_count', 0) > 0:
             for image in payload.get('images', [])[:invocation['image_count']]:

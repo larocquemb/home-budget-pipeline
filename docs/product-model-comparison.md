@@ -326,6 +326,29 @@ against the original item. Review selections are constrained to supplied product
 IDs or null, with local citation validation still enforced. A successful search
 or model agreement alone does not approve a product.
 
+Before the shared proposal/review rounds, each unresolved reading receives a
+separate text-only expansion call from each configured model. That call receives
+only the target reading, its citations and the merchant, avoiding anchoring on
+other OCR spellings or unrelated literal-search results. Queries retaining short
+receipt tokens (up to four letters) are rejected; the model retries once with
+full-expansion instructions, or explicitly returns no queries when it cannot
+infer an expansion. The heuristic can also reject real short product words;
+an unresolved expansion is recorded rather than accepted as a product fact.
+Expanded queries are pooled and deduplicated for Brave verification, with scores
+still calculated against the original receipt item. Only product pages can be
+selected in the final review; brand indexes and store pages remain discovery
+evidence. Calls run sequentially, so ambiguous items take more time and model
+usage than the former two-round flow.
+
+Inspect `enrichment_collaboration_expansion` for `target_reading`, `attempts`,
+`expansion_state`, queries and GPU usage. The payload retains expansions, and
+the knowledge graph links their proposals to observations and actual searches.
+This restores the successful August 22 interactive method: OpenAI proposed
+`Old El Paso medium picante salsa`, Brave returned the Sobeys product page,
+and the former enrichment flow accepted it. That earlier run used OpenAI;
+Qwen now participates in the same expansion process. Historical acceptance
+does not override the evidence requirements of a new collaboration run.
+
 Models on your Mac are not automatically available on Arsene. The Job never
 pulls models. Qwen profiles containing `vl` are treated as vision capable by the
 default configuration; use explicit profiles for custom model names. GPU requests
