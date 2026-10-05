@@ -359,6 +359,17 @@ budgets are preserved); the existing context and image budget guard still applie
 If both attempts truncate, expansion calls stop for that Qwen profile rather than
 repeating failures across every remaining OCR reading. Other configured profiles
 can continue discovery. Qwen reviews also get one bounded truncation retry.
+Truncated Ollama responses include `incomplete_output` in the model-result log
+and saved attempt history. `content_head` and `content_tail` retain at most 1024
+response characters combined (768 from the beginning and 256 from the end for
+long responses); `content_chars` and `omitted_content_chars` describe the full
+response length without storing its middle. `thinking_chars` counts returned
+thinking text without retaining that text; null means Ollama did not return a
+string in that field and does not prove that no reasoning occurred. Request
+bodies and attached images are not copied into these diagnostics. Token usage,
+`finish_reason`, requested output budget and Ollama timing remain available for
+comparison. Inspect the sample for repetition or unfinished JSON before raising
+budgets again. Historical runs cannot recover response text that was discarded.
 Incomplete responses are never parsed as valid evidence. Persistent failures
 remain recorded, including failures later superseded by verified discovery and
 a successful review.

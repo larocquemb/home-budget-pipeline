@@ -104,3 +104,34 @@ def test_openai_images_schema_and_budget_are_sent_together(monkeypatch):
     assert result['output'] == OUTPUT
     assert calls[0]['max_output_tokens'] == 4096 and calls[0]['store'] is False
     assert calls[0]['input'][0]['content'][-1]['image_url'].startswith('data:image/png;base64,')
+
+
+@pytest.mark.parametrize('content', ['', '{"reading": "unfinished', 'START' + '繰り返し' * 1000 + 'END'])
+def test_qwen_truncation_diagnostics_are_bounded_and_keep_usage(monkeypatch, content):
+    thinking = 'private reasoning' * 500
+    monkeypatch.setattr(providers, 'post', lambda *args: {
+        'done': True, 'done_reason': 'length', 'message': {'content': content, 'thinking': thinking},
+        'prompt_eval_count': 623, 'eval_count': 2048, 'eval_duration': 2_000_000_000,
+        'total_duration': 3_000_000_000, 'unexpected': 'must not be retained'})
+    with pytest.raises(providers.IncompleteModelOutput) as error:
+        providers.request(providers.Profile('qwen', 'qwen', 'test'), 'request must not be retained', PROPOSAL_SCHEMA, IMAGES)
+    usage = error.value.usage
+    sample = usage['incomplete_output']
+    assert sample['content_chars'] == len(content) and sample['thinking_chars'] == len(thinking)
+    assert len(sample['content_head']) + len(sample['content_tail']) <= 1024
+    expected_head = content[:768] if len(content) > 1024 else content
+    assert sample['content_head'] == expected_head
+    assert sample['omitted_content_chars'] == max(0, len(content) - 1024)
+    if len(content) > 1024: assert sample['content_tail'].endswith('END')
+    assert usage['input_tokens'] == 623 and usage['output_tokens'] == 2048
+    assert usage['ollama_eval_seconds'] == 2 and usage['ollama_total_seconds'] == 3
+    assert 'private reasoning' not in json.dumps(usage)
+    assert 'must not be retained' not in json.dumps(usage)
+    assert 'encoded-image' not in json.dumps(usage)
+
+
+@pytest.mark.parametrize('message', [None, {}, {'content': None}, {'content': [], 'thinking': {}}])
+def test_missing_or_invalid_response_fields_do_not_mask_truncation(message):
+    sample = providers.incomplete_ollama_output(message)
+    assert sample['content_chars'] is None and sample['thinking_chars'] is None
+    assert sample['content_head'] is None and sample['omitted_content_chars'] is None
