@@ -62,26 +62,60 @@ def product_query(item_name: str, merchant: str) -> Optional[str]:
     return f"site:{domain} {terms}" if terms else None
 
 
-def candidate_score(item_name: str, domain: str, title: str, url: str, snippet: str = "") -> float:
+def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippet: str = "") -> dict:
+    """Explain lexical evidence; proposals themselves never increase this score."""
     hostname = (urllib.parse.urlparse(url).hostname or "").lower()
     if hostname != domain and not hostname.endswith(f".{domain}"):
-        return 0.0
-    source = f"{title} {url} {snippet}".lower()
+        return {"confidence": 0.0, "product_page": False, "reason": "wrong_retailer", "tokens": []}
+    path = urllib.parse.urlparse(url).path.lower()
+    product_page = any(marker in path for marker in PRODUCT_PATH_MARKERS.get(domain, ()))
+    if re.search(r"/(brand|brands|category|categories|recipes)(/|$)", path):
+        product_page = False
+    source_words = set(re.findall(r"[a-z0-9]+", f"{title} {urllib.parse.unquote(path)} {snippet}".lower()))
     barcode = BARCODE_RE.search(item_name or "")
-    if barcode and barcode.group(0) in source:
-        return 1.0
-    tokens = {
+    if barcode and barcode.group(0) in source_words:
+        return {"confidence": 1.0 if product_page else 0.0, "product_page": product_page,
+                "reason": "exact_barcode", "tokens": []}
+    tokens = list(dict.fromkeys(
         t for t in re.findall(r"[a-z0-9]+", item_name.lower())
         if len(t) >= 3 and not t.isdigit() and t not in NOISE_TOKENS
-    }
-    if len(tokens) < 2:
-        return 0.0
-    overlap = sum(token in source for token in tokens) / len(tokens)
-    score = 0.35 + 0.65 * overlap
-    path = urllib.parse.urlparse(url).path.lower()
-    if not any(marker in path for marker in PRODUCT_PATH_MARKERS.get(domain, ())):
-        score = min(score, 0.8)
-    return round(score, 4)
+    ))
+    title_words = re.findall(r"[a-z0-9]+", title.lower())
+    while title_words and title_words[0] in {"buy", "shop", "purchase"}:
+        title_words.pop(0)
+    evidence = []
+    for index, token in enumerate(tokens):
+        weight, kind, matched = 0.0, "unmatched", None
+        if token in source_words:
+            weight, kind, matched = 1.0, "exact_token", token
+        elif index == 0 and 2 <= len(token) <= 5 and len(title_words) >= len(token):
+            initialism = "".join(word[0] for word in title_words[:len(token)])
+            differences = [(a, b) for a, b in zip(token, initialism) if a != b]
+            if not differences:
+                weight, kind, matched = 1.0, "brand_initialism", initialism
+            elif differences == [("c", "o")] or differences == [("o", "c")]:
+                weight, kind, matched = .95, "ocr_brand_initialism", initialism
+        if weight == 0:
+            prefixes = sorted(word for word in source_words if word.startswith(token) and word != token)
+            if prefixes:
+                weight, kind, matched = .9, "token_prefix", prefixes[0]
+        if weight == 0:
+            synonyms = {"sauce": {"salsa"}, "salsa": {"sauce"}}.get(token, set()) & source_words
+            if synonyms:
+                weight, kind, matched = .85, "category_synonym", sorted(synonyms)[0]
+        evidence.append({"token": token, "kind": kind, "matched": matched, "weight": weight})
+    # At least two meaningful tokens are needed without an exact barcode.
+    score = sum(e["weight"] for e in evidence) / len(evidence) if len(evidence) >= 2 else 0.0
+    if any(e["kind"] == "unmatched" for e in evidence):
+        score = min(score, .84)
+    if not product_page:
+        score = 0.0
+    return {"confidence": round(score, 4), "product_page": product_page,
+            "reason": "receipt_token_evidence" if product_page else "non_product_page", "tokens": evidence}
+
+
+def candidate_score(item_name: str, domain: str, title: str, url: str, snippet: str = "") -> float:
+    return candidate_evidence(item_name, domain, title, url, snippet)["confidence"]
 
 
 def normalized_item_name_from_verified_product(item_name: str, product_title: str, confidence: float) -> Optional[str]:
@@ -167,15 +201,19 @@ def ai_product_queries(item_name: str, merchant: str, *, client: object | None =
 
 
 def brave_search(api_key: str, query: str, item_name: str, domain: str) -> Optional[SearchResult]:
+    return max(brave_candidates(api_key, query, item_name, domain), key=lambda result: result.score, default=None)
+
+
+def brave_candidates(api_key: str, query: str, item_name: str, domain: str) -> list[SearchResult]:
     url = "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode({"q": query, "count": 10, "country": "ca", "search_lang": "en"})
     request = urllib.request.Request(url, headers={"X-Subscription-Token": api_key, "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with urllib.request.urlopen(request, timeout=float(os.getenv("BRAVE_TIMEOUT_SECONDS", "20"))) as response:
         payload = json.load(response)
     candidates = []
     for row in payload.get("web", {}).get("results", []):
         title, candidate_url, snippet = row.get("title", ""), row.get("url", ""), row.get("description", "")
         candidates.append(SearchResult(title, candidate_url, snippet, candidate_score(item_name, domain, title, candidate_url, snippet)))
-    return max(candidates, key=lambda result: result.score, default=None)
+    return candidates
 
 
 def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool, item_ids: tuple[int, ...] = ()) -> dict[str, int]:
@@ -200,7 +238,7 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                AND (e.store_name ILIKE ANY(%s)) {item_filter}
              ORDER BY i.id LIMIT %s
         """, params).fetchall()
-        cache: dict[str, Optional[SearchResult]] = {}
+        cache: dict[tuple[str, str], Optional[SearchResult]] = {}
         expansion_cache: dict[tuple[str, str], tuple[str, ...]] = {}
         for row in rows:
             stats["considered"] += 1
@@ -221,13 +259,15 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                  ORDER BY confidence DESC, last_used_at DESC LIMIT 1
             """, (domain, item_key, threshold)).fetchone()
 
-            if previous:
-                result = SearchResult(previous["product_description"], previous["product_url"], "", float(previous["confidence"]))
+            previous_score = candidate_score(original_item_name, domain, previous["product_description"] or "", previous["product_url"] or "") if previous else 0
+            if previous and previous_score >= threshold:
+                result = SearchResult(previous["product_description"], previous["product_url"], "", previous_score)
                 selected_query = previous["search_query"] or query
                 provider = "db-cache"
                 stats["db_hits"] += 1
             else:
-                if query not in cache:
+                query_key = (original_item_name, query)
+                if query_key not in cache:
                     old_search = conn.execute("""
                         SELECT candidate_title, candidate_url, confidence
                           FROM budget.product_enrichment_results
@@ -235,11 +275,11 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                          ORDER BY searched_at DESC LIMIT 1
                     """, (query,)).fetchone()
                     if old_search:
-                        cache[query] = SearchResult(old_search["candidate_title"] or "", old_search["candidate_url"], "", float(old_search["confidence"]))
+                        cache[query_key] = SearchResult(old_search["candidate_title"] or "", old_search["candidate_url"], "", candidate_score(original_item_name, domain, old_search["candidate_title"] or "", old_search["candidate_url"]))
                     else:
-                        cache[query] = brave_search(api_key, query, original_item_name, domain)
+                        cache[query_key] = brave_search(api_key, query, original_item_name, domain)
                         stats["searched"] += 1
-                result = cache[query]
+                result = cache[query_key]
                 selected_query = query
                 provider = "brave"
                 if not result or result.score < threshold:
@@ -249,10 +289,11 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                         stats["ai_queries"] += len(expansion_cache[expansion_key])
                     for expansion in expansion_cache[expansion_key]:
                         expanded_query = f"site:{domain} {expansion}"
-                        if expanded_query not in cache:
-                            cache[expanded_query] = brave_search(api_key, expanded_query, expansion, domain)
+                        expanded_key = (original_item_name, expanded_query)
+                        if expanded_key not in cache:
+                            cache[expanded_key] = brave_search(api_key, expanded_query, original_item_name, domain)
                             stats["searched"] += 1
-                        expanded_result = cache[expanded_query]
+                        expanded_result = cache[expanded_key]
                         if expanded_result and (not result or expanded_result.score > result.score):
                             result = expanded_result
                             selected_query = expanded_query
@@ -318,8 +359,12 @@ def main() -> int:
     parser.add_argument("--write-db", action="store_true")
     parser.add_argument("--compare-models", action="store_true",
                         help="Run OpenAI and Qwen on the same items; store comparison evidence only")
+    parser.add_argument("--collaborate-models", action="store_true",
+                        help="Share OCR and retailer evidence across models, then reconcile recommendations")
     parser.add_argument("--receipt", help="Restrict enrichment to a receipt filename or database id")
     args = parser.parse_args()
+    if args.compare_models and args.collaborate_models:
+        parser.error("Choose comparison or collaboration mode")
     dsn = os.environ.get("DATABASE_URL", "")
     api_key = os.environ.get("BRAVE_SEARCH_API_KEY", "")
     if not dsn or not api_key:
@@ -333,6 +378,8 @@ def main() -> int:
     runner = run
     if args.compare_models:
         from .product_comparison import run as runner
+    elif args.collaborate_models:
+        from .receipt_collaboration import run as runner
     result = runner(dsn=dsn, api_key=api_key, limit=args.limit, threshold=args.threshold,
                     write_db=args.write_db, item_ids=item_ids)
     print(json.dumps(result, sort_keys=True))

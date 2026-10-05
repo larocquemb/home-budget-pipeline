@@ -106,7 +106,7 @@ def ai_product_queries(item_name: str, merchant: str) -> tuple[str, ...]:
 
 
 def main() -> int:
-    if "--compare-models" in sys.argv:
+    if "--compare-models" in sys.argv or "--collaborate-models" in sys.argv:
         # Comparison must distinguish search failures from legitimate no matches.
         return core.main()
     core.brave_search = brave_search

@@ -27,6 +27,47 @@
     mode: "0644"
   notify: Restart Ollama
 
+- name: Verify the system Python for the read only GPU telemetry endpoint
+  # These managed hosts already use Python for Ansible. Avoid a needless DNF
+  # transaction: the NVIDIA plugin writes to stdout and corrupts module JSON.
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, --version]
+  changed_when: false
+  check_mode: false
+
+- name: Read the existing Ollama service account
+  ansible.builtin.command:
+    argv: [systemctl, show, ollama, --property=User, --value]
+  register: ollama_service_user
+  changed_when: false
+  check_mode: false
+
+- name: Create the host helper directory
+  ansible.builtin.file:
+    path: /usr/local/libexec
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the NVIDIA utilization reader
+  ansible.builtin.copy:
+    src: gpu_telemetry.py
+    dest: /usr/local/libexec/ollama-gpu-telemetry.py
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Ollama GPU telemetry
+
+- name: Manage the private GPU telemetry service
+  ansible.builtin.template:
+    src: gpu-telemetry.service.j2
+    dest: /etc/systemd/system/ollama-gpu-telemetry.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Ollama GPU telemetry
+
 - name: Configure source restricted access when firewalld is running
   when: (ansible_facts.services.get('firewalld.service', {})).get('state', '') == 'running'
   block:
@@ -45,9 +86,9 @@
     - name: Build rules for the approved private networks
       ansible.builtin.set_fact:
         ollama_firewall_rules: >-
-          {{ ollama_firewall_rules + ['rule family="ipv4" source address="' + item
-             + '" port port="' + (ollama_port | string) + '" protocol="tcp" accept'] }}
-      loop: "{{ ollama_allowed_sources }}"
+          {{ ollama_firewall_rules + ['rule family="ipv4" source address="' + item.0
+             + '" port port="' + (item.1 | string) + '" protocol="tcp" accept'] }}
+      loop: "{{ query('nested', ollama_allowed_sources, [ollama_port, ollama_gpu_telemetry_port]) }}"
 
     - name: Check persistent Ollama firewall rules
       ansible.builtin.command:
@@ -112,6 +153,33 @@
     name: ollama
     enabled: true
     state: started
+
+- name: Ensure GPU telemetry is enabled and running
+  when: not ansible_check_mode
+  ansible.builtin.systemd_service:
+    name: ollama-gpu-telemetry
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Verify the private GPU telemetry endpoint
+  ansible.builtin.uri:
+    url: "http://{{ ollama_listen_address }}:{{ ollama_gpu_telemetry_port }}/gpu"
+    return_content: true
+    use_proxy: false
+    status_code: 200
+  register: ollama_gpu_api
+  retries: 5
+  delay: 2
+  until: ollama_gpu_api.status == 200
+  when: not ansible_check_mode
+
+- name: Confirm the host GPU is visible to the service account
+  ansible.builtin.assert:
+    that:
+      - ollama_gpu_api.json.gpus | length > 0
+    quiet: true
+  when: not ansible_check_mode
 
 - name: Verify the Ollama API on its private address
   ansible.builtin.uri:

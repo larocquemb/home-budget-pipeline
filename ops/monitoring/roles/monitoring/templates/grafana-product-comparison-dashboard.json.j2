@@ -33,7 +33,7 @@
       }
     ],
     "cursorSync": "Crosshair",
-    "description": "Paired OpenAI and Qwen product search experiments. Confidence is original receipt token/barcode overlap on retailer search evidence, not calibrated accuracy. Errors are excluded from score comparisons; canonical products are unchanged.",
+    "description": "Shared Brave-first evidence, independent OpenAI and Qwen expansions, token/initialism/OCR evidence scores, receipt timing scope, and sampled host GPU activity. GPU activity is host-wide during Qwen requests, not exclusive process accounting. Scores are heuristic, not calibrated probabilities.",
     "editable": false,
     "elements": {
       "panel-1": {
@@ -657,6 +657,569 @@
             }
           }
         }
+      },
+      "panel-11": {
+        "kind": "Panel",
+        "spec": {
+          "id": 11,
+          "title": "Host GPU utilization during Qwen calls",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "avg_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_gpu_sample\" | keep gpu_host,gpu_index,gpu_util_percent | unwrap gpu_util_percent | __error__=\"\" [$__interval]) by (gpu_host,gpu_index)",
+                        "queryType": "range",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "none"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "percent",
+                  "min": 0,
+                  "max": 100,
+                  "custom": {
+                    "drawStyle": "line",
+                    "lineWidth": 2,
+                    "fillOpacity": 10,
+                    "spanNulls": false
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-12": {
+        "kind": "Panel",
+        "spec": {
+          "id": 12,
+          "title": "Peak host GPU utilization during Qwen",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "max_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=~\"enrichment_model_result|enrichment_collaboration_model_result\" | provider=\"qwen\" | keep provider,gpu_util_max_percent | unwrap gpu_util_max_percent | __error__=\"\" [$__range]) by (provider)",
+                        "queryType": "instant",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "value_and_name",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "percent",
+                  "min": 0,
+                  "max": 100
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-13": {
+        "kind": "Panel",
+        "spec": {
+          "id": 13,
+          "title": "Receipt enrichment seconds (selected items)",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "sum by (receipt) (sum_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_receipt_timing\" | keep receipt,enrichment_seconds | unwrap enrichment_seconds | __error__=\"\" [$__range]))",
+                        "queryType": "instant",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "value_and_name",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s"
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-14": {
+        "kind": "Panel",
+        "spec": {
+          "id": 14,
+          "title": "Qwen generation seconds (Ollama)",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "avg_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=~\"enrichment_model_result|enrichment_collaboration_model_result\" | provider=\"qwen\" | keep provider,ollama_eval_seconds | unwrap ollama_eval_seconds | __error__=\"\" [$__range]) by (provider)",
+                        "queryType": "instant",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "value_and_name",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s"
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-15": {
+        "kind": "Panel",
+        "spec": {
+          "id": 15,
+          "title": "GPU sampling errors",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "sum by (provider) (sum_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=~\"enrichment_model_result|enrichment_collaboration_model_result\" | provider=\"qwen\" | keep provider,gpu_sampling_errors | unwrap gpu_sampling_errors | __error__=\"\" [$__range]))",
+                        "queryType": "instant",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "textMode": "value_and_name",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-16": {
+        "kind": "Panel",
+        "spec": {
+          "id": 16,
+          "title": "Receipt timing scope and phases",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_receipt_timing\" | line_format \"{% raw %}{{.receipt}} | items={{.selected_items}}/{{.receipt_item_count}} complete={{.complete_receipt}} | enrichment={{.enrichment_seconds}}s sharedBrave={{.shared_brave_seconds}}s OpenAI={{.openai_seconds}}s Qwen={{.qwen_seconds}}s{% endraw %}\"",
+                        "queryType": "range",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": true,
+                "showLabels": false,
+                "sortOrder": "Descending",
+                "enableLogDetails": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-17": {
+        "kind": "Panel",
+        "spec": {
+          "id": 17,
+          "title": "Collaborative decisions and disagreements",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_collaboration_decision\"",
+                        "queryType": "range",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": true,
+                "showLabels": false,
+                "sortOrder": "Descending",
+                "enableLogDetails": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Recommendations require cited receipt and product evidence plus agreement across provider families. Canonical receipt facts are preserved."
+        }
+      },
+      "panel-18": {
+        "kind": "Panel",
+        "spec": {
+          "id": 18,
+          "title": "Collaborative proposals and reviews",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_collaboration_model_result\"",
+                        "queryType": "range",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": true,
+                "showLabels": false,
+                "sortOrder": "Descending",
+                "enableLogDetails": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Independent interpretations, pooled review, token usage, model settings and errors. Qwen variants count as one provider family."
+        }
+      },
+      "panel-19": {
+        "kind": "Panel",
+        "spec": {
+          "id": 19,
+          "title": "Shared OCR and image evidence coverage",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_collaboration_evidence\"",
+                        "queryType": "range",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": true,
+                "showLabels": false,
+                "sortOrder": "Descending",
+                "enableLogDetails": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Included OCR passes and source observations, image hashes, arithmetic checks and missing evidence. Detailed source text and citations are retained in the database."
+        }
       }
     },
     "layout": {
@@ -790,6 +1353,123 @@
               "element": {
                 "kind": "ElementReference",
                 "name": "panel-10"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 32,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-11"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 40,
+              "width": 6,
+              "height": 4,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-12"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 6,
+              "y": 40,
+              "width": 6,
+              "height": 4,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-13"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 12,
+              "y": 40,
+              "width": 6,
+              "height": 4,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-14"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 18,
+              "y": 40,
+              "width": 6,
+              "height": 4,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-15"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 44,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-16"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 52,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-17"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 60,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-18"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 68,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-19"
               }
             }
           }

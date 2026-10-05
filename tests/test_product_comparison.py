@@ -23,9 +23,9 @@ def test_both_models_share_prompt_search_and_original_item_scoring(monkeypatch):
         return {"queries": ["Kraft yard bags"], "model": provider}
     def search(key, query, item, domain):
         searches.append((query, item, domain))
-        return core.SearchResult("Kraft yard bags", "https://homedepot.ca/product/bags", "", .95)
+        return [core.SearchResult("Kraft 5PK Yard Bag", "https://homedepot.ca/product/bags", "", .95)]
     monkeypatch.setattr(comparison, "generate", generate)
-    monkeypatch.setattr(core, "brave_search", search)
+    monkeypatch.setattr(core, "brave_candidates", search)
     cache = {}
     results = [comparison.evaluate(p, "5PK YARD BAG", "Home Depot", "secret", .85, cache)
                for p in ("openai", "qwen")]
@@ -51,13 +51,13 @@ def test_search_failure_marks_provider_incomplete(monkeypatch):
     monkeypatch.setattr(comparison, "generate", lambda *a: {"queries": ["Yard bags"]})
     def fail(*args):
         raise TimeoutError()
-    monkeypatch.setattr(core, "brave_search", fail)
+    monkeypatch.setattr(core, "brave_candidates", fail)
     assert comparison.evaluate("openai", "Yard bags", "Home Depot", "key", .85, {})["status"] == "error"
 
 
 def test_unmatched_is_complete_and_different_products_can_tie(monkeypatch):
     monkeypatch.setattr(comparison, "generate", lambda *a: {"queries": ["Yard bags"]})
-    monkeypatch.setattr(core, "brave_search", lambda *a: None)
+    monkeypatch.setattr(core, "brave_candidates", lambda *a: [])
     result = comparison.evaluate("qwen", "Yard bags", "Home Depot", "key", .85, {})
     assert result["status"] == "no_match"
     assert result["confidence"] == 0
@@ -94,7 +94,7 @@ def test_repeated_empty_queries_are_an_incomplete_error_not_a_zero_match(monkeyp
     monkeypatch.setattr(comparison, "_generate_once", generate_once)
     def forbidden_search(*args):
         pytest.fail("No search should run without model proposals")
-    monkeypatch.setattr(core, "brave_search", forbidden_search)
+    monkeypatch.setattr(core, "brave_candidates", forbidden_search)
     result = comparison.evaluate("qwen", "Cep Pic Med", "Sobeys", "key", .85, {})
     assert len(calls) == 2
     assert result["status"] == "error" and result["confidence"] is None
@@ -116,7 +116,9 @@ def test_ollama_structured_chat_observes_gpu_memory(monkeypatch):
         if isinstance(request, str):
             return Response({"models": [{"name": "qwen3:30b", "size_vram": 18000000000}]})
         return Response({"message": {"content": '{"queries":["Yard bags"]}'},
-                         "prompt_eval_count": 42, "eval_count": 12})
+                         "prompt_eval_count": 42, "eval_count": 12,
+                         "total_duration": 3000000000, "load_duration": 1000000000,
+                         "prompt_eval_duration": 500000000, "eval_duration": 1500000000})
     monkeypatch.setattr(comparison.urllib.request, "urlopen", urlopen)
     result = comparison.generate("qwen", "same prompt")
     request = json.loads(calls[0][0].data)
@@ -125,6 +127,9 @@ def test_ollama_structured_chat_observes_gpu_memory(monkeypatch):
     assert request["stream"] is False and request["think"] is False
     assert result["gpu_vram_bytes"] == 18000000000
     assert result["input_tokens"] == 42
+    assert request["options"]["num_ctx"] == 4096
+    assert result["ollama_load_seconds"] == 1
+    assert result["ollama_eval_seconds"] == 1.5
 
 
 def test_openai_uses_same_schema_and_reports_usage(monkeypatch):
@@ -141,7 +146,8 @@ def test_openai_uses_same_schema_and_reports_usage(monkeypatch):
     assert result["output_tokens"] == 11
 
 
-def test_run_persists_comparisons_only_and_emits_paired_events(monkeypatch, capsys):
+@pytest.mark.parametrize('receipt_item_count', [1, 3])
+def test_run_persists_comparisons_only_and_emits_paired_events(monkeypatch, capsys, receipt_item_count):
     import psycopg
     calls = []
     class Connection:
@@ -153,20 +159,28 @@ def test_run_persists_comparisons_only_and_emits_paired_events(monkeypatch, caps
             return self
         def fetchall(self):
             return [{"id": 42, "item_name": "Yard bags", "store_name": "Home Depot",
-                     "receipt_filename": "receipt.pdf", "source_reference": None}]
+                     "receipt_filename": "receipt.pdf", "source_reference": None,
+                     "receipt_id": 7, "receipt_item_count": receipt_item_count}]
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     monkeypatch.setattr(psycopg, "connect", lambda *a, **kw: Connection())
+    monkeypatch.setattr(core, "brave_candidates", lambda *a: [])
     monkeypatch.setattr(comparison, "evaluate", lambda provider, *a: {
         "provider": provider, "status": "matched", "confidence": .95,
-        "accepted": True, "candidate_url": "https://homedepot.ca/product/bags"})
+        "accepted": True, "candidate_url": "https://homedepot.ca/product/bags", "seconds": 1})
     stats = comparison.run(dsn="unused", api_key="unused", limit=1, threshold=.85, write_db=True)
     assert stats["compared"] == 1 and stats["incomplete"] == 0
     mutations = [sql for sql, _ in calls if not sql.lstrip().startswith("SELECT")]
-    assert len(mutations) == 1 and "INSERT INTO enrichment.product_comparisons" in mutations[0]
+    assert len(mutations) == 2 and "INSERT INTO enrichment.product_comparisons" in mutations[0]
+    assert "INSERT INTO enrichment.product_comparison_runs" in mutations[1]
+    assert stats["receipts"][0]["complete_receipt"] is (receipt_item_count == 1)
+    assert stats["receipts"][0]["selected_items"] == 1
+    assert stats["receipts"][0]["openai_seconds"] == 1
+    assert stats["receipts"][0]["qwen_seconds"] == 1
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [e["event"] for e in events] == [
-        "enrichment_comparison_started", "enrichment_model_started", "enrichment_model_result",
-        "enrichment_model_started", "enrichment_model_result", "enrichment_model_comparison"]
+        "enrichment_comparison_started", "enrichment_brave_baseline", "enrichment_model_started", "enrichment_model_result",
+        "enrichment_model_started", "enrichment_model_result", "enrichment_model_comparison",
+        "enrichment_receipt_timing"]
     assert all(e["run_uuid"] == stats["run_uuid"] for e in events)
 
 
@@ -188,3 +202,44 @@ def test_dashboard_preserves_raw_json_and_unwraps_message_json():
     assert 'status!="error"' in expressions[0]
     assert 'winner!="incomplete"' in expressions[2]
     assert 'gpu_vram_bytes' in expressions[5]
+
+
+def test_brave_precedes_models_and_both_receive_same_baseline(monkeypatch):
+    order, prompts = [], []
+    title = 'Old El Paso Salsa Picante Medium'
+    url = 'https://sobeys.com/products/old-el-paso-salsa-picante-medium'
+    result = core.SearchResult(title, url, '650 ml salsa', core.candidate_score('Cep Pic Med', 'sobeys.com', title, url))
+    def search(key, query, item, domain):
+        order.append(('brave', query))
+        return [result]
+    def generate(provider, text):
+        order.append(('model', provider))
+        prompts.append(text)
+        return {'queries': ['Old El Paso Salsa Picante Medium']}
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(comparison, 'generate', generate)
+    cache = {}
+    baseline = comparison.baseline_search('Cep Pic Med', 'Sobeys', 'secret', cache)
+    assert len(order) == 2 and all(kind == 'brave' for kind, _ in order)
+    assert 'Oep Pic Med' in order[1][1]
+    results = [comparison.evaluate(p, 'Cep Pic Med', 'Sobeys', 'secret', .85, cache, baseline)
+               for p in ('openai', 'qwen')]
+    assert prompts[0] == prompts[1] and title in prompts[0]
+    assert all(r['accepted'] and r['confidence'] == .9167 for r in results)
+    # Two baseline searches plus one identical proposed query, shared within the item.
+    assert sum(kind == 'brave' for kind, _ in order) == 3
+
+
+def test_provider_does_not_borrow_other_models_expanded_search_results(monkeypatch):
+    baseline = core.SearchResult('Unknown grocery', 'https://sobeys.com/products/unknown', '', 0)
+    good = core.SearchResult('Old El Paso Salsa Picante Medium',
+                            'https://sobeys.com/products/salsa', '', .9167)
+    def search(key, query, item, domain):
+        return [good] if 'Salsa' in query else []
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(comparison, 'generate', lambda provider, text: {
+        'queries': ['Salsa'] if provider == 'openai' else ['Unknown']})
+    cache = {}
+    left = comparison.evaluate('openai', 'Cep Pic Med', 'Sobeys', 'key', .85, cache, [('initial', baseline)])
+    right = comparison.evaluate('qwen', 'Cep Pic Med', 'Sobeys', 'key', .85, cache, [('initial', baseline)])
+    assert left['accepted'] and right['confidence'] == 0

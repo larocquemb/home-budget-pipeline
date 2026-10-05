@@ -47,6 +47,7 @@ def pytest_sessionstart(session) -> None:
         "DROP SCHEMA IF EXISTS ingest_green CASCADE; "
         "DROP SCHEMA IF EXISTS ingest CASCADE; "
         "DROP SCHEMA IF EXISTS ops CASCADE; "
+        "DROP SCHEMA IF EXISTS enrichment CASCADE; "
         "DROP SCHEMA IF EXISTS budget CASCADE;",
     )
 
@@ -54,6 +55,7 @@ def pytest_sessionstart(session) -> None:
         "sql/schema_phase1.sql",
         "sql/receipt_processing.sql",
         "sql/schema_constraints.sql",
+        "sql/product_enrichment.sql",
         "sql/receipt_reprocess_requests.sql",
         "sql/ocr_result_collector.sql",
     ):
