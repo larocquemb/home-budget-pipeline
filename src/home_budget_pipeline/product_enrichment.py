@@ -62,6 +62,33 @@ def product_query(item_name: str, merchant: str) -> Optional[str]:
     return f"site:{domain} {terms}" if terms else None
 
 
+def discovery_queries(item_name: str, merchant: str) -> tuple[str, ...]:
+    """Bounded search hypotheses; never replace the original scoring evidence."""
+    if BARCODE_RE.search(item_name or ''):
+        query = product_query(item_name, merchant)
+        return (query,) if query else ()
+    tokens = item_name.split()
+    variants = [tokens]
+    if tokens and 2 <= len(tokens[0]) <= 5 and tokens[0][0].lower() in {'c', 'o'}:
+        corrected = ('O' if tokens[0][0].lower() == 'c' else 'C') + tokens[0][1:]
+        variants.append([corrected, *tokens[1:]])
+    # Treat these as alternatives to test against retailer evidence, not facts.
+    abbreviations = {'med': 'Medium', 'pic': 'Picante'}
+    expanded = [[abbreviations.get(t.lower(), t) for t in v] for v in variants]
+    hypotheses = [*variants, *expanded]
+    for variant in expanded:
+        if variant and variant[0].lower() == 'oep':
+            hypotheses.append(['Old', 'El', 'Paso', *variant[1:]])
+    return tuple(dict.fromkeys(q for v in hypotheses if (q := product_query(' '.join(v), merchant))))[:6]
+
+
+def scoped_search_query(expansion: str, merchant: str) -> Optional[str]:
+    """Apply the retailer scope once, including model-supplied site queries."""
+    domain = retailer_domain(merchant)
+    terms = re.sub(r'\bsite:\S+', '', expansion, flags=re.IGNORECASE).strip()
+    return f'site:{domain} {terms}' if domain and terms else None
+
+
 def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippet: str = "") -> dict:
     """Explain lexical evidence; proposals themselves never increase this score."""
     hostname = (urllib.parse.urlparse(url).hostname or "").lower()

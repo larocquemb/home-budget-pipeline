@@ -215,6 +215,12 @@ retrieves probable matching lines, consensus text, line geometry, quantities,
 prices, receipt totals and arithmetic checks. It does not rerun missing OCR engines.
 
 Round one gives each available model the same retrieved text and Brave baseline.
+The baseline searches the original phrase plus bounded OCR and abbreviation
+hypotheses before calling models. For `Cep Pic Med`, these include `Oep Pic Med`,
+`Cep Picante Medium`, `Oep Picante Medium`, and `Old El Paso Picante Medium`.
+These are discovery alternatives, not accepted product identities: all candidates
+are scored against the original receipt text, and recommendations still require
+retailer product evidence and independent provider review.
 Vision profiles also receive up to two receipt page images, verified against the
 source SHA-256 and read from the mounted receipt inbox. Text-only Qwen sees the
 OCR evidence. Models propose readings and search queries with source citations.

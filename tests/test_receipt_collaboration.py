@@ -104,7 +104,7 @@ def test_two_rounds_share_ocr_then_pool_all_provider_queries(monkeypatch, capsys
     assert payload['decision']['disposition'] == 'recommended'
     assert [p for p, _ in calls] == ['openai', 'anthropic', 'openai', 'anthropic']
     assert all('Oep Pic Med' in text for _, text in calls)
-    assert len(searches) == 4
+    assert len(searches) == 7
     assert len(payload['proposals']) == len(payload['reviews']) == 2
     assert 'secret' not in capsys.readouterr().out
 

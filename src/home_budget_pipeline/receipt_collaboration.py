@@ -210,7 +210,9 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context):
     for proposal in proposals:
         if proposal['status'] != 'success': continue
         for expansion in dict.fromkeys(proposal['output']['queries']):
-            query = f"site:{core.retailer_domain(row['store_name'])} {expansion}"
+            query = core.scoped_search_query(expansion, row['store_name'])
+            if not query:
+                continue
             query_started = time.monotonic()
             try:
                 if query not in cache:

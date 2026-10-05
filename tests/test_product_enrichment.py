@@ -12,6 +12,24 @@ from home_budget_pipeline.product_enrichment import (
 )
 
 
+def test_discovery_searches_correction_abbreviations_and_full_brand():
+    queries = product_enrichment.discovery_queries('Cep Pic Med', 'Sobeys')
+    assert queries == (
+        'site:sobeys.com Cep Pic Med', 'site:sobeys.com Oep Pic Med',
+        'site:sobeys.com Cep Picante Medium', 'site:sobeys.com Oep Picante Medium',
+        'site:sobeys.com Old El Paso Picante Medium',
+    )
+    assert product_enrichment.discovery_queries('058300854014', 'Sobeys') == (
+        'site:sobeys.com "058300854014"',)
+    assert product_enrichment.discovery_queries('Carrots', 'Sobeys') == ('site:sobeys.com Carrots',)
+    assert not product_enrichment.discovery_queries('Cep Pic Med', 'Unknown merchant')
+
+
+def test_model_search_scope_is_not_duplicated_or_redirected():
+    query = product_enrichment.scoped_search_query('site:other.com site:sobeys.com/products Old El Paso Medium', 'Sobeys')
+    assert query == 'site:sobeys.com Old El Paso Medium'
+
+
 def test_pending_query_does_not_reprocess_existing_review_results():
     source = inspect.getsource(product_enrichment.run)
     assert 'missing_filter = "TRUE" if item_ids else' in source

@@ -155,7 +155,9 @@ def evaluate(provider: str, item: str, merchant: str, api_key: str,
         domain = core.retailer_domain(merchant)
         pool = list(baseline)
         for expansion in result["queries"]:
-            query = f"site:{domain} {expansion}"
+            query = core.scoped_search_query(expansion, merchant)
+            if not query:
+                continue
             if query not in search_cache:
                 # Score evidence against the ORIGINAL item for both models, never
                 # against words the model invented. Share identical search results.
@@ -188,11 +190,7 @@ def evaluate(provider: str, item: str, merchant: str, api_key: str,
 
 
 def baseline_search(item: str, merchant: str, api_key: str, cache: dict) -> list:
-    queries = [core.product_query(item, merchant)]
-    first = item.split(maxsplit=1)
-    if first and first[0][:1].lower() in {"c", "o"}:
-        alternative = ("O" if first[0][0].lower() == "c" else "C") + first[0][1:]
-        queries.append(core.product_query(" ".join([alternative, *first[1:]]), merchant))
+    queries = core.discovery_queries(item, merchant)
     results = []
     for query in dict.fromkeys(queries):
         if query:
