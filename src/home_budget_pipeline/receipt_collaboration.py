@@ -7,6 +7,7 @@ from dataclasses import asdict
 import hashlib
 import json
 import os
+import re
 import socket
 import time
 import uuid
@@ -64,11 +65,14 @@ def reading_hypotheses(sources, merchant):
     """Keep distinct retrieved readings separate, without counting repeated passes."""
     grouped = {}
     for source in sources:
-        query = core.product_query(source['text'], merchant)
+        # A trailing receipt price/tax marker is not a different product reading.
+        # The unmodified line (including price) stays in the evidence bundle.
+        reading = re.sub(r'\s+\d+[.,]\d{2}(?:\s+[A-Za-z])?\s*$', '', source['text']).strip()
+        query = core.product_query(reading, merchant)
         if not query:
             continue
         key = query.casefold()
-        entry = grouped.setdefault(key, {'reading': source['text'], 'query': query, 'source_ids': []})
+        entry = grouped.setdefault(key, {'reading': reading, 'query': query, 'source_ids': []})
         entry['source_ids'].append(source['id'])
     return list(grouped.values())
 
@@ -245,7 +249,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
         if match:
             diverse_baseline.append(match)
     for query, result in diverse_baseline + ranked_baseline:
-        if result.url not in seen_urls and len(baseline_cards) < 5:
+        if result.url not in seen_urls and len(baseline_cards) < 8:
             seen_urls.add(result.url)
             baseline_cards.append({'id': candidate_id(result.url), 'title': result.title,
                 'url': result.url, 'snippet': result.snippet[:300], 'confidence': result.score})

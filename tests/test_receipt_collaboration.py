@@ -75,7 +75,7 @@ def test_conflicting_lines_in_same_pass_remain_separate_search_hypotheses():
     sources = bundle()['sources'] + [
         {'id': 'pass:run:10:line:3', 'text': 'Cep Pic Med'},
         {'id': 'pass:run:10:line:2', 'text': 'Oep Pic Med'},
-        {'id': 'pass:run:12:line:4', 'text': 'Oep Pic Med'}]
+        {'id': 'pass:run:12:line:4', 'text': 'Oep Pic Med 6.49 C'}]
     hypotheses = collab.reading_hypotheses(sources, 'Sobeys')
     assert len(hypotheses) == 2
     assert hypotheses[1]['query'] == 'site:sobeys.com Oep Pic Med'
