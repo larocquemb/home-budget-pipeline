@@ -135,7 +135,7 @@ def collaboration(graph, receipt, item, payload, skipped=()):
         output = invocation.get('output') or invocation.get('invalid_output') or {}
         valid = invocation.get('status') == 'success'
         outcome = graph.node('Proposal' if phase in {'proposal', 'expansion'} else 'ModelReview', invocation_scope,
-                             output.get('reading') or output.get('reason') or invocation['status'],
+                             (output.get('candidate_title') if valid else None) or output.get('reading') or output.get('reason') or invocation['status'],
                              status=invocation['status'], valid=valid, output=output)
         graph.edge(i, 'PRODUCED', outcome)
         for query in invocation.get('searched_queries', []):

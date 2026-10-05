@@ -29,8 +29,10 @@ EXPANSION_SCHEMA['properties']['reason']['maxLength'] = 300
 EXPANSION_SCHEMA['properties']['queries']['items']['maxLength'] = 160
 EXPANSION_SCHEMA['properties']['source_ids']['maxItems'] = 6
 REVIEW_SCHEMA = {'type': 'object', 'additionalProperties': False,
-    'required': ['candidate_id', 'product_source_id', 'source_ids', 'reason'], 'properties': {
+    'required': ['candidate_id', 'candidate_title', 'product_source_id', 'source_ids', 'reason'], 'properties': {
         'candidate_id': {'type': ['string', 'null']},
+        'candidate_title': {'type': ['string', 'null'],
+                            'description': 'Exact retailer_results title for candidate_id, or null when abstaining. Never use a discovery hypothesis as the product name.'},
         'product_source_id': {'type': ['string', 'null'],
                               'description': 'Cite the selected retailer product ID; equal candidate_id, or null when abstaining.'},
         'source_ids': {'type': 'array', 'items': {'type': 'string'}}, 'reason': {'type': 'string'}}}
@@ -122,7 +124,7 @@ def pack_sources(sources: list[dict], char_budget: int) -> tuple[list[dict], dic
 
 def validate_output(output, stage, allowed_sources, candidates):
     """Check citations and shapes locally even when a provider enforces a schema."""
-    fields = {'reading', 'queries', 'source_ids', 'reason'} if stage in {'proposal', 'expansion'} else {'candidate_id', 'product_source_id', 'source_ids', 'reason'}
+    fields = {'reading', 'queries', 'source_ids', 'reason'} if stage in {'proposal', 'expansion'} else {'candidate_id', 'candidate_title', 'product_source_id', 'source_ids', 'reason'}
     if not isinstance(output, dict) or set(output) != fields:
         raise ValueError('Invalid structured evidence output')
     if not isinstance(output['reason'], str) or len(output['reason']) > (300 if stage == 'expansion' else 2000):
@@ -144,10 +146,12 @@ def validate_output(output, stage, allowed_sources, candidates):
         raise EvidenceCitationError('Unknown product candidate')
     elif stage == 'review' and output['product_source_id'] != output['candidate_id']:
         raise EvidenceCitationError('Product citation must equal the selected product, or both must be null')
+    elif stage == 'review' and (output['candidate_title'] is not None if output['candidate_id'] is None else not isinstance(output['candidate_title'], str)):
+        raise EvidenceCitationError('Selected product requires a retailer title; abstention requires null')
     return output
 
 
-def call(profile, stage, text, sources, candidates, images, context):
+def call(profile, stage, text, sources, candidates, images, context, candidate_titles=None):
     started = time.monotonic()
     result = {**asdict(profile), 'profile': profile.name, 'stage': stage, 'status': 'error',
               'requested_output_tokens': profile.output_tokens}
@@ -159,6 +163,8 @@ def call(profile, stage, text, sources, candidates, images, context):
         if stage == 'review':
             schema['properties']['candidate_id']['enum'] = [None, *sorted(candidates)]
             schema['properties']['product_source_id']['enum'] = [None, *sorted(candidates)]
+            if candidate_titles is not None:
+                schema['properties']['candidate_title']['enum'] = [None, *sorted(set(candidate_titles.values()))]
         measured_text = providers.qwen_content(text, schema, images if profile.vision else []) if profile.provider == 'qwen' else text
         image_reserve = IMAGE_TOKEN_RESERVE * len(images) if profile.vision else 0
         result.update(prompt_bytes=len(measured_text.encode()), reserved_image_tokens=image_reserve)
@@ -253,23 +259,24 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
 
 def review_with_citations(profile, text, sources, candidates, images, context):
     support = {c['id']: set(c['ocr_support']) for c in candidates}
+    titles = {c['id']: c['title'] for c in candidates}
     attempts = []
     request_profile = profile
     for attempt in range(2):
-        result = call(request_profile, 'review', text, sources, set(support), images, {**context, 'attempt': attempt + 1})
+        result = call(request_profile, 'review', text, sources, set(support), images, {**context, 'attempt': attempt + 1}, candidate_titles=titles)
         if result['status'] == 'success':
             output = result['output']
             selected = output['candidate_id']
-            if selected is not None and not set(output['source_ids']).intersection(support[selected]):
+            if selected is not None and (output['candidate_title'] != titles[selected] or not set(output['source_ids']).intersection(support[selected])):
                 result.update(status='error', error_type='EvidenceCitationError', invalid_output=result.pop('output'))
         attempts.append(deepcopy(result))
         if result.get('error_type') == 'IncompleteModelOutput' and profile.provider == 'qwen' and attempt == 0:
             request_profile = replace(profile, output_tokens=max(profile.output_tokens, min(3072, profile.output_tokens + 1024)))
-            text += '\nThe response was truncated. Return only the four required fields, at most three OCR source IDs, and a one-sentence reason. Close the JSON immediately.'
+            text += '\nThe response was truncated. Return only the five required fields, at most three OCR source IDs, and a one-sentence reason. Close the JSON immediately.'
             continue
         if result['status'] == 'success' or result.get('error_type') != 'EvidenceCitationError':
             break
-        text += '\nYour previous review lacked valid evidence citations. Return a new complete review: product_source_id must equal candidate_id, and source_ids must include at least one of that product\'s ocr_support IDs. If the evidence is insufficient, set candidate_id and product_source_id to null. Do not invent or append citations.'
+        text += '\nYour previous review lacked valid evidence citations or its product title did not match. Return a new complete review: candidate_title must exactly equal the selected retailer_results title, product_source_id must equal candidate_id, and source_ids must include at least one of that product\'s ocr_support IDs. If the evidence is insufficient, set all three product fields to null. Do not invent or append citations.'
     result['attempts'] = attempts
     result['review_seconds'] = round(sum(a['seconds'] for a in attempts), 3)
     comparison.emit('enrichment_collaboration_review', {**context, **result})
@@ -302,11 +309,26 @@ def reconcile(candidates: list[dict], reviews: list[dict], validations: dict,
             if not product_cited or not refs.intersection(candidate['ocr_support']):
                 reasons.append('review_missing_product_and_ocr_citations')
                 break
+            if 'candidate_title' in review['output'] and review['output']['candidate_title'] != candidate['title']:
+                reasons.append('review_product_title_mismatch')
+                break
     return {'disposition': 'review' if reasons else 'recommended',
-        'candidate_id': chosen, 'candidate_url': candidate['url'] if candidate else None,
+        'candidate_id': chosen, 'candidate_title': candidate.get('title') if candidate else None, 'candidate_url': candidate['url'] if candidate else None,
         'confidence': candidate['confidence'] if candidate else None,
         'provider_families': sorted(families), 'reasons': list(dict.fromkeys(reasons)),
         'arithmetic': validations, 'canonical_updated': False}
+
+
+def classify_discovery_errors(errors, candidates, reviews, validations, threshold, complete_context, verified_discovery):
+    """Retain discovery failures but recover truncation only after a valid review of verified evidence."""
+    reviewed_profiles = {r['profile'] for r in reviews if r['status'] == 'success'}
+    recoverable = [e for e in errors if e.get('stage') == 'expansion' and
+                   e.get('error_type') == 'IncompleteModelOutput' and e.get('profile') in reviewed_profiles]
+    blocking = [e for e in errors if e not in recoverable]
+    if not recoverable or not verified_discovery or any(validations.get(k) != 'pass' for k in ('item_arithmetic', 'receipt_arithmetic')):
+        return errors, []
+    check = reconcile(candidates, reviews, validations, threshold, blocking, complete_context, min_provider_families=1)
+    return (blocking, recoverable) if check['disposition'] == 'recommended' else (errors, [])
 
 
 def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_matches=()):
@@ -468,8 +490,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     candidate_ids = {c['id'] for c in candidates}
     peer_proposals = [{key: value for key, value in p.items() if key in {'profile', 'provider', 'model', 'status', 'output'}} for p in proposals]
     expansion_summaries = [{'profile': e['profile'], 'target_reading': e['target_reading'],
-        'status': e['status'], 'expansion_state': e.get('expansion_state'),
-        'expanded_reading': e.get('output', {}).get('reading', '')[:200]} for e in expansions]
+        'status': e['status'], 'expansion_state': e.get('expansion_state')} for e in expansions]
     review_evidence = {k: v for k, v in evidence.items() if k != 'reading_hypotheses'}
     reviews = []
     complete_context = coverage['included_sources'] == coverage['available_sources'] and not any(c['confidence'] >= threshold for c in cards.values() if c['id'] not in candidate_ids) and bundle['coverage']['available_passes'] == bundle['coverage']['included_passes'] and bundle['coverage']['available_documents'] == bundle['coverage']['included_documents']
@@ -478,14 +499,15 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     min_families = 2
     for index, profile in enumerate(profiles):
         visible_images = images if profile.vision else []
-        text = INSTRUCTIONS + 'Round 2: review ALL proposals, reading hypotheses and candidates. Choose a product: ID from retailer_results or null; receipt observation IDs are never product candidates. Set product_source_id to the same product ID as candidate_id, and cite supporting receipt observations in source_ids. When abstaining, both product fields must be null. Explain conflicting readings and any disagreement.\n' + json.dumps(
+        text = INSTRUCTIONS + 'Round 2: review ALL proposals, reading hypotheses and candidates. Choose a product: ID and its exact candidate_title from retailer_results or null; use the retailer title for the product identity and explanation, never an unverified brand expansion; receipt observation IDs are never product candidates. Set product_source_id to the same product ID as candidate_id, and cite supporting receipt observations in source_ids. When abstaining, all three product fields must be null. Explain conflicting readings and any disagreement.\n' + json.dumps(
             {**review_evidence, 'retailer_results': candidates, 'peer_proposals': peer_proposals,
              'expansion_hypotheses': expansion_summaries,
-             'attached_images': [{k: v for k, v in i.items() if k != 'data'} for i in visible_images]}, default=str)
+             'attached_images': [{k: v for k, v in i.items() if k != 'data'} for i in visible_images]}, default=str, separators=(',', ':'))
         reviews.append(review_with_citations(profile, text, known_sources | candidate_ids | {i['id'] for i in visible_images},
                             candidates, images, context))
         if index == 0 and profile.provider == 'qwen':
-            qwen_check = reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete_context, min_provider_families=1)
+            blocking, recovered = classify_discovery_errors(errors, candidates, reviews, bundle['validations'], threshold, complete_context, verified_expansion and not image_errors and (not profile.vision or bool(visible_images)))
+            qwen_check = reconcile(candidates, reviews, bundle['validations'], threshold, blocking, complete_context, min_provider_families=1)
             fallback = list(qwen_check['reasons'])
             if any(bundle['validations'].get(key) != 'pass' for key in ('receipt_arithmetic', 'item_arithmetic')):
                 fallback.append('receipt_arithmetic_not_verified')
@@ -498,19 +520,21 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
                 break
     for review in reviews:
         if review['status'] != 'success': errors.append({'stage': 'review', 'profile': review['profile'], 'error_type': review.get('error_type')})
-    decision = reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete_context, min_provider_families=min_families)
+    blocking, recovered = classify_discovery_errors(errors, candidates, reviews, bundle['validations'], threshold, complete_context, verified_expansion and not image_errors and all(not p.vision or bool(images) for p in profiles if p.name in {r['profile'] for r in reviews}))
+    decision = reconcile(candidates, reviews, bundle['validations'], threshold, blocking, complete_context, min_provider_families=min_families)
+    decision['recovered_discovery_errors'] = recovered
     decision['review_policy'] = review_policy
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v7', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v8', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,
         'reading_hypotheses': hypotheses, 'expansions': expansions, 'discovery': discovery,
         'candidates': candidates, 'search_results': list(cards.values()), 'available_candidates': len(cards), 'proposals': proposals, 'reviews': reviews,
         'search_queries': [{'query': query, 'candidate_ids': [candidate_id(r.url) for r in results]} for query, results in cache.items()],
-        'decision': decision, 'errors': errors, 'shared_brave_seconds': brave_seconds,
+        'decision': decision, 'errors': errors, 'blocking_errors': blocking, 'recovered_errors': recovered, 'shared_brave_seconds': brave_seconds,
         'item_seconds': round(time.monotonic() - started, 3)}
     comparison.emit('enrichment_collaboration_decision', {**context, **decision,
-        'item_seconds': payload['item_seconds'], 'error_count': len(errors), 'available_candidates': len(cards)})
+        'item_seconds': payload['item_seconds'], 'error_count': len(errors), 'blocking_error_count': len(blocking), 'recovered_error_count': len(recovered), 'available_candidates': len(cards)})
     return payload
 
 
@@ -548,7 +572,7 @@ def run(*, dsn, api_key, limit, threshold, write_db, item_ids=()):
                 conn.commit()
             stats['considered'] += 1
             stats[payload['decision']['disposition']] += 1
-            stats['incomplete'] += bool(payload['errors'])
+            stats['incomplete'] += bool(payload['blocking_errors'])
             timing = receipt_timings.setdefault(row['receipt_id'], {**context, 'selected_items': 0,
                 'receipt_item_count': row['receipt_item_count'], 'enrichment_seconds': 0, 'mode': 'collaboration'})
             timing['selected_items'] += 1
