@@ -170,3 +170,4 @@ def test_production_configmap_preserves_qwen_budget_over_shared_defaults(monkeyp
     openai = next(p for p in enabled if p.provider == 'openai')
     assert (qwen.context_tokens, qwen.output_tokens) == (32768, 8192)
     assert (openai.context_tokens, openai.output_tokens) == (16384, 2048)
+    assert qwen.model == 'qwen3-vl:30b-a3b-instruct-q4_K_M'

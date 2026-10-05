@@ -199,6 +199,15 @@ def qwen_retry_profile(profile):
     return replace(profile, output_tokens=budget) if budget > profile.output_tokens else None
 
 
+def thinking_only_truncation(result):
+    """Another larger request cannot reliably repair a reasoning-only loop."""
+    diagnostic = result.get('incomplete_output') or {}
+    return (result.get('error_type') == 'IncompleteModelOutput' and
+            result.get('finish_reason') == 'length' and
+            diagnostic.get('content_chars') == 0 and
+            (diagnostic.get('thinking_chars') or 0) > 0)
+
+
 def expand_readings(hypotheses, profiles, merchant, context, verify=None):
     """Give each reading its own model call, isolated from competing hypotheses."""
     results = []
@@ -224,6 +233,9 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
                               {**context, 'target_reading': hypothesis['reading'], 'attempt': attempt + 1})
                 attempts.append(deepcopy(result))
                 if result['status'] != 'success':
+                    if profile.provider == 'qwen' and thinking_only_truncation(result):
+                        result['retry_skipped_reason'] = 'thinking_only_truncation'
+                        break
                     if last_success is not None:
                         result = deepcopy(last_success)
                         result['correction_failed'] = True
@@ -298,6 +310,9 @@ def review_with_citations(profile, text, sources, candidates, images, context):
             if selected is not None and (output['candidate_title'] != titles[selected] or not set(output['source_ids']).intersection(support[selected])):
                 result.update(status='error', error_type='EvidenceCitationError', invalid_output=result.pop('output'))
         attempts.append(deepcopy(result))
+        if profile.provider == 'qwen' and thinking_only_truncation(result):
+            result['retry_skipped_reason'] = 'thinking_only_truncation'
+            break
         if result.get('error_type') == 'IncompleteModelOutput' and profile.provider == 'qwen' and attempt == 0:
             request_profile = qwen_retry_profile(profile)
             if request_profile is None:
