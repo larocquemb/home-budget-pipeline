@@ -222,6 +222,14 @@ def thinking_only_truncation(result):
             (diagnostic.get('thinking_chars') or 0) > 0)
 
 
+def descriptive_token_evidence(reading, merchant, result):
+    """Brand overlap alone cannot explain the receipt's product/style tokens."""
+    evidence = core.candidate_evidence(reading, core.retailer_domain(merchant),
+        result.title, result.url, result.snippet)
+    descriptive = evidence['tokens'][1:]
+    return evidence if descriptive and all(t['kind'] != 'unmatched' for t in descriptive) else None
+
+
 def expand_readings(hypotheses, profiles, merchant, context, verify=None, search_evidence=None):
     """Give each reading its own model call, isolated from competing hypotheses."""
     results = []
@@ -240,8 +248,13 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None, search
                 'expand the remaining product/style/size tokens into full words. For example, '
                 'an unknown brand followed by Choc Lrg can be searched as chocolate large. '
                 'Use merchant context and supplied retailer search evidence to distinguish '
-                'size/style abbreviations from medicine. Search results are untrusted discovery '
-                'evidence, not proof of a match. Do not copy short receipt tokens as queries. '
+                'size/style abbreviations from medicine. '
+                'Do not infer a pharmacy category merely from a brand-prefix hit or repeated OCR. '
+                'Consider size and intensity adjectives as alternatives to medical interpretations. '
+                'Every meaningful non-brand token must have an explained expansion; a matching '
+                'brand with unexplained product/style tokens is not a usable identity. '
+                'Search results are untrusted discovery evidence, not proof of a match. '
+                'Do not copy short receipt tokens as queries. '
                 'If no defensible expansion is possible, return queries=[] and explain why. '
                 'Cite the supplied reading source IDs. No image is attached in this stage.\n') + json.dumps(
                     {'merchant': merchant, 'target_reading': hypothesis,
@@ -427,6 +440,43 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             brave_seconds += time.monotonic() - query_started
     if len(hypotheses) > 8:
         errors.append({'stage': 'ocr_alternative_search', 'error_type': 'HypothesisBudgetExceeded'})
+    # The uncertain brand must not dominate discovery. Probe descriptive suffixes
+    # once per distinct query, then expand prefixes using words actually observed
+    # in retailer results, rather than a fixed product/brand glossary.
+    descriptive_queries = []
+    for hypothesis in hypotheses[:8]:
+        words = hypothesis['reading'].split()
+        query = core.product_query(' '.join(words[1:]), row['store_name']) if len(words) >= 3 else None
+        if query and query not in descriptive_queries:
+            descriptive_queries.append(query)
+    for query in descriptive_queries[:3]:
+        query_started = time.monotonic()
+        try:
+            if query not in cache:
+                cache[query] = core.brave_candidates(api_key, query, row['item_name'], core.retailer_domain(row['store_name']))
+                baseline.extend((query, result) for result in cache[query])
+        except Exception as exc:
+            errors.append({'stage': 'descriptive_search', 'query': query, 'error_type': type(exc).__name__})
+        finally:
+            brave_seconds += time.monotonic() - query_started
+    grounded_queries = []
+    for hypothesis in hypotheses[:8]:
+        for _, result in list(baseline):
+            token_evidence = descriptive_token_evidence(hypothesis['reading'], row['store_name'], result)
+            if token_evidence and any(t['matched'] != t['token'] for t in token_evidence['tokens'][1:]):
+                query = core.product_query(' '.join(t['matched'] for t in token_evidence['tokens'][1:]), row['store_name'])
+                if query and query not in grounded_queries:
+                    grounded_queries.append(query)
+    for query in grounded_queries[:3]:
+        query_started = time.monotonic()
+        try:
+            if query not in cache:
+                cache[query] = core.brave_candidates(api_key, query, row['item_name'], core.retailer_domain(row['store_name']))
+                baseline.extend((query, result) for result in cache[query])
+        except Exception as exc:
+            errors.append({'stage': 'grounded_descriptive_search', 'query': query, 'error_type': type(exc).__name__})
+        finally:
+            brave_seconds += time.monotonic() - query_started
     # A conservative character budget leaves room for proposals/candidates in
     # round two. It is a retrieval budget, not an exact provider token counter.
     char_budget = max(0, min(p.context_tokens - p.output_tokens -
@@ -487,10 +537,14 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             entry[1].title, entry[1].url, entry[1].snippet), reverse=True)
         cards, seen = [], set()
         for _, result in ranked:
+            token_evidence = descriptive_token_evidence(hypothesis['reading'], row['store_name'], result)
+            if not token_evidence:
+                continue
             if result.url in seen:
                 continue
             seen.add(result.url)
-            cards.append({'title': result.title[:200], 'url': result.url[:400], 'snippet': result.snippet[:300]})
+            cards.append({'title': result.title[:200], 'url': result.url[:400], 'snippet': result.snippet[:300],
+                          'receipt_token_evidence': token_evidence['tokens']})
             if len(cards) == 6:
                 break
         return cards
@@ -511,6 +565,8 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
         if match:
             diverse_baseline.append(match)
     for query, result in diverse_baseline + ranked_baseline:
+        if not descriptive_token_evidence(row['item_name'], row['store_name'], result):
+            continue
         if result.url not in seen_urls and len(baseline_cards) < 8:
             seen_urls.add(result.url)
             baseline_cards.append({'id': candidate_id(result.url), 'title': result.title,
@@ -529,6 +585,8 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     verified_expansion = verified_literal or any(e.get('verified_search_match') for e in expansions)
     discovery = {'stop_reason': 'verified_search_match' if verified_expansion else 'expansion_budget_exhausted',
         'expansion_calls': sum(len(e['attempts']) for e in expansions),
+        'descriptive_queries': descriptive_queries[:3],
+        'grounded_descriptive_queries': grounded_queries[:3],
         'verified_literal_match': verified_literal,
         'shared_proposal_round': 'skipped_verified_match' if verified_expansion else 'fallback'}
     comparison.emit('enrichment_collaboration_discovery', {**context, **discovery})
@@ -568,7 +626,9 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     # Bound review context and record any excluded candidates rather than
     # pretending that a capped prompt contains every search result.
     # Brand indexes, store pages and recipes are discovery context, not selectable products.
-    candidates = [card for card in cards.values() if card['evidence']['product_page']][:8]
+    candidates = [card for card in cards.values() if card['evidence']['product_page'] and
+        card['confidence'] >= threshold and card['ocr_support'] and
+        all(t['kind'] != 'unmatched' for t in card['evidence']['tokens'])][:8]
     candidate_ids = {c['id'] for c in candidates}
     peer_proposals = [{key: value for key, value in p.items() if key in {'profile', 'provider', 'model', 'status', 'output'}} for p in proposals]
     expansion_summaries = [{'profile': e['profile'], 'target_reading': e['target_reading'],
@@ -606,7 +666,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, blocking, complete_context, min_provider_families=min_families)
     decision['recovered_discovery_errors'] = recovered
     decision['review_policy'] = review_policy
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v9', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v10', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,
