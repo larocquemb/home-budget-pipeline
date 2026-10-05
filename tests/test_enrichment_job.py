@@ -37,6 +37,7 @@ else:
            "REAL_KUBECTL": kubectl, "CAPTURE_JOB": str(capture),
            "COMPARE": compare, "COLLABORATE": collaborate, "LIMIT": "", "RECEIPT": receipt, "DRY_RUN": "1",
            "CONTEXT_TOKENS": "16384", "OUTPUT_TOKENS": "4096", "QWEN_MODELS": "qwen3:30b,qwen3-vl:8b"}
+    env['PAID_FALLBACK'] = '1'
     script = Path(__file__).resolve().parents[1] / "scripts/enrichment_job.sh"
     subprocess.run(["bash", str(script), "test-context", "test-namespace", "test-job"],
                    env=env, check=True, capture_output=True, text=True)
@@ -52,3 +53,4 @@ else:
     assert values['COLLAB_CONTEXT_TOKENS'] == '16384'
     assert values['COLLAB_OUTPUT_TOKENS'] == '4096'
     assert values['OLLAMA_COLLAB_MODELS'] == 'qwen3:30b,qwen3-vl:8b'
+    assert values['COLLAB_PAID_FALLBACK'] == '1'
