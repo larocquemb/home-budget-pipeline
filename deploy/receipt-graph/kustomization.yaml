@@ -8,3 +8,14 @@ resources:
   - network-policy.yaml
 patches:
   - path: web-patch.yaml
+replacements:
+  - source:
+      kind: Deployment
+      name: ledger-web
+      fieldPath: spec.template.spec.containers.[name=ledger-web].image
+    targets:
+      - select:
+          kind: CronJob
+          name: receipt-graph
+        fieldPaths:
+          - spec.jobTemplate.spec.template.spec.containers.[name=graph].image
