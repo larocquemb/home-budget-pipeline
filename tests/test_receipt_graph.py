@@ -45,6 +45,26 @@ def test_graph_connects_shared_evidence_without_accepting_proposals():
     assert g.build(evidence()) == graph
 
 
+def test_expansion_graph_keeps_each_reading_and_links_actual_search():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    source = payload['evidence_bundle']['sources'][0]['id']
+    payload['expansions'] = [{
+        'profile': 'openai', 'provider': 'openai', 'model': 'test', 'stage': 'expansion',
+        'target_reading': reading, 'status': 'success', 'input_source_ids': [source],
+        'image_count': 0, 'searched_queries': ['Old El Paso picante medium'],
+        'output': {'reading': 'Old El Paso Picante Medium', 'source_ids': [source]}}
+        for reading in ['Cep Pic Med', 'Oep Pic Med']]
+    graph = g.build(data)
+    invocations = [n for n in graph['nodes'] if n['kind'] == 'ModelInvocation' and n['properties']['stage'] == 'expansion']
+    assert len(invocations) == 2 and len({n['id'] for n in invocations}) == 2
+    assert any(e['kind'] == 'PROPOSED_SEARCH' for e in graph['edges'])
+    images = {n['id'] for n in graph['nodes'] if n['kind'] == 'ImageReference'}
+    assert not any(e['kind'] == 'RECEIVED' and e['source'] in {n['id'] for n in invocations}
+                   and e['target'] in images for e in graph['edges'])
+    assert g.build(data) == graph
+
+
 def test_run_observations_and_citations_remain_separate():
     data = evidence()
     copy = deepcopy(data['collaborations'][0])
