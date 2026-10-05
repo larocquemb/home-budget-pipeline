@@ -359,8 +359,12 @@ def main() -> int:
     parser.add_argument("--write-db", action="store_true")
     parser.add_argument("--compare-models", action="store_true",
                         help="Run OpenAI and Qwen on the same items; store comparison evidence only")
+    parser.add_argument("--collaborate-models", action="store_true",
+                        help="Share OCR and retailer evidence across models, then reconcile recommendations")
     parser.add_argument("--receipt", help="Restrict enrichment to a receipt filename or database id")
     args = parser.parse_args()
+    if args.compare_models and args.collaborate_models:
+        parser.error("Choose comparison or collaboration mode")
     dsn = os.environ.get("DATABASE_URL", "")
     api_key = os.environ.get("BRAVE_SEARCH_API_KEY", "")
     if not dsn or not api_key:
@@ -374,6 +378,8 @@ def main() -> int:
     runner = run
     if args.compare_models:
         from .product_comparison import run as runner
+    elif args.collaborate_models:
+        from .receipt_collaboration import run as runner
     result = runner(dsn=dsn, api_key=api_key, limit=args.limit, threshold=args.threshold,
                     write_db=args.write_db, item_ids=item_ids)
     print(json.dumps(result, sort_keys=True))

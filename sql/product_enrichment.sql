@@ -39,4 +39,20 @@ CREATE TABLE IF NOT EXISTS enrichment.product_comparison_runs (
     completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS enrichment.receipt_collaborations (
+    id BIGSERIAL PRIMARY KEY,
+    run_uuid UUID NOT NULL,
+    expense_item_id BIGINT NOT NULL REFERENCES budget.expense_items(id) ON DELETE CASCADE,
+    payload JSONB NOT NULL,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (run_uuid, expense_item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_receipt_collaborations_item
+    ON enrichment.receipt_collaborations (expense_item_id, completed_at DESC);
+CREATE TABLE IF NOT EXISTS enrichment.receipt_collaboration_runs (
+    run_uuid UUID PRIMARY KEY,
+    summary JSONB NOT NULL,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 COMMIT;

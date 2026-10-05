@@ -750,7 +750,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "max_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | provider=\"qwen\" | keep provider,gpu_util_max_percent | unwrap gpu_util_max_percent | __error__=\"\" [$__range]) by (provider)",
+                        "expr": "max_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=~\"enrichment_model_result|enrichment_collaboration_model_result\" | provider=\"qwen\" | keep provider,gpu_util_max_percent | unwrap gpu_util_max_percent | __error__=\"\" [$__range]) by (provider)",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -878,7 +878,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "avg_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | provider=\"qwen\" | keep provider,ollama_eval_seconds | unwrap ollama_eval_seconds | __error__=\"\" [$__range]) by (provider)",
+                        "expr": "avg_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=~\"enrichment_model_result|enrichment_collaboration_model_result\" | provider=\"qwen\" | keep provider,ollama_eval_seconds | unwrap ollama_eval_seconds | __error__=\"\" [$__range]) by (provider)",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -941,7 +941,7 @@
                       },
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum by (provider) (sum_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_model_result\" | provider=\"qwen\" | keep provider,gpu_sampling_errors | unwrap gpu_sampling_errors | __error__=\"\" [$__range]))",
+                        "expr": "sum by (provider) (sum_over_time({namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=~\"enrichment_model_result|enrichment_collaboration_model_result\" | provider=\"qwen\" | keep provider,gpu_sampling_errors | unwrap gpu_sampling_errors | __error__=\"\" [$__range]))",
                         "queryType": "instant",
                         "legendFormat": ""
                       }
@@ -1039,6 +1039,186 @@
               }
             }
           }
+        }
+      },
+      "panel-17": {
+        "kind": "Panel",
+        "spec": {
+          "id": 17,
+          "title": "Collaborative decisions and disagreements",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_collaboration_decision\"",
+                        "queryType": "range",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": true,
+                "showLabels": false,
+                "sortOrder": "Descending",
+                "enableLogDetails": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Recommendations require cited receipt and product evidence plus agreement across provider families. Canonical receipt facts are preserved."
+        }
+      },
+      "panel-18": {
+        "kind": "Panel",
+        "spec": {
+          "id": 18,
+          "title": "Collaborative proposals and reviews",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_collaboration_model_result\"",
+                        "queryType": "range",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": true,
+                "showLabels": false,
+                "sortOrder": "Descending",
+                "enableLogDetails": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Independent interpretations, pooled review, token usage, model settings and errors. Qwen variants count as one provider family."
+        }
+      },
+      "panel-19": {
+        "kind": "Panel",
+        "spec": {
+          "id": 19,
+          "title": "Shared OCR and image evidence coverage",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "{namespace=\"home-budget\",container=\"enrich\"} | json | line_format \"{% raw %}{{if .message}}{{.message}}{{else}}{{ __line__ }}{{end}}{% endraw %}\" | json | run_uuid=~\"${run_uuid:raw}\" | __error__=\"\" | event=\"enrichment_collaboration_evidence\"",
+                        "queryType": "range",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": true,
+                "showLabels": false,
+                "sortOrder": "Descending",
+                "enableLogDetails": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Included OCR passes and source observations, image hashes, arithmetic checks and missing evidence. Detailed source text and citations are retained in the database."
         }
       }
     },
@@ -1251,6 +1431,45 @@
               "element": {
                 "kind": "ElementReference",
                 "name": "panel-16"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 52,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-17"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 60,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-18"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 68,
+              "width": 24,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-19"
               }
             }
           }

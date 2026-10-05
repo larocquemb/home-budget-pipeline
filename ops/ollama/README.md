@@ -51,3 +51,10 @@ model-management or command-execution API. Comparison jobs sample it during
 Qwen calls and correlate observations with receipt/item/run identifiers. These
 samples measure host activity, including any concurrent GPU workloads. Check
 mode previews the files and firewall rules; endpoint verification runs on apply.
+
+Receipt collaboration sets `OLLAMA_MAX_LOADED_MODELS=1` and
+`OLLAMA_NUM_PARALLEL=1` through the managed override, and requests `keep_alive=0`
+after each call. Different Qwen profiles share the GPU sequentially. Profile
+context/output budgets are configured separately from the host listener. Apply
+host changes before the first collaboration run; model installation remains an
+explicit host operation.

@@ -1,5 +1,7 @@
 ---
 ollama_port: 11434
 ollama_gpu_telemetry_port: 11435
+ollama_max_loaded_models: 1
+ollama_num_parallel: 1
 # Empty means use firewalld's default zone; override for a dedicated LAN zone.
 ollama_firewall_zone: ""

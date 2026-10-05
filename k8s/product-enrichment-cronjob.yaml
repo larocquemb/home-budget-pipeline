@@ -40,6 +40,8 @@ spec:
                   cpu: "1"
                   memory: 512Mi
               env:
+                - name: HOME_BUDGET_RECEIPTS_ROOT
+                  value: /data/receipts/raw/scanned/inbox
                 - name: OLLAMA_BASE_URL
                   value: http://192.168.2.201:11434
                 - name: OLLAMA_GPU_METRICS_URL
@@ -67,3 +69,27 @@ spec:
                     secretKeyRef:
                       name: openai-api
                       key: OPENAI_API_KEY
+                - name: ANTHROPIC_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: anthropic-api
+                      key: ANTHROPIC_API_KEY
+                      optional: true
+                - name: GEMINI_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: gemini-api
+                      key: GEMINI_API_KEY
+                      optional: true
+              envFrom:
+                - configMapRef:
+                    name: receipt-model-profiles
+                    optional: true
+              volumeMounts:
+                - name: receipt-data
+                  mountPath: /data
+                  readOnly: true
+          volumes:
+            - name: receipt-data
+              persistentVolumeClaim:
+                claimName: home-budget-data

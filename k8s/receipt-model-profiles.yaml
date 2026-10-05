@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: receipt-model-profiles
+  namespace: home-budget
+data:
+  # Provider API keys remain in their existing/optional Secrets.
+  ANTHROPIC_RECEIPT_MODEL: claude-sonnet-4-6
+  GEMINI_RECEIPT_MODEL: gemini-3.8-flash
+  OLLAMA_COLLAB_MODELS: qwen3:30b
+  COLLAB_CONTEXT_TOKENS: "16384"
+  COLLAB_OUTPUT_TOKENS: "2048"
