@@ -10,3 +10,6 @@ data:
   OLLAMA_COLLAB_MODELS: qwen3-vl:30b
   COLLAB_CONTEXT_TOKENS: "16384"
   COLLAB_OUTPUT_TOKENS: "2048"
+  # Ollama thinking and its answer share the output budget; keep paid budgets separate.
+  QWEN_CONTEXT_TOKENS: "32768"
+  QWEN_OUTPUT_TOKENS: "8192"

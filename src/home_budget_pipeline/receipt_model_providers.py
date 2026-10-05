@@ -61,8 +61,8 @@ def profiles() -> tuple[list[Profile], list[dict]]:
                 selected.append(Profile(provider, provider, model, **budgets, vision=True))
         models = os.getenv('OLLAMA_COLLAB_MODELS', 'qwen3:30b').split(',')
         qwen_budgets = {
-            'context_tokens': int(os.getenv('QWEN_CONTEXT_TOKENS', os.getenv('COLLAB_CONTEXT_TOKENS', '32768'))),
-            'output_tokens': int(os.getenv('QWEN_OUTPUT_TOKENS', os.getenv('COLLAB_OUTPUT_TOKENS', '8192'))),
+            'context_tokens': int(os.getenv('QWEN_CONTEXT_TOKENS', '').strip() or os.getenv('COLLAB_CONTEXT_TOKENS', '32768')),
+            'output_tokens': int(os.getenv('QWEN_OUTPUT_TOKENS', '').strip() or os.getenv('COLLAB_OUTPUT_TOKENS', '8192')),
         }
         for index, model in enumerate(dict.fromkeys(m.strip() for m in models if m.strip())):
             selected.append(Profile(f'qwen-{index + 1}', 'qwen', model,
