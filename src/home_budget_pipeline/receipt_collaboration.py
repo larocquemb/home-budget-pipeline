@@ -218,11 +218,16 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
                     {'merchant': merchant, 'target_reading': hypothesis}, default=str)
             forbidden = {token for token in re.findall(r'[a-z]+', hypothesis['reading'].lower()) if len(token) <= 4}
             attempts = []
+            last_success = None
             for attempt in range(2):
                 result = call(request_profile, 'expansion', text, set(hypothesis['source_ids']), set(), [],
                               {**context, 'target_reading': hypothesis['reading'], 'attempt': attempt + 1})
                 attempts.append(deepcopy(result))
                 if result['status'] != 'success':
+                    if last_success is not None:
+                        result = deepcopy(last_success)
+                        result['correction_failed'] = True
+                        break
                     if result.get('error_type') == 'IncompleteModelOutput' and attempt == 0:
                         text += '\nThe response was truncated. Use one short reading, at most three queries, one source ID and a one-sentence reason. Close the JSON object immediately.'
                         if profile.provider == 'qwen':
@@ -232,9 +237,22 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
                         continue
                     break
                 output = result['output']
+                last_success = deepcopy(result)
                 original_queries = output['queries']
+                # Partial expansions are search hypotheses, never accepted products.
+                # A retailer page plus independent OCR support can resolve them
+                # without spending another model call merely removing short tokens.
+                partial_queries = any(forbidden.intersection(
+                    re.findall(r'[a-z]+', re.sub(r'\bsite:\S+', '', q).lower())) for q in original_queries)
+                if partial_queries and output['source_ids'] and verify and verify(result):
+                    result['verified_search_match'] = True
+                    break
                 output['queries'] = [q for q in original_queries if not forbidden.intersection(
                     re.findall(r'[a-z]+', re.sub(r'\bsite:\S+', '', q).lower()))]
+                if profile.provider == 'qwen' and original_queries and not output['queries']:
+                    result['unexpanded_queries'] = original_queries
+                    result['correction_skipped'] = 'try_other_ocr_readings'
+                    break
                 if output['queries'] or not original_queries or attempt:
                     break
                 text += '\nYour previous queries retained short receipt tokens. Fully expand all likely brand and product abbreviations; return queries=[] if you cannot.'
@@ -248,7 +266,8 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
                     result.update(status='error', error_type='EvidenceCitationError')
                 else:
                     result['expansion_state'] = 'proposed' if output['queries'] else 'unresolved'
-            verified = result['status'] == 'success' and result.get('expansion_state') == 'proposed' and verify and verify(result)
+            verified = result.get('verified_search_match', False) or (
+                result['status'] == 'success' and result.get('expansion_state') == 'proposed' and verify and verify(result))
             if verified:
                 result['verified_search_match'] = True
             circuit_open = profile.provider == 'qwen' and result.get('error_type') == 'IncompleteModelOutput'

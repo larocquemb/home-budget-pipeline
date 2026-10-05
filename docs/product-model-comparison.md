@@ -353,7 +353,14 @@ stop reason, expansion call count and whether the proposal round was skipped.
 
 Qwen receives the JSON schema in its prompt as well as Ollama's `format` argument.
 Expansion reading/query strings are limited to 160 characters, reasons to 300,
-and citations to six. Truncated expansion responses get one concise retry. Qwen recovery requests may
+and citations to six. Partial queries containing receipt abbreviations are searched
+before requesting corrections. Only retailer product pages with the existing score
+and independent OCR support can stop discovery; a partial model guess cannot.
+If those queries do not verify, Qwen moves to the next OCR reading instead of
+spending another reasoning call on the same partial expansion. Other providers
+retain one semantic correction attempt, and a failed correction preserves the
+valid first response and both attempt records.
+Truncated expansion responses get one concise retry. Qwen recovery requests may
 double the output budget, capped at 16384 tokens and the context ceiling.
 A retry is skipped when the budget cannot grow; the existing context and image
 budget guard still applies. Default Qwen profiles use 32768 context tokens and
