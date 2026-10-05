@@ -29,6 +29,21 @@ Run unit tests:
 make test
 ```
 
+For quick feedback before pushing, install the documentation extra once with
+`python -m pip install -e '.[docs]'`, then run:
+
+```bash
+make check-local
+```
+
+This runs unit tests, builds a Python wheel in `dist/` using the installed build
+backend, and builds the documentation with strict validation. Model unit tests
+use mocked GPU polling; dedicated telemetry tests use fake HTTP responses.
+`make build-local` builds just the wheel. These checks do not run live models or
+deploy to Kubernetes. The wheel does not replace the production Linux container:
+CI still runs integration and configuration checks, builds and pushes the
+immutable image, and updates the GitOps image reference before Argo CD can sync it.
+
 With Colima running, validate the exact Prometheus, OpenTelemetry Collector,
 Alloy, and Fluent Bit configurations used by CI:
 
@@ -80,6 +95,8 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make docs-build` | Build the online manual locally and fail on documentation warnings. |
 | `make docs-serve` | Serve the online manual locally with live reload. |
 | `make test` | Run unit tests without external-service integration tests. |
+| `make check-local` | Run unit tests, build a local Python wheel, and build strict documentation. |
+| `make build-local` | Build a Python wheel in `dist/` with the installed build backend. |
 | `make test-observability` | Validate Prometheus, OpenTelemetry Collector, Alloy, and Fluent Bit configurations with containers provided by Colima or Docker. |
 | `make test-db-setup` | Create the disposable test database if needed, then rebuild its schemas. |
 | `make test-db` | Rebuild the disposable test schemas and run integration tests, including RabbitMQ when a broker URL is exported. |

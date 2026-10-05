@@ -8,6 +8,8 @@ from jinja2 import Environment, StrictUndefined
 from home_budget_pipeline import product_comparison as comparison
 from home_budget_pipeline import product_enrichment as core
 
+pytestmark = pytest.mark.usefixtures('offline_gpu_sampling')
+
 
 def test_queries_are_bounded_and_deduplicated():
     assert comparison.parse_queries('{"queries":["Yard bags","Yard bags"]}') == ["Yard bags"]

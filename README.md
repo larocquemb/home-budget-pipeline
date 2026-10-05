@@ -761,6 +761,8 @@ Use the Make targets so unit and integration tests receive the repository's
 standard configuration:
 
 ```bash
+make check-local # unit tests, local Python wheel, strict documentation build
+make build-local # local Python wheel only
 make test       # unit tests
 make test-db    # integration tests; resets the disposable test schemas
 make test-rabbit # named RabbitMQ integration tests

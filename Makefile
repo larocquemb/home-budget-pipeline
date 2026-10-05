@@ -28,10 +28,12 @@ LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
 .PHONY: help docs-build docs-serve test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
 
 .PHONY: receipts-publish receipts-worker-test
+.PHONY: check-local build-local
 .PHONY: ollama-gitops-syntax ollama-gitops-check ollama-gitops-apply
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
+	@echo "Local checks: check-local (unit tests, Python wheel, strict docs); build-local"
 	@echo "Local logs:  dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down"
 	@echo "Documentation: docs-build docs-serve"
 	@echo "Tests:       test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
@@ -158,6 +160,11 @@ receipts-graph:
 
 test:
 	$(PYTHON) -m pytest -q -m "not integration"
+
+build-local:
+	$(PYTHON) -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+
+check-local: test build-local docs-build
 
 test-observability:
 	@bash ./scripts/validate_observability_configs.sh
