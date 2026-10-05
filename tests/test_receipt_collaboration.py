@@ -71,6 +71,29 @@ def test_unknown_citations_and_candidates_are_rejected():
     with pytest.raises(ValueError): collab.validate_output(review('openai')['output'], 'review', {SOURCE}, set())
 
 
+def test_conflicting_lines_in_same_pass_remain_separate_search_hypotheses():
+    sources = bundle()['sources'] + [
+        {'id': 'pass:run:10:line:3', 'text': 'Cep Pic Med'},
+        {'id': 'pass:run:10:line:2', 'text': 'Oep Pic Med'},
+        {'id': 'pass:run:12:line:4', 'text': 'Oep Pic Med 6.49 C'}]
+    hypotheses = collab.reading_hypotheses(sources, 'Sobeys')
+    assert len(hypotheses) == 2
+    assert hypotheses[1]['query'] == 'site:sobeys.com Oep Pic Med'
+    assert hypotheses[1]['source_ids'] == [SOURCE, 'pass:run:10:line:2', 'pass:run:12:line:4']
+
+
+@pytest.mark.parametrize('candidates', [set(), {collab.candidate_id(URL)}])
+def test_review_schema_prevents_receipt_id_becoming_product(monkeypatch, candidates):
+    def request(profile, text, schema, images):
+        assert schema['properties']['candidate_id']['enum'] == [None, *sorted(candidates)]
+        assert 'item:canonical' not in schema['properties']['candidate_id']['enum']
+        return {'output': {'candidate_id': None, 'source_ids': [SOURCE], 'reason': 'No verified product'}}
+    monkeypatch.setattr(providers, 'request', request)
+    result = collab.call(providers.Profile('openai', 'openai', 'test'), 'review', '', {SOURCE}, candidates, [], {})
+    assert result['status'] == 'success'
+    assert 'enum' not in collab.REVIEW_SCHEMA['properties']['candidate_id']
+
+
 def test_packing_preserves_duplicate_observations_and_reports_omissions():
     sources = [{'id': str(i), 'kind': 'ocr_pass', 'engine': engine, 'text': text}
                for i, (engine, text) in enumerate([('tesseract', 'A'), ('tesseract', 'A'), ('paddle', 'B')])]
@@ -131,6 +154,34 @@ def test_two_rounds_share_ocr_then_pool_all_provider_queries(monkeypatch, capsys
     assert len(searches) == 4
     assert len(payload['proposals']) == len(payload['reviews']) == 2
     assert 'secret' not in capsys.readouterr().out
+
+
+def test_alternative_search_precedes_models_even_when_models_favor_canonical(monkeypatch):
+    evidence = bundle()
+    evidence['sources'].append({'id': 'pass:run:2:line:1', 'kind': 'ocr_pass',
+                                'engine': 'tesseract', 'text': 'Jep Pic Med'})
+    searches = []
+    def search(key, query, item, domain):
+        searches.append(query)
+        assert item == 'Cep Pic Med'  # Alternative discovery cannot inflate scoring.
+        return []
+    def request(profile, text, schema, images):
+        assert 'site:sobeys.com Oep Pic Med' in searches
+        assert 'site:sobeys.com Jep Pic Med' in searches
+        assert 'reading_hypotheses' in text
+        if schema == collab.PROPOSAL_SCHEMA:
+            output = {'reading': 'Cep Pic Med', 'queries': ['Cepacol'],
+                      'source_ids': ['item:canonical'], 'reason': 'Uncertain'}
+        else:
+            output = {'candidate_id': None, 'source_ids': [SOURCE], 'reason': 'No verified product'}
+        return {'output': output}
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(providers, 'request', request)
+    payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
+        evidence, [providers.Profile('openai', 'openai', 'test')], 'key', .85, {'receipt': 'a.pdf'})
+    assert searches.count('site:sobeys.com Oep Pic Med') == 1
+    assert payload['decision']['disposition'] == 'review'
+    assert payload['reading_hypotheses'][1]['source_ids'] == [SOURCE]
 
 
 def test_failed_provider_does_not_stop_other_workers(monkeypatch):

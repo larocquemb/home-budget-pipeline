@@ -311,6 +311,21 @@ also consume context. A conservative character check rejects oversized prompts;
 it is not an exact provider tokenizer. Inspect actual usage and truncation errors.
 Larger budgets are experiments, not guaranteed accuracy improvements.
 
+Collaboration keeps distinct retrieved OCR readings as separate
+`reading_hypotheses`, with their source IDs. It searches each reading on the
+retailer site before model proposals, reusing cached queries. For example,
+`Cep Pic Med` and `Oep Pic Med` remain separate hypotheses even when both occur
+in the same OCR pass. Repeated passes do not add independent votes. Up to eight
+distinct readings are searched; exceeding that budget records an error and keeps
+the item in review. Hypotheses and search queries are retained in the run payload,
+and hypotheses appear in `enrichment_collaboration_evidence` logs.
+
+Models are asked to explore unresolved readings and abbreviation expansions;
+there is no fixed mapping from Oep to a brand. Discovery results remain scored
+against the original item. Review selections are constrained to supplied product
+IDs or null, with local citation validation still enforced. A successful search
+or model agreement alone does not approve a product.
+
 Models on your Mac are not automatically available on Arsene. The Job never
 pulls models. Qwen profiles containing `vl` are treated as vision capable by the
 default configuration; use explicit profiles for custom model names. GPU requests
