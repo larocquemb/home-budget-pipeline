@@ -490,6 +490,18 @@ ORDER BY completed_at DESC;
 
 ### Local-only collaboration
 
+Discovery also searches the descriptive tokens without the uncertain brand,
+then builds up to three follow-up queries from full words actually matched in
+retailer titles/URLs/snippets. For example, prefix matches can expand a style
+and size without a fixed brand or product glossary. The discovery log records
+`descriptive_queries` and `grounded_descriptive_queries`.
+
+Search hits that do not explain every descriptive receipt token are excluded
+from model discovery context, preventing brand-only hits from steering Qwen.
+Selectable review products must pass the original-item score threshold, explain
+every meaningful token, and have independent OCR support. Other hits stay
+unverified and cannot be selected merely because a brand prefix matches.
+
 ```sh
 make enrich-products COLLABORATE=1 LIMIT=1
 ```

@@ -157,7 +157,7 @@ def test_two_rounds_share_ocr_then_pool_all_provider_queries(monkeypatch, capsys
     assert payload['decision']['disposition'] == 'recommended'
     assert [p for p, _ in calls] == ['openai', 'anthropic', 'openai', 'anthropic']
     assert all('Oep Pic Med' in text for _, text in calls)
-    assert len(searches) == 4
+    assert len(searches) == 6
     assert len(payload['proposals']) == len(payload['reviews']) == 2
     assert 'secret' not in capsys.readouterr().out
 
@@ -808,6 +808,41 @@ def test_evidence_guided_qwen_resolves_without_any_paid_model_call(monkeypatch):
         [providers.Profile('qwen', 'qwen', 'local', vision=True)], 'key', .85, {'receipt': 'a.pdf'})
     assert payload['decision']['disposition'] == 'recommended'
     assert payload['decision']['candidate_title'] == TITLE
-    assert len(calls) == 2 and all(p == 'qwen' for p, _ in calls)
+    assert len(calls) == 1 and all(p == 'qwen' for p, _ in calls)
+    assert payload['discovery']['verified_literal_match'] is True
     assert payload['decision']['canonical_updated'] is False
     assert any('picante medium' in q for q in searches)
+
+
+def test_brand_only_retailer_hits_do_not_steer_qwen_and_cannot_be_selected(monkeypatch):
+    medicine_url = 'https://sobeys.com/products/cepacol-honey-lemon-lozenges'
+    medicine_title = 'Cepacol Extra Strength Honey And Lemon Lozenges'
+    calls = []
+    monkeypatch.setattr(core, 'brave_candidates', lambda *args: [
+        core.SearchResult(medicine_title, medicine_url, '', .3)])
+    def request(profile, text, schema, images):
+        calls.append(text)
+        assert medicine_title not in text
+        if schema in (collab.EXPANSION_SCHEMA, collab.PROPOSAL_SCHEMA):
+            sources = json.loads(text.splitlines()[-1]).get('target_reading', {}).get('source_ids', [SOURCE])
+            return {'output': {'reading': 'Unresolved', 'queries': [] if schema == collab.EXPANSION_SCHEMA else ['size medium'],
+                'source_ids': sources[:1], 'reason': 'No supporting product/style evidence'}}
+        assert schema['properties']['candidate_id']['enum'] == [None]
+        return {'output': {'candidate_id': None, 'candidate_title': None, 'product_source_id': None,
+            'source_ids': [SOURCE], 'reason': 'No verified candidate'}}
+    monkeypatch.setattr(providers, 'request', request)
+    result = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'}, bundle(),
+        [providers.Profile('qwen', 'qwen', 'test')], 'key', .85, {'receipt': 'a.pdf'})
+    assert result['decision']['disposition'] == 'review'
+    assert result['decision']['candidate_id'] is None
+    assert result['candidates'] == []
+    assert all(medicine_title not in text for text in calls)
+
+
+def test_descriptive_evidence_preserves_product_words_without_a_brand_mapping():
+    medicine = core.SearchResult('Cepacol Honey Lemon Lozenges', 'https://sobeys.com/products/cepacol', '', .3)
+    salsa = core.SearchResult(TITLE, URL, '', .9167)
+    assert collab.descriptive_token_evidence('Cep Pic Med', 'Sobeys', medicine) is None
+    evidence = collab.descriptive_token_evidence('Gep Pic Med', 'Sobeys', salsa)
+    assert [t['matched'] for t in evidence['tokens'][1:]] == ['picante', 'medium']
+    assert evidence['tokens'][0]['kind'] == 'unmatched'
