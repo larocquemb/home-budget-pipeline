@@ -10,6 +10,8 @@ from home_budget_pipeline import receipt_model_providers as providers
 from home_budget_pipeline import receipt_shared_evidence as shared
 from home_budget_pipeline import product_enrichment as core
 
+pytestmark = pytest.mark.usefixtures('offline_gpu_sampling')
+
 
 URL = 'https://sobeys.com/products/old-el-paso-salsa-picante-medium'
 TITLE = 'Old El Paso Salsa Picante Medium'
