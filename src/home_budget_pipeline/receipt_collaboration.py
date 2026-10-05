@@ -226,8 +226,13 @@ def descriptive_token_evidence(reading, merchant, result):
     """Brand overlap alone cannot explain the receipt's product/style tokens."""
     evidence = core.candidate_evidence(reading, core.retailer_domain(merchant),
         result.title, result.url, result.snippet)
-    descriptive = evidence['tokens'][1:]
-    return evidence if descriptive and all(t['kind'] != 'unmatched' for t in descriptive) else None
+    original_tokens = re.findall(r'[a-z0-9]+', reading.lower())
+    brand_token = original_tokens[0] if original_tokens else None
+    # Scoring drops short/noise tokens. Remove the actual leading token only if
+    # it survived scoring; never reinterpret the next token as the brand.
+    descriptive = [t for t in evidence['tokens'] if t['token'] != brand_token]
+    return {**evidence, 'descriptive_tokens': descriptive} if descriptive and all(
+        t['kind'] != 'unmatched' for t in descriptive) else None
 
 
 def expand_readings(hypotheses, profiles, merchant, context, verify=None, search_evidence=None):
@@ -463,8 +468,8 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     for hypothesis in hypotheses[:8]:
         for _, result in list(baseline):
             token_evidence = descriptive_token_evidence(hypothesis['reading'], row['store_name'], result)
-            if token_evidence and any(t['matched'] != t['token'] for t in token_evidence['tokens'][1:]):
-                query = core.product_query(' '.join(t['matched'] for t in token_evidence['tokens'][1:]), row['store_name'])
+            if token_evidence and any(t['matched'] != t['token'] for t in token_evidence['descriptive_tokens']):
+                query = core.product_query(' '.join(t['matched'] for t in token_evidence['descriptive_tokens']), row['store_name'])
                 if query and query not in grounded_queries:
                     grounded_queries.append(query)
     for query in grounded_queries[:3]:
@@ -666,7 +671,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, blocking, complete_context, min_provider_families=min_families)
     decision['recovered_discovery_errors'] = recovered
     decision['review_policy'] = review_policy
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v10', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v11', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,

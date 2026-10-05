@@ -496,6 +496,11 @@ retailer titles/URLs/snippets. For example, prefix matches can expand a style
 and size without a fixed brand or product glossary. The discovery log records
 `descriptive_queries` and `grounded_descriptive_queries`.
 
+The uncertain brand is identified from its original position before scoring
+filters short or noise tokens. Thus `ep Pic Med` still requires evidence for
+both `Pic` and `Med`; a match for `medicine` alone cannot produce a grounded
+query. Matches for `picante` and `medium` preserve both words in the query.
+
 Search hits that do not explain every descriptive receipt token are excluded
 from model discovery context, preventing brand-only hits from steering Qwen.
 Selectable review products must pass the original-item score threshold, explain
