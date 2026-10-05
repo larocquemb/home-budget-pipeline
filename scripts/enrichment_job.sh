@@ -48,6 +48,8 @@ kubectl patch --local -f "$work_dir/job.json" --type=json \
 overrides=()
 [[ -z "${CONTEXT_TOKENS:-}" ]] || overrides+=("COLLAB_CONTEXT_TOKENS=$CONTEXT_TOKENS")
 [[ -z "${OUTPUT_TOKENS:-}" ]] || overrides+=("COLLAB_OUTPUT_TOKENS=$OUTPUT_TOKENS")
+[[ -z "${QWEN_CONTEXT_TOKENS:-}" ]] || overrides+=("QWEN_CONTEXT_TOKENS=$QWEN_CONTEXT_TOKENS")
+[[ -z "${QWEN_OUTPUT_TOKENS:-}" ]] || overrides+=("QWEN_OUTPUT_TOKENS=$QWEN_OUTPUT_TOKENS")
 [[ -z "${QWEN_MODELS:-}" ]] || overrides+=("OLLAMA_COLLAB_MODELS=$QWEN_MODELS")
 if (( ${#overrides[@]} )); then
   kubectl set env --local -f "$work_dir/prepared.json" "${overrides[@]}" -o json > "$work_dir/overrides.json"

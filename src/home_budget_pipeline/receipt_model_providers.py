@@ -60,9 +60,13 @@ def profiles() -> tuple[list[Profile], list[dict]]:
             if model:
                 selected.append(Profile(provider, provider, model, **budgets, vision=True))
         models = os.getenv('OLLAMA_COLLAB_MODELS', 'qwen3:30b').split(',')
+        qwen_budgets = {
+            'context_tokens': int(os.getenv('QWEN_CONTEXT_TOKENS', os.getenv('COLLAB_CONTEXT_TOKENS', '32768'))),
+            'output_tokens': int(os.getenv('QWEN_OUTPUT_TOKENS', os.getenv('COLLAB_OUTPUT_TOKENS', '8192'))),
+        }
         for index, model in enumerate(dict.fromkeys(m.strip() for m in models if m.strip())):
             selected.append(Profile(f'qwen-{index + 1}', 'qwen', model,
-                **budgets,
+                **qwen_budgets,
                 vision='vl' in model.lower()))
     if len(selected) > 8 or len({p.name for p in selected}) != len(selected):
         raise ValueError('Profiles must have unique names and at most eight entries')
@@ -73,8 +77,8 @@ def profiles() -> tuple[list[Profile], list[dict]]:
             raise ValueError('Unknown provider or missing profile name/model')
         if not isinstance(profile.vision, bool):
             raise ValueError('vision must be a JSON boolean')
-        if not 1024 <= profile.context_tokens <= 65536 or not 256 <= profile.output_tokens <= 8192:
-            raise ValueError('Context must be 1024..65536; output must be 256..8192 tokens')
+        if not 1024 <= profile.context_tokens <= 65536 or not 256 <= profile.output_tokens <= 16384:
+            raise ValueError('Context must be 1024..65536; output must be 256..16384 tokens')
         if profile.output_tokens >= profile.context_tokens:
             raise ValueError('Output budget must be smaller than context')
         if profile.provider in keys and not os.getenv(keys[profile.provider], '').strip():

@@ -135,3 +135,19 @@ def test_missing_or_invalid_response_fields_do_not_mask_truncation(message):
     sample = providers.incomplete_ollama_output(message)
     assert sample['content_chars'] is None and sample['thinking_chars'] is None
     assert sample['content_head'] is None and sample['omitted_content_chars'] is None
+
+
+def test_qwen_defaults_leave_room_for_reasoning_without_increasing_paid_budget(monkeypatch):
+    for key in ('RECEIPT_MODEL_PROFILES', 'COLLAB_CONTEXT_TOKENS', 'COLLAB_OUTPUT_TOKENS',
+                'QWEN_CONTEXT_TOKENS', 'QWEN_OUTPUT_TOKENS'):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    enabled, _ = providers.profiles()
+    qwen = next(p for p in enabled if p.provider == 'qwen')
+    openai = next(p for p in enabled if p.provider == 'openai')
+    assert (qwen.context_tokens, qwen.output_tokens) == (32768, 8192)
+    assert (openai.context_tokens, openai.output_tokens) == (16384, 2048)
+    monkeypatch.setenv('QWEN_OUTPUT_TOKENS', '16384')
+    enabled, _ = providers.profiles()
+    assert next(p for p in enabled if p.provider == 'qwen').output_tokens == 16384
+    assert next(p for p in enabled if p.provider == 'openai').output_tokens == 2048
