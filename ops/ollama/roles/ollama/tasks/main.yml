@@ -27,10 +27,13 @@
     mode: "0644"
   notify: Restart Ollama
 
-- name: Install Python for the read only GPU telemetry endpoint
-  ansible.builtin.package:
-    name: python3
-    state: present
+- name: Verify the system Python for the read only GPU telemetry endpoint
+  # These managed hosts already use Python for Ansible. Avoid a needless DNF
+  # transaction: the NVIDIA plugin writes to stdout and corrupts module JSON.
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, --version]
+  changed_when: false
+  check_mode: false
 
 - name: Read the existing Ollama service account
   ansible.builtin.command:
