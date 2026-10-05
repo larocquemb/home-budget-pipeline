@@ -55,4 +55,15 @@ CREATE TABLE IF NOT EXISTS enrichment.receipt_collaboration_runs (
     completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Authoritative lineage survives graph outages and RabbitMQ acknowledgements.
+CREATE SCHEMA IF NOT EXISTS lineage;
+CREATE TABLE IF NOT EXISTS lineage.receipt_events (
+    id UUID PRIMARY KEY,
+    source_sha256 TEXT NOT NULL,
+    source_reference TEXT NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    payload JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS receipt_events_source ON lineage.receipt_events(source_sha256, occurred_at);
+
 COMMIT;

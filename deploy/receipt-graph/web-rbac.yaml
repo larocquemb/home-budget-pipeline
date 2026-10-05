@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: receipt-graph-viewer
+  namespace: home-budget
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: receipt-graph-viewer
+  namespace: home-budget
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: receipt-graph-viewer
+  namespace: home-budget
+subjects:
+  - kind: ServiceAccount
+    name: receipt-graph-viewer
+    namespace: home-budget
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: receipt-graph-viewer

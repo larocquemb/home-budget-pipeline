@@ -34,8 +34,10 @@ home-budget-ledger = "home_budget_pipeline.web.receipt_app:main"
 home-budget-categorize = "home_budget_pipeline.categorization.command:main"
 home-budget-category-catalog = "home_budget_pipeline.categorization.catalog_config:main"
 home-budget-enrich-products = "home_budget_pipeline.product_enrichment_runtime:main"
+home-budget-receipt-graph = "home_budget_pipeline.receipt_graph:main"
 
 [project.optional-dependencies]
+graph = ["neo4j>=6,<7"]
 dev = [
     "pytest>=8",
     "Jinja2>=3.1,<4",
@@ -72,6 +74,9 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"home_budget_pipeline.web" = ["*.html"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

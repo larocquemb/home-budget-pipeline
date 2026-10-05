@@ -5,6 +5,8 @@ from contextlib import nullcontext
 from dataclasses import asdict
 import hashlib
 import json
+import os
+import socket
 import time
 import uuid
 
@@ -246,7 +248,9 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context):
     complete_context = coverage['included_sources'] == coverage['available_sources'] and not any(c['confidence'] >= threshold for c in list(cards.values())[8:]) and bundle['coverage']['available_passes'] == bundle['coverage']['included_passes'] and bundle['coverage']['available_documents'] == bundle['coverage']['included_documents']
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete_context)
     payload = {**context, 'prompt_version': 'receipt-collaboration-v1', 'scoring_version': 'receipt-evidence-v2',
-        'evidence_bundle': bundle, 'prompt_coverage': coverage, 'images': image_metadata, 'image_errors': image_errors,
+        'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
+        'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
+        'images': image_metadata, 'image_errors': image_errors,
         'candidates': candidates, 'search_results': list(cards.values()), 'available_candidates': len(cards), 'proposals': proposals, 'reviews': reviews,
         'search_queries': [{'query': query, 'candidate_ids': [candidate_id(r.url) for r in results]} for query, results in cache.items()],
         'decision': decision, 'errors': errors, 'shared_brave_seconds': brave_seconds,
