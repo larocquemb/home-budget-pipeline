@@ -63,6 +63,14 @@ def test_run_observations_and_citations_remain_separate():
     assert len([n for n in graph['nodes'] if n['kind'] == 'Item']) == 1
 
 
+def test_reused_database_ids_do_not_merge_different_receipts():
+    first = evidence()
+    second = evidence()
+    second['receipt']['source_sha256'] = 'b'*64
+    item_ids = [next(n['id'] for n in g.build(data)['nodes'] if n['kind'] == 'Item') for data in (first,second)]
+    assert item_ids[0] != item_ids[1]
+
+
 def test_retry_requires_an_observed_retry_not_merely_multiple_runs():
     data = evidence()
     data['events'] = [{'id': str(i), 'occurred_at': str(i), 'payload': {

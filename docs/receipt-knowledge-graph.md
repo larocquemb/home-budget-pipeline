@@ -82,7 +82,8 @@ and source timestamps protect consistency, but extra scans waste resources.
 
 ## GitOps deployment
 
-The opt-in overlay is `deploy/receipt-graph`, built on `deploy/rabbitmq-private`.
+The opt-in overlay is `deploy/receipt-graph`, built on the current production
+`deploy/rabbitmq-private-telemetry` overlay, preserving collectors and log delivery.
 It provisions the graph database on Arsene with 1Gi requested / 2Gi limited
 memory, a 1-CPU limit and an 8Gi local-path volume. The projector requests 100m
 CPU / 128Mi memory and has a 512Mi memory limit. These are initial budgets,

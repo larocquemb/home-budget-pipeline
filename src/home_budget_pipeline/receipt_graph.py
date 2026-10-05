@@ -171,15 +171,15 @@ def build(data):
     expense = data.get('expense')
     items = {}
     if expense:
-        canonical = graph.node('CanonicalReceipt', expense['id'], expense.get('store_name') or 'Canonical receipt', **expense)
-        record = graph.node('PostgreSQLRecord', ('budget.expenses', expense['id']), f"budget.expenses/{expense['id']}", table='budget.expenses', key=expense['id'])
+        canonical = graph.node('CanonicalReceipt', (sha, expense['id']), expense.get('store_name') or 'Canonical receipt', **expense)
+        record = graph.node('PostgreSQLRecord', ('budget.expenses', sha, expense['id']), f"budget.expenses/{expense['id']}", table='budget.expenses', key=expense['id'])
         graph.edge(receipt, 'PARSED_AS', canonical)
         graph.edge(canonical, 'PERSISTED_AS', record)
         if expense.get('store_name'):
             merchant = graph.node('Merchant', expense['store_name'], expense['store_name'])
             graph.edge(canonical, 'PURCHASED_FROM', merchant)
         for item in data.get('items', []):
-            i = graph.node('Item', item['id'], item['item_name'], **item)
+            i = graph.node('Item', (sha, item['id']), item['item_name'], **item)
             items[item['id']] = i
             graph.edge(canonical, 'CONTAINS', i)
             if item.get('budget_category'):
