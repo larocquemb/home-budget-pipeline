@@ -352,6 +352,13 @@ paid-model use or omission can be inspected in logs and the graph. `enrichment_c
 stop reason, expansion call count and whether the proposal round was skipped.
 
 Qwen receives the JSON schema in its prompt as well as Ollama's `format` argument.
+Review schemas restrict citations to supplied source IDs and request at most six.
+If a provider still returns more than the legacy validator limit of 20 citations,
+the full list must contain only supplied IDs before it can be reduced to six,
+retaining a citation that supports the selected product. The original list and
+counts are saved under `citation_normalization` in model logs and attempt history.
+Unknown citations, mismatched product titles, and missing OCR support still fail
+validation; excess valid citations alone do not require another model call.
 Expansion reading/query strings are limited to 160 characters, reasons to 300,
 and citations to six. Partial queries containing receipt abbreviations are searched
 before requesting corrections. Only retailer product pages with the existing score

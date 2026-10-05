@@ -742,3 +742,29 @@ def test_thinking_only_truncation_does_not_repeat_a_larger_budget(monkeypatch, s
     assert calls == [8192]
     assert result['retry_skipped_reason'] == 'thinking_only_truncation'
     assert result['status'] == 'error' and len(result['attempts']) == 1
+
+
+@pytest.mark.parametrize('unknown_tail', [False, True])
+def test_review_overflow_preserves_audit_and_support_but_rejects_unknown_tail(monkeypatch, unknown_tail):
+    refs = [f'pass:other:{i}' for i in range(22)] + [SOURCE]
+    sources = set(refs)
+    if unknown_tail:
+        refs.append('invented:tail')
+    calls = []
+    def request(profile, text, schema, images):
+        calls.append(schema)
+        return {'output': review('qwen', refs=refs)['output'], 'output_tokens': 1157}
+    monkeypatch.setattr(providers, 'request', request)
+    result = collab.review_with_citations(providers.Profile('qwen', 'qwen', 'test'),
+        'evidence', sources, [candidate()], [], {})
+    assert calls[0]['properties']['source_ids']['maxItems'] == 6
+    assert set(calls[0]['properties']['source_ids']['items']['enum']) == sources
+    if unknown_tail:
+        assert result['status'] == 'error' and result['error_type'] == 'EvidenceCitationError'
+        assert len(calls) == 2 and 'citation_normalization' not in result
+    else:
+        assert len(calls) == 1 and result['status'] == 'success'
+        assert len(result['output']['source_ids']) == 6 and SOURCE in result['output']['source_ids']
+        assert result['citation_normalization']['original_source_ids'] == refs
+        assert result['citation_normalization']['original_count'] == 23
+        assert result['output_tokens'] == 1157
