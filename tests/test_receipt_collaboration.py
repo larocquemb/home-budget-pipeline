@@ -226,8 +226,9 @@ def test_isolated_expansions_retry_unexpanded_tokens_then_search_full_product(mo
     attempts.clear()
     payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
         bundle(), profiles, 'key', .85, {'receipt': 'a.pdf'})
-    assert set(targets) == {('qwen', 'Cep Pic Med')}
-    assert all(n == 2 for n in attempts.values())
+    assert set(targets) == {('qwen', 'Cep Pic Med'), ('qwen', 'Oep Pic Med'), ('openai', 'Cep Pic Med')}
+    assert attempts[('qwen', 'Cep Pic Med')] == attempts[('qwen', 'Oep Pic Med')] == 1
+    assert attempts[('openai', 'Cep Pic Med')] == 2
     assert searches.count('site:sobeys.com Old El Paso medium picante salsa') == 1
     assert all('Pic Med' not in q for e in payload['expansions'] for q in e['output']['queries'])
     assert payload['decision']['disposition'] == 'recommended'
@@ -671,3 +672,53 @@ def test_qwen_retry_grows_reasoning_budget_and_stops_at_ceiling():
     assert retry.output_tokens == 16384
     assert retry.context_tokens == 32768 and profile.output_tokens == 8192
     assert collab.qwen_retry_profile(retry) is None
+
+
+def test_partial_qwen_queries_can_verify_without_a_correction(monkeypatch):
+    calls, searched = [], []
+    def request(profile, *args):
+        calls.append(profile.name)
+        return {'output': {'reading': 'Salsa', 'queries': ['Salsa Pic Med'],
+                          'source_ids': [SOURCE], 'reason': 'Unverified hypothesis'}}
+    def verify(result):
+        searched.extend(result['output']['queries'])
+        return True
+    monkeypatch.setattr(providers, 'request', request)
+    results = collab.expand_readings([{'reading': 'Oep Pic Med', 'source_ids': [SOURCE]}],
+        [providers.Profile('qwen', 'qwen', 'test'), providers.Profile('openai', 'openai', 'test')],
+        'Sobeys', {}, verify=verify)
+    assert calls == ['qwen'] and searched == ['Salsa Pic Med']
+    assert results[0]['verified_search_match'] is True
+
+
+def test_qwen_partial_queries_move_to_alternate_reading_without_semantic_retry(monkeypatch):
+    targets, searched = [], []
+    def request(profile, text, *args):
+        target = json.loads(text.splitlines()[-1])['target_reading']
+        targets.append((profile.provider, target['reading']))
+        return {'output': {'reading': target['reading'], 'queries': ['Cepacol Pic Med'],
+                          'source_ids': [SOURCE], 'reason': 'Unverified hypothesis'}}
+    monkeypatch.setattr(providers, 'request', request)
+    hypotheses = [{'reading': r, 'source_ids': [SOURCE]} for r in ('Cep Pic Med', 'Oep Pic Med')]
+    results = collab.expand_readings(hypotheses, [providers.Profile('qwen', 'qwen', 'test')],
+        'Sobeys', {}, verify=lambda r: searched.append(r['output']['queries']) or False)
+    assert targets == [('qwen', 'Cep Pic Med'), ('qwen', 'Oep Pic Med')]
+    assert len(searched) == 2
+    assert all(r['status'] == 'success' and r['expansion_state'] == 'unresolved' for r in results)
+    assert all(r['correction_skipped'] == 'try_other_ocr_readings' for r in results)
+
+
+def test_failed_semantic_correction_preserves_valid_first_expansion(monkeypatch):
+    calls = []
+    def request(*args):
+        calls.append(1)
+        if len(calls) == 2:
+            raise providers.IncompleteModelOutput({'finish_reason': 'length'})
+        return {'output': {'reading': 'Salsa', 'queries': ['Salsa Pic Med'],
+                          'source_ids': [SOURCE], 'reason': 'Unverified hypothesis'}}
+    monkeypatch.setattr(providers, 'request', request)
+    result = collab.expand_readings([{'reading': 'Oep Pic Med', 'source_ids': [SOURCE]}],
+        [providers.Profile('openai', 'openai', 'test')], 'Sobeys', {})[0]
+    assert result['status'] == 'success' and result['correction_failed'] is True
+    assert result['output']['queries'] == ['Salsa Pic Med']
+    assert result['attempts'][1]['error_type'] == 'IncompleteModelOutput'
