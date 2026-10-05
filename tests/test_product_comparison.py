@@ -226,8 +226,27 @@ def test_brave_precedes_models_and_both_receive_same_baseline(monkeypatch):
                for p in ('openai', 'qwen')]
     assert prompts[0] == prompts[1] and title in prompts[0]
     assert all(r['accepted'] and r['confidence'] == .9167 for r in results)
-    # Two baseline searches plus one identical proposed query, shared within the item.
+    # Two baseline hypotheses plus one identical proposed query shared by models.
     assert sum(kind == 'brave' for kind, _ in order) == 3
+
+
+def test_full_expansion_finds_candidate_without_scoring_expansion_as_receipt(monkeypatch):
+    title = 'Old El Paso Salsa Picante Style Restaurant Medium 650 ml'
+    url = 'https://sobeys.com/products/old-el-paso-salsa-picante-style-restaurant-medium-650-ml'
+    calls = []
+    def search(key, query, original, domain):
+        calls.append((query, original))
+        if query != 'site:sobeys.com old el paso picante medium':
+            return []
+        return [core.SearchResult(title, url, '', core.candidate_score(original, domain, title, url))]
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    cache = {}
+    prior = {'id':7, 'merchant_key':'sobeys.com', 'status':'accepted', 'confidence':.95,
+             'receipt_text_norm':'oep pic med', 'product_description':title, 'product_url':url}
+    baseline = comparison.baseline_search('Cep Pic Med', 'Sobeys', 'key', cache, [prior])
+    assert len(baseline) == 1 and baseline[0][1].score == .9167
+    assert all(original == 'Cep Pic Med' for _, original in calls)
+    assert baseline[0][0] == 'site:sobeys.com old el paso picante medium'
 
 
 def test_provider_does_not_borrow_other_models_expanded_search_results(monkeypatch):

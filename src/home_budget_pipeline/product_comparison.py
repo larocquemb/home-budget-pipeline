@@ -155,7 +155,9 @@ def evaluate(provider: str, item: str, merchant: str, api_key: str,
         domain = core.retailer_domain(merchant)
         pool = list(baseline)
         for expansion in result["queries"]:
-            query = f"site:{domain} {expansion}"
+            query = core.scoped_search_query(expansion, merchant)
+            if not query:
+                continue
             if query not in search_cache:
                 # Score evidence against the ORIGINAL item for both models, never
                 # against words the model invented. Share identical search results.
@@ -187,12 +189,8 @@ def evaluate(provider: str, item: str, merchant: str, api_key: str,
     return result
 
 
-def baseline_search(item: str, merchant: str, api_key: str, cache: dict) -> list:
-    queries = [core.product_query(item, merchant)]
-    first = item.split(maxsplit=1)
-    if first and first[0][:1].lower() in {"c", "o"}:
-        alternative = ("O" if first[0][0].lower() == "c" else "C") + first[0][1:]
-        queries.append(core.product_query(" ".join([alternative, *first[1:]]), merchant))
+def baseline_search(item: str, merchant: str, api_key: str, cache: dict, prior_matches=()) -> list:
+    queries = core.discovery_queries(item, merchant, prior_matches)
     results = []
     for query in dict.fromkeys(queries):
         if query:
@@ -253,16 +251,19 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                        "receipt_id": row["receipt_id"],
                        "threshold": threshold, "scoring_version": "receipt-evidence-v2"}
             search_cache = {}
+            priors = core.accepted_search_priors(conn, row['store_name'])
+            learned = core.learned_discovery(row['item_name'], row['store_name'], priors)
+            conn.commit()
             brave_started = time.monotonic()
             try:
-                baseline = baseline_search(row["item_name"], row["store_name"], api_key, search_cache)
+                baseline = baseline_search(row["item_name"], row["store_name"], api_key, search_cache, priors)
                 baseline_error = None
             except Exception as exc:
                 baseline = [(query, result) for query, candidates in search_cache.items() for result in candidates]
                 baseline_error = type(exc).__name__
             brave_seconds = round(time.monotonic() - brave_started, 3)
             emit("enrichment_brave_baseline", {**context, "seconds": brave_seconds,
-                 "queries": list(search_cache), "candidates": len(baseline), "error_type": baseline_error,
+                 "queries": list(search_cache), "learned_searches": learned, "candidates": len(baseline), "error_type": baseline_error,
                  "evidence": [{"query": q, "title": r.title, "url": r.url,
                                "snippet": r.snippet[:300], "confidence": r.score} for q, r in baseline]})
             results = []
@@ -277,6 +278,7 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                     "qwen_confidence": results[1]["confidence"],
                     "prompt_version": "product-queries-v3",
                     "shared_brave_seconds": brave_seconds, "baseline_error_type": baseline_error,
+                    "learned_searches": learned,
                     "item_seconds": round(time.monotonic() - item_started, 3)}
             if write_db:
                 conn.execute("""INSERT INTO enrichment.product_comparisons

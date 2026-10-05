@@ -62,6 +62,90 @@ def product_query(item_name: str, merchant: str) -> Optional[str]:
     return f"site:{domain} {terms}" if terms else None
 
 
+def accepted_search_priors(conn, merchant: str) -> list[dict]:
+    """Retrieve bounded retailer-specific accepted matches, never experiments."""
+    domain = retailer_domain(merchant)
+    if not domain:
+        return []
+    return conn.execute("""SELECT id,merchant_key,receipt_text_norm,product_description,
+        product_url,status,confidence FROM enrichment.product_cache
+        WHERE merchant_key=%s AND status='accepted' AND confidence >= 0.9
+        ORDER BY last_used_at DESC,id DESC LIMIT 1000""", (domain,)).fetchall()
+
+
+def learned_discovery(item_name: str, merchant: str, prior_matches=()) -> list[dict]:
+    """Learn search hypotheses from accepted pairs; preserve auditable sources."""
+    domain = retailer_domain(merchant)
+    if not domain or BARCODE_RE.search(item_name or ''):
+        return []
+    rules = {}
+    for prior in prior_matches:
+        if prior.get('status') != 'accepted' or prior.get('merchant_key') != domain:
+            continue
+        if float(prior.get('confidence') or 0) < .9:
+            continue
+        original = prior.get('receipt_text_norm') or ''
+        title, url = prior.get('product_description') or '', prior.get('product_url') or ''
+        if candidate_score(original, domain, title, url) < .9:
+            continue
+        tokens = re.findall(r'[a-z0-9]+', original.lower())
+        words = re.findall(r'[a-z0-9]+', title.lower())
+        while words and words[0] in {'buy', 'shop', 'purchase'}:
+            words.pop(0)
+        source = {'cache_id': prior['id'], 'receipt_text': original,
+                  'product_title': title, 'product_url': url}
+        for index, token in enumerate(tokens):
+            expansion = None
+            if index == 0 and 2 <= len(token) <= 5 and len(words) >= len(token):
+                initials = ''.join(w[0] for w in words[:len(token)])
+                differences = [(a,b) for a,b in zip(token, initials) if a != b]
+                if not differences or differences in [[('c','o')], [('o','c')]]:
+                    expansion = ' '.join(words[:len(token)])
+            if not expansion and len(token) >= 3:
+                matches = {w for w in words if w.startswith(token) and w != token}
+                if len(matches) == 1:
+                    expansion = matches.pop()
+            if expansion:
+                rules.setdefault(token, {}).setdefault(expansion, {})[prior['id']] = source
+    tokens = re.findall(r'[a-z0-9]+', item_name.lower())
+    options = []
+    for index, token in enumerate(tokens):
+        choices = dict(rules.get(token, {}))
+        if index == 0 and 2 <= len(token) <= 5 and token[0] in {'c', 'o'}:
+            alternate = ('o' if token[0] == 'c' else 'c') + token[1:]
+            for expansion, sources in rules.get(alternate, {}).items():
+                choices.setdefault(expansion, {}).update(sources)
+        options.append(sorted(choices.items(), key=lambda p: (-len(p[1]), p[0]))[:2] or [(token, {})])
+    combinations = [([], {})]
+    for choices in options:
+        combinations = [(terms+[word], {**sources, **support})
+                        for terms,sources in combinations for word,support in choices][:4]
+    return [{'query': product_query(' '.join(terms), merchant),
+             'prior_matches': list(sources.values())}
+            for terms,sources in combinations if sources]
+
+
+def discovery_queries(item_name: str, merchant: str, prior_matches=()) -> tuple[str, ...]:
+    """Original search plus OCR alternatives and expansions learned from history."""
+    query = product_query(item_name, merchant)
+    if BARCODE_RE.search(item_name or ''):
+        return (query,) if query else ()
+    tokens = item_name.split()
+    queries = [query]
+    if tokens and 2 <= len(tokens[0]) <= 5 and tokens[0][0].lower() in {'c', 'o'}:
+        corrected = ('O' if tokens[0][0].lower() == 'c' else 'C') + tokens[0][1:]
+        queries.append(product_query(' '.join([corrected, *tokens[1:]]), merchant))
+    queries.extend(entry['query'] for entry in learned_discovery(item_name, merchant, prior_matches))
+    return tuple(dict.fromkeys(q for q in queries if q))[:6]
+
+
+def scoped_search_query(expansion: str, merchant: str) -> Optional[str]:
+    """Apply the retailer scope once, including model-supplied site queries."""
+    domain = retailer_domain(merchant)
+    terms = re.sub(r'\bsite:\S+', '', expansion, flags=re.IGNORECASE).strip()
+    return f'site:{domain} {terms}' if domain and terms else None
+
+
 def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippet: str = "") -> dict:
     """Explain lexical evidence; proposals themselves never increase this score."""
     hostname = (urllib.parse.urlparse(url).hostname or "").lower()

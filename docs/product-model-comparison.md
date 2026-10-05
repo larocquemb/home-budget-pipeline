@@ -212,9 +212,38 @@ make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='20260214_sobeys_363_95.pdf'
 select one mode per Job. The mode reads the latest stored OCR run for each receipt
 source, including Tesseract, Paddle and any persisted vision-engine passes. It
 retrieves probable matching lines, consensus text, line geometry, quantities,
-prices, receipt totals and arithmetic checks. It does not rerun missing OCR engines.
+prices, receipt totals and arithmetic checks. When asynchronous pass records lack
+text, it reads the current run's recorded `ocr-cache` artifact from the mounted
+cache directory. It verifies the recorded file size and SHA-256, source SHA and
+reference, run UUID, and pass identity before recovering alternate text. Sources
+retain their pass/run IDs and artifact URI/digest for audit and graph navigation.
+It does not rerun missing OCR engines or silently substitute older OCR runs.
+
+Only PVC artifacts beneath the configured cache root are supported by this
+reader. Missing, overwritten, unsupported or invalid artifacts are reported in
+`artifact_errors` and block automatic recommendations while leaving available
+text usable for review. Old runs without a recorded artifact are not guessed
+from filenames. The loader never writes recovered text back to PostgreSQL.
 
 Round one gives each available model the same retrieved text and Brave baseline.
+The baseline searches the original phrase and a bounded OCR C/O alternative.
+Additional expansions are learned at runtime from the same retailer's accepted
+`enrichment.product_cache` matches with confidence at least 0.9 and a product
+page that still scores at least 0.9 against its original receipt text. For example,
+an accepted `Oep Pic Med` → `Old El Paso Salsa Picante Medium` pair can teach the
+brand initialism and the `Pic`/`Med` prefixes for later searches. There is no
+fixed brand or abbreviation dictionary. Conflicting learned expansions are
+bounded alternatives, not votes or proof of product identity. Review, rejected,
+error, recipe, other-retailer and experimental model results cannot teach rules.
+
+Learned searches record cache IDs, original text, product titles and URLs in
+`learned_searches` in the logs and comparison/collaboration payloads. The graph
+links these prior matches to the searches they generated. The history is reread
+for each item, so accepting or revoking a cache match changes future searches
+without a code change. Candidate scores still use the current original receipt
+text; prior matches do not count as current receipt observations or independent
+model votes. On an empty accepted cache, the system uses original/OCR-alternative
+searches plus model-generated proposals; it does not invent learned mappings.
 Vision profiles also receive up to two receipt page images, verified against the
 source SHA-256 and read from the mounted receipt inbox. Text-only Qwen sees the
 OCR evidence. Models propose readings and search queries with source citations.
