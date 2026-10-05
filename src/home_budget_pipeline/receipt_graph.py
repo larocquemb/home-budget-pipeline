@@ -101,6 +101,17 @@ def collaboration(graph, receipt, item, payload, skipped=()):
         for c in query.get('candidate_ids', []):
             if c in citations:
                 graph.edge(q, 'RETURNED', citations[c])
+    searched = {entry['query'] for entry in payload.get('search_queries', [])}
+    for learned in payload.get('learned_searches', []):
+        if learned['query'] not in searched:
+            continue
+        query = graph.node('SearchQuery', (*scope, learned['query']), learned['query'])
+        for prior in learned.get('prior_matches', []):
+            match = graph.node('PriorProductMatch', (*scope, prior['cache_id']),
+                               prior['product_title'], **prior)
+            graph.edge(query, 'LEARNED_FROM', match)
+            page = graph.node('ProductPage', prior['product_url'], prior['product_url'], url=prior['product_url'])
+            graph.edge(match, 'REFERENCES', page)
     proposals = []
     for invocation in payload.get('proposals', []) + payload.get('reviews', []):
         phase = invocation['stage']

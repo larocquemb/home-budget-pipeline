@@ -215,12 +215,24 @@ retrieves probable matching lines, consensus text, line geometry, quantities,
 prices, receipt totals and arithmetic checks. It does not rerun missing OCR engines.
 
 Round one gives each available model the same retrieved text and Brave baseline.
-The baseline searches the original phrase plus bounded OCR and abbreviation
-hypotheses before calling models. For `Cep Pic Med`, these include `Oep Pic Med`,
-`Cep Picante Medium`, `Oep Picante Medium`, and `Old El Paso Picante Medium`.
-These are discovery alternatives, not accepted product identities: all candidates
-are scored against the original receipt text, and recommendations still require
-retailer product evidence and independent provider review.
+The baseline searches the original phrase and a bounded OCR C/O alternative.
+Additional expansions are learned at runtime from the same retailer's accepted
+`enrichment.product_cache` matches with confidence at least 0.9 and a product
+page that still scores at least 0.9 against its original receipt text. For example,
+an accepted `Oep Pic Med` → `Old El Paso Salsa Picante Medium` pair can teach the
+brand initialism and the `Pic`/`Med` prefixes for later searches. There is no
+fixed brand or abbreviation dictionary. Conflicting learned expansions are
+bounded alternatives, not votes or proof of product identity. Review, rejected,
+error, recipe, other-retailer and experimental model results cannot teach rules.
+
+Learned searches record cache IDs, original text, product titles and URLs in
+`learned_searches` in the logs and comparison/collaboration payloads. The graph
+links these prior matches to the searches they generated. The history is reread
+for each item, so accepting or revoking a cache match changes future searches
+without a code change. Candidate scores still use the current original receipt
+text; prior matches do not count as current receipt observations or independent
+model votes. On an empty accepted cache, the system uses original/OCR-alternative
+searches plus model-generated proposals; it does not invent learned mappings.
 Vision profiles also receive up to two receipt page images, verified against the
 source SHA-256 and read from the mounted receipt inbox. Text-only Qwen sees the
 OCR evidence. Models propose readings and search queries with source citations.

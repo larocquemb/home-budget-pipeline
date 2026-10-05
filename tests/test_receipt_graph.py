@@ -71,6 +71,20 @@ def test_reused_database_ids_do_not_merge_different_receipts():
     assert item_ids[0] != item_ids[1]
 
 
+def test_learned_queries_link_prior_matches_without_becoming_current_receipt_evidence():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    query = payload['search_queries'][0]['query']
+    payload['learned_searches'] = [{'query': query, 'prior_matches': [{
+        'cache_id': 7, 'receipt_text': 'oep pic med', 'product_title': 'Old El Paso Picante Medium',
+        'product_url': 'https://sobeys.com/products/old-el-paso-medium'}]}]
+    result = g.build(data)
+    ids = {n['id'] for n in result['nodes'] if n['kind'] == 'PriorProductMatch'}
+    assert len(ids) == 1
+    assert any(e['kind'] == 'LEARNED_FROM' and e['target'] in ids for e in result['edges'])
+    assert not any(e['kind'] in {'CITES', 'SUPPORTS', 'RECEIVED'} and e['target'] in ids for e in result['edges'])
+
+
 def test_retry_requires_an_observed_retry_not_merely_multiple_runs():
     data = evidence()
     data['events'] = [{'id': str(i), 'occurred_at': str(i), 'payload': {

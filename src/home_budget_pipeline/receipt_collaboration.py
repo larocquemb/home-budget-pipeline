@@ -165,14 +165,15 @@ def reconcile(candidates: list[dict], reviews: list[dict], validations: dict,
         'arithmetic': validations, 'canonical_updated': False}
 
 
-def collaborate_item(row, bundle, profiles, api_key, threshold, context):
+def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_matches=()):
     started = time.monotonic()
     images, image_errors = shared.render_images(bundle) if any(p.vision for p in profiles) else ([], [])
     image_metadata = [{k: v for k, v in image.items() if k != 'data'} for image in images]
     cache, errors = {}, []
+    learned = core.learned_discovery(row['item_name'], row['store_name'], prior_matches)
     brave_started = time.monotonic()
     try:
-        baseline = comparison.baseline_search(row['item_name'], row['store_name'], api_key, cache)
+        baseline = comparison.baseline_search(row['item_name'], row['store_name'], api_key, cache, prior_matches)
     except Exception as exc:
         baseline = [(q, r) for q, results in cache.items() for r in results]
         errors.append({'stage': 'baseline', 'error_type': type(exc).__name__})
@@ -195,7 +196,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context):
         'receipt_sources': packed, 'coverage': coverage, 'retailer_results': baseline_cards}
     comparison.emit('enrichment_collaboration_evidence', {**context, 'coverage': {**bundle['coverage'], **coverage},
         'ocr_engines': sorted({s['engine'] for s in bundle['sources'] if s.get('engine')}),
-        'images': image_metadata, 'image_errors': image_errors, 'arithmetic': bundle['validations']})
+        'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned, 'arithmetic': bundle['validations']})
     proposals = []
     for profile in profiles:
         visible_images = images if profile.vision else []
@@ -252,7 +253,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context):
     payload = {**context, 'prompt_version': 'receipt-collaboration-v1', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
-        'images': image_metadata, 'image_errors': image_errors,
+        'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,
         'candidates': candidates, 'search_results': list(cards.values()), 'available_candidates': len(cards), 'proposals': proposals, 'reviews': reviews,
         'search_queries': [{'query': query, 'candidate_ids': [candidate_id(r.url) for r in results]} for query, results in cache.items()],
         'decision': decision, 'errors': errors, 'shared_brave_seconds': brave_seconds,
@@ -287,8 +288,9 @@ def run(*, dsn, api_key, limit, threshold, write_db, item_ids=()):
             context = {'run_uuid': run_id, 'receipt_id': row['receipt_id'], 'item_id': row['id'],
                 'item_name': row['item_name'], 'receipt': row['receipt_filename'] or row['source_reference']}
             bundle = shared.load(conn, row)
+            priors = core.accepted_search_priors(conn, row['store_name'])
             conn.commit()
-            payload = collaborate_item(row, bundle, profiles, api_key, threshold, context)
+            payload = collaborate_item(row, bundle, profiles, api_key, threshold, context, priors)
             if write_db:
                 conn.execute('INSERT INTO enrichment.receipt_collaborations (run_uuid,expense_item_id,payload) VALUES (%s,%s,%s)',
                              (run_id, row['id'], Jsonb(payload)))
