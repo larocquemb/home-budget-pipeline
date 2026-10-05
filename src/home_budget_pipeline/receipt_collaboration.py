@@ -112,8 +112,14 @@ def call(profile, stage, text, sources, candidates, images, context):
             raise ContextBudgetError('Evidence prompt exceeds conservative context budget')
         with sampler if sampler else nullcontext():
             response = providers.request(profile, text, PROPOSAL_SCHEMA if stage == 'proposal' else REVIEW_SCHEMA, images)
-        output = validate_output(response.pop('output'), stage, sources, candidates)
-        result.update(response, output=output, status='success')
+        raw_output = response.pop('output')
+        result.update(response)
+        try:
+            output = validate_output(raw_output, stage, sources, candidates)
+        except ValueError:
+            result['invalid_output'] = raw_output if len(json.dumps(raw_output)) <= 16000 else {'error': 'output_too_large'}
+            raise
+        result.update(output=output, status='success')
     except Exception as exc:
         result['error_type'] = type(exc).__name__
         if isinstance(exc, providers.IncompleteModelOutput):

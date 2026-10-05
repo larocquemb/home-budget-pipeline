@@ -192,3 +192,13 @@ def test_collaboration_persists_only_evidence_and_run_summary(monkeypatch, capsy
     assert stats['review'] == 1 and stats['receipts'][0]['complete_receipt'] is False
     assert stats['receipts'][0]['enrichment_seconds'] == 2.5
     assert 'enrichment_receipt_timing' in capsys.readouterr().out
+
+
+def test_bad_citations_retain_usage_and_output_for_review(monkeypatch):
+    monkeypatch.setattr(providers, 'request', lambda *a: {'input_tokens': 200, 'output_tokens': 40,
+        'output': {'reading': 'Salsa', 'queries': ['Salsa'], 'source_ids': ['invented'], 'reason': 'unsupported'}})
+    result = collab.call(providers.Profile('test', 'openai', 'test'), 'proposal', 'evidence',
+                         {SOURCE}, set(), [], {'receipt': 'a.pdf'})
+    assert result['status'] == 'error' and result['error_type'] == 'EvidenceCitationError'
+    assert result['input_tokens'] == 200 and result['output_tokens'] == 40
+    assert result['invalid_output']['source_ids'] == ['invented']
