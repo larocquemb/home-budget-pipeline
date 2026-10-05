@@ -846,3 +846,39 @@ def test_descriptive_evidence_preserves_product_words_without_a_brand_mapping():
     evidence = collab.descriptive_token_evidence('Gep Pic Med', 'Sobeys', salsa)
     assert [t['matched'] for t in evidence['tokens'][1:]] == ['picante', 'medium']
     assert evidence['tokens'][0]['kind'] == 'unmatched'
+
+
+@pytest.mark.parametrize('brand', ['ep', 'No', 'Cep', 'Oep'])
+def test_short_or_filtered_brand_never_drops_descriptive_pic_token(brand):
+    medicine = core.SearchResult('Medicine and Media', 'https://sobeys.com/category/medicine', '', 0)
+    salsa = core.SearchResult(TITLE, URL, '', .9167)
+    assert collab.descriptive_token_evidence(f'{brand} Pic Med', 'Sobeys', medicine) is None
+    evidence = collab.descriptive_token_evidence(f'{brand} Pic Med', 'Sobeys', salsa)
+    assert [t['token'] for t in evidence['descriptive_tokens']] == ['pic', 'med']
+    assert [t['matched'] for t in evidence['descriptive_tokens']] == ['picante', 'medium']
+
+
+def test_short_brand_discovery_keeps_both_tokens_in_grounded_queries(monkeypatch):
+    searches, prompts = [], []
+    def search(key, query, item, domain):
+        searches.append(query)
+        if query == 'site:sobeys.com picante medium':
+            return [core.SearchResult(TITLE, URL, '', .9167)]
+        return [core.SearchResult('Medicine and Media', 'https://sobeys.com/category/medicine', '', 0),
+                core.SearchResult('Salsa Picante Medium Recipes', 'https://sobeys.com/recipes/salsa', '', 0)]
+    def request(profile, text, schema, images):
+        prompts.append(text)
+        assert 'Medicine and Media' not in text
+        return {'output': review('qwen', refs=[SOURCE])['output']}
+    evidence = bundle()
+    evidence['sources'].append({'id': 'pass:short:1', 'kind': 'ocr_pass', 'engine': 'tesseract', 'text': 'ep Pic Med'})
+    evidence['validations']['item_arithmetic'] = 'pass'
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(providers, 'request', request)
+    monkeypatch.setattr(shared, 'render_images', lambda _: ([{'id': 'image:1:1', 'data': 'image'}], []))
+    payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'}, evidence,
+        [providers.Profile('qwen', 'qwen', 'local', vision=True)], 'key', .85, {'receipt': 'a.pdf'})
+    assert payload['discovery']['grounded_descriptive_queries'] == ['site:sobeys.com picante medium']
+    assert 'site:sobeys.com medicine' not in searches and 'site:sobeys.com media' not in searches
+    assert payload['decision']['disposition'] == 'recommended'
+    assert len(prompts) == 1 and payload['decision']['canonical_updated'] is False
