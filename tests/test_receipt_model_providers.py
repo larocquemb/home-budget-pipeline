@@ -47,6 +47,8 @@ def test_qwen_text_and_vision_requests_use_explicit_budgets_and_release_model(mo
     assert calls[1]['messages'][0]['images'] == ['encoded-image']
     assert calls[1]['options'] == {'temperature': 0, 'num_ctx': 16384, 'num_predict': 4096}
     assert calls[1]['keep_alive'] == 0
+    assert json.dumps(PROPOSAL_SCHEMA, separators=(',', ':')) in calls[0]['messages'][0]['content']
+    assert calls[0]['format'] == PROPOSAL_SCHEMA
 
 
 @pytest.mark.parametrize('provider', ['qwen', 'gemini', 'anthropic'])

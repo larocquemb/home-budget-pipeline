@@ -327,7 +327,8 @@ IDs or null, with local citation validation still enforced. A successful search
 or model agreement alone does not approve a product.
 
 Before the shared proposal/review rounds, each unresolved reading receives a
-separate text-only expansion call from each configured model. That call receives
+separate text-only expansion call, trying configured models in order until
+discovery finds a strong retailer product match with supporting OCR. That call receives
 only the target reading, its citations and the merchant, avoiding anchoring on
 other OCR spellings or unrelated literal-search results. Queries retaining short
 receipt tokens (up to four letters) are rejected; the model retries once with
@@ -338,7 +339,20 @@ Expanded queries are pooled and deduplicated for Brave verification, with scores
 still calculated against the original receipt item. Only product pages can be
 selected in the final review; brand indexes and store pages remain discovery
 evidence. Calls run sequentially, so ambiguous items take more time and model
-usage than the former two-round flow.
+usage when discovery remains unresolved. Brave checks expansions as they arrive;
+once a strong match is found, remaining expansions and the shared proposal round
+are skipped. All configured models still review the pooled evidence independently,
+and agreement, complete citations and the existing evidence requirements remain
+necessary for a recommendation. `enrichment_collaboration_discovery` records the
+stop reason, expansion call count and whether the proposal round was skipped.
+
+Qwen receives the JSON schema in its prompt as well as Ollama's `format` argument.
+Expansion reading/query strings are limited to 160 characters, reasons to 300,
+and citations to six. Truncated expansion responses get one concise retry at the
+same output-token budget; incomplete responses are never parsed as valid evidence.
+Reviews missing the selected product citation or its supporting OCR citation get
+one new model review. Both attempts remain recorded; citations are never inserted
+by the application. Persistent failures continue to block recommendations.
 
 Inspect `enrichment_collaboration_expansion` for `target_reading`, `attempts`,
 `expansion_state`, queries and GPU usage. The payload retains expansions, and

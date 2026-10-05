@@ -24,6 +24,10 @@ PROPOSAL_SCHEMA = {'type': 'object', 'additionalProperties': False,
         'source_ids': {'type': 'array', 'items': {'type': 'string'}}, 'reason': {'type': 'string'}}}
 EXPANSION_SCHEMA = deepcopy(PROPOSAL_SCHEMA)
 EXPANSION_SCHEMA['properties']['queries']['minItems'] = 0
+EXPANSION_SCHEMA['properties']['reading']['maxLength'] = 160
+EXPANSION_SCHEMA['properties']['reason']['maxLength'] = 300
+EXPANSION_SCHEMA['properties']['queries']['items']['maxLength'] = 160
+EXPANSION_SCHEMA['properties']['source_ids']['maxItems'] = 6
 REVIEW_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'required': ['candidate_id', 'source_ids', 'reason'], 'properties': {
         'candidate_id': {'type': ['string', 'null']},
@@ -119,22 +123,25 @@ def validate_output(output, stage, allowed_sources, candidates):
     fields = {'reading', 'queries', 'source_ids', 'reason'} if stage in {'proposal', 'expansion'} else {'candidate_id', 'source_ids', 'reason'}
     if not isinstance(output, dict) or set(output) != fields:
         raise ValueError('Invalid structured evidence output')
-    if not isinstance(output['reason'], str) or len(output['reason']) > 2000:
+    if not isinstance(output['reason'], str) or len(output['reason']) > (300 if stage == 'expansion' else 2000):
         raise ValueError('Invalid evidence explanation')
     refs = output['source_ids']
-    if not isinstance(refs, list) or len(refs) > 20 or any(not isinstance(ref, str) or ref not in allowed_sources for ref in refs):
+    if not isinstance(refs, list) or len(refs) > (6 if stage == 'expansion' else 20) or any(not isinstance(ref, str) or ref not in allowed_sources for ref in refs):
         raise EvidenceCitationError('Unknown or excessive evidence citations')
     if stage in {'proposal', 'expansion'}:
-        if not isinstance(output['reading'], str) or not 1 <= len(output['reading']) <= 300:
+        max_text = 160 if stage == 'expansion' else 300
+        if not isinstance(output['reading'], str) or not 1 <= len(output['reading']) <= max_text:
             raise ValueError('Invalid receipt reading')
         queries = output['queries']
         minimum = 0 if stage == 'expansion' else 1
         if not isinstance(queries, list) or not minimum <= len(queries) <= 3 or any(
-            not isinstance(query, str) or not query.strip() or len(query) > 300 for query in queries):
+            not isinstance(query, str) or not query.strip() or len(query) > max_text for query in queries):
             raise ValueError('Invalid product queries')
     elif output['candidate_id'] is not None and (
         not isinstance(output['candidate_id'], str) or output['candidate_id'] not in candidates):
         raise EvidenceCitationError('Unknown product candidate')
+    elif stage == 'review' and output['candidate_id'] is not None and output['candidate_id'] not in refs:
+        raise EvidenceCitationError('Selected product must be cited')
     return output
 
 
@@ -144,15 +151,16 @@ def call(profile, stage, text, sources, candidates, images, context):
     sampler = GpuSampler(comparison.emit, {**context, 'profile': profile.name, 'provider': profile.provider,
                                           'model': profile.model, 'stage': stage}) if profile.provider == 'qwen' else None
     try:
+        schema = deepcopy(EXPANSION_SCHEMA if stage == 'expansion' else
+                          PROPOSAL_SCHEMA if stage == 'proposal' else REVIEW_SCHEMA)
+        if stage == 'review':
+            schema['properties']['candidate_id']['enum'] = [None, *sorted(candidates)]
+        measured_text = providers.qwen_content(text, schema, images if profile.vision else []) if profile.provider == 'qwen' else text
         image_reserve = IMAGE_TOKEN_RESERVE * len(images) if profile.vision else 0
-        result.update(prompt_bytes=len(text.encode()), reserved_image_tokens=image_reserve)
-        if len(text.encode()) > max(0, profile.context_tokens - profile.output_tokens - image_reserve) * 2:
+        result.update(prompt_bytes=len(measured_text.encode()), reserved_image_tokens=image_reserve)
+        if len(measured_text.encode()) > max(0, profile.context_tokens - profile.output_tokens - image_reserve) * 2:
             raise ContextBudgetError('Evidence prompt exceeds conservative context budget')
         with sampler if sampler else nullcontext():
-            schema = deepcopy(EXPANSION_SCHEMA if stage == 'expansion' else
-                              PROPOSAL_SCHEMA if stage == 'proposal' else REVIEW_SCHEMA)
-            if stage == 'review':
-                schema['properties']['candidate_id']['enum'] = [None, *sorted(candidates)]
             response = providers.request(profile, text, schema, images)
         raw_output = response.pop('output')
         result.update(response)
@@ -174,11 +182,11 @@ def call(profile, stage, text, sources, candidates, images, context):
     return result
 
 
-def expand_readings(hypotheses, profiles, merchant, context):
+def expand_readings(hypotheses, profiles, merchant, context, verify=None):
     """Give each reading its own model call, isolated from competing hypotheses."""
     results = []
-    for hypothesis in hypotheses:
-        for profile in profiles:
+    for profile in profiles:
+        for hypothesis in hypotheses:
             text = INSTRUCTIONS + ('Expansion stage: investigate ONLY the supplied reading independently. '
                 'Treat short leading tokens as possible brand initialisms and later short tokens as '
                 'possible product/style/size abbreviations. Propose plausible full-word expansions '
@@ -197,6 +205,9 @@ def expand_readings(hypotheses, profiles, merchant, context):
                               {**context, 'target_reading': hypothesis['reading'], 'attempt': attempt + 1})
                 attempts.append(deepcopy(result))
                 if result['status'] != 'success':
+                    if result.get('error_type') == 'IncompleteModelOutput' and attempt == 0:
+                        text += '\nThe response was truncated. Use one short reading, at most three queries, one source ID and a one-sentence reason. Close the JSON object immediately.'
+                        continue
                     break
                 output = result['output']
                 original_queries = output['queries']
@@ -215,9 +226,34 @@ def expand_readings(hypotheses, profiles, merchant, context):
                     result.update(status='error', error_type='EvidenceCitationError')
                 else:
                     result['expansion_state'] = 'proposed' if output['queries'] else 'unresolved'
+            verified = result['status'] == 'success' and result.get('expansion_state') == 'proposed' and verify and verify(result)
+            if verified:
+                result['verified_search_match'] = True
             comparison.emit('enrichment_collaboration_expansion', {**context, **result})
             results.append(result)
+            if verified:
+                return results
     return results
+
+
+def review_with_citations(profile, text, sources, candidates, images, context):
+    support = {c['id']: set(c['ocr_support']) for c in candidates}
+    attempts = []
+    for attempt in range(2):
+        result = call(profile, 'review', text, sources, set(support), images, {**context, 'attempt': attempt + 1})
+        if result['status'] == 'success':
+            output = result['output']
+            selected = output['candidate_id']
+            if selected is not None and not set(output['source_ids']).intersection(support[selected]):
+                result.update(status='error', error_type='EvidenceCitationError', invalid_output=result.pop('output'))
+        attempts.append(deepcopy(result))
+        if result['status'] == 'success' or result.get('error_type') != 'EvidenceCitationError':
+            break
+        text += '\nYour previous review lacked valid evidence citations. Return a new complete review: cite the selected product ID itself AND at least one of that product\'s ocr_support IDs. If the evidence is insufficient, select null. Do not invent or append citations.'
+    result['attempts'] = attempts
+    result['review_seconds'] = round(sum(a['seconds'] for a in attempts), 3)
+    comparison.emit('enrichment_collaboration_review', {**context, **result})
+    return result
 
 
 def reconcile(candidates: list[dict], reviews: list[dict], validations: dict,
@@ -291,7 +327,32 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     unresolved = [h for h in prompt_hypotheses if not any(
         core.candidate_evidence(h['reading'], core.retailer_domain(row['store_name']), r.title, r.url, r.snippet)['confidence'] >= threshold
         for query, r in baseline if query == h['query'])]
-    expansions = expand_readings(unresolved, profiles, row['store_name'], context)
+    def verify_expansion(expansion):
+        nonlocal brave_seconds
+        matched = False
+        for terms in expansion['output']['queries']:
+            query = core.scoped_search_query(terms, row['store_name'])
+            if not query:
+                continue
+            expansion.setdefault('searched_queries', []).append(query)
+            query_started = time.monotonic()
+            try:
+                if query not in cache:
+                    cache[query] = core.brave_candidates(api_key, query, row['item_name'], core.retailer_domain(row['store_name']))
+                baseline.extend((query, r) for r in cache[query])
+                for r in cache[query]:
+                    score = core.candidate_evidence(row['item_name'], core.retailer_domain(row['store_name']), r.title, r.url, r.snippet)
+                    if score['product_page'] and score['confidence'] >= threshold and any(
+                        s['id'] in known_sources and s['kind'] in {'ocr_pass', 'ocr_consensus', 'ocr_layout'} and
+                        core.candidate_score(s['text'], core.retailer_domain(row['store_name']), r.title, r.url, r.snippet) >= threshold
+                        for s in bundle['sources']):
+                        matched = True
+            except Exception as exc:
+                errors.append({'stage': 'expanded_search', 'profile': expansion['profile'], 'query': query, 'error_type': type(exc).__name__})
+            finally:
+                brave_seconds += time.monotonic() - query_started
+        return matched
+    expansions = expand_readings(unresolved, profiles, row['store_name'], context, verify_expansion)
     for expansion in expansions:
         if expansion['status'] != 'success':
             errors.append({'stage': 'expansion', 'profile': expansion['profile'],
@@ -322,7 +383,12 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
         'learned_searches': learned, 'reading_hypotheses': hypotheses,
         'arithmetic': bundle['validations']})
     proposals = []
-    for profile in profiles:
+    verified_expansion = any(e.get('verified_search_match') for e in expansions)
+    discovery = {'stop_reason': 'verified_search_match' if verified_expansion else 'expansion_budget_exhausted',
+        'expansion_calls': sum(len(e['attempts']) for e in expansions),
+        'shared_proposal_round': 'skipped_verified_match' if verified_expansion else 'fallback'}
+    comparison.emit('enrichment_collaboration_discovery', {**context, **discovery})
+    for profile in ([] if verified_expansion else profiles):
         visible_images = images if profile.vision else []
         text = INSTRUCTIONS + ('Round 1: assess the reading_hypotheses separately. Do not collapse conflicting lines into the canonical reading or favor a reading because it occurs in more passes. '
             'Propose up to three retailer searches, prioritizing unresolved alternative readings and plausible brand initialisms and abbreviation expansions. '
@@ -334,7 +400,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
         if proposal['status'] != 'success':
             errors.append({'stage': 'proposal', 'profile': profile.name, 'error_type': proposal.get('error_type')})
     pool = list(baseline)
-    for proposal in expansions + proposals:
+    for proposal in proposals:
         if proposal['status'] != 'success': continue
         for expansion in dict.fromkeys(proposal['output']['queries']):
             query = core.scoped_search_query(expansion, row['store_name'])
@@ -377,17 +443,17 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             {**review_evidence, 'retailer_results': candidates, 'peer_proposals': peer_proposals,
              'expansion_hypotheses': expansion_summaries,
              'attached_images': [{k: v for k, v in i.items() if k != 'data'} for i in visible_images]}, default=str)
-        reviews.append(call(profile, 'review', text, known_sources | candidate_ids | {i['id'] for i in visible_images},
-                            candidate_ids, images, context))
+        reviews.append(review_with_citations(profile, text, known_sources | candidate_ids | {i['id'] for i in visible_images},
+                            candidates, images, context))
     for review in reviews:
         if review['status'] != 'success': errors.append({'stage': 'review', 'profile': review['profile'], 'error_type': review.get('error_type')})
     complete_context = coverage['included_sources'] == coverage['available_sources'] and not any(c['confidence'] >= threshold for c in cards.values() if c['id'] not in candidate_ids) and bundle['coverage']['available_passes'] == bundle['coverage']['included_passes'] and bundle['coverage']['available_documents'] == bundle['coverage']['included_documents']
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete_context)
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v4', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v5', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,
-        'reading_hypotheses': hypotheses, 'expansions': expansions,
+        'reading_hypotheses': hypotheses, 'expansions': expansions, 'discovery': discovery,
         'candidates': candidates, 'search_results': list(cards.values()), 'available_candidates': len(cards), 'proposals': proposals, 'reviews': reviews,
         'search_queries': [{'query': query, 'candidate_ids': [candidate_id(r.url) for r in results]} for query, results in cache.items()],
         'decision': decision, 'errors': errors, 'shared_brave_seconds': brave_seconds,
