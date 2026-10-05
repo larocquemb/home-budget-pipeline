@@ -27,8 +27,8 @@ def test_latest_ocr_evidence_and_collaboration_tables_preserve_canonical_item():
         for old in (True, False):
             run = uuid.uuid4()
             conn.execute('''INSERT INTO budget.receipt_ocr_runs
-                (run_uuid,evidence_id,source_sha256,source_reference,processed_at)
-                VALUES (%s,%s,%s,'receipt.pdf',CURRENT_TIMESTAMP - (%s * INTERVAL '1 hour'))''',
+                (run_uuid,evidence_id,source_sha256,source_reference,cache_version,processed_at)
+                VALUES (%s,%s,%s,'receipt.pdf',13,CURRENT_TIMESTAMP - (%s * INTERVAL '1 hour'))''',
                 (run, evidence, source_hash, 1 if old else 0))
             conn.execute('''INSERT INTO budget.receipt_ocr_passes
                 (run_uuid,pass_id,page_number,engine,engine_type,variant,status,extracted_text)
