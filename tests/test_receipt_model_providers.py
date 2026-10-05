@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +18,8 @@ def test_profiles_report_missing_credentials_and_apply_token_budgets(monkeypatch
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv('COLLAB_CONTEXT_TOKENS', '16384')
     monkeypatch.setenv('COLLAB_OUTPUT_TOKENS', '4096')
+    monkeypatch.setenv('QWEN_CONTEXT_TOKENS', '')
+    monkeypatch.setenv('QWEN_OUTPUT_TOKENS', ' ')
     monkeypatch.setenv('OLLAMA_COLLAB_MODELS', 'qwen3:30b,qwen3-vl:8b,qwen3:30b')
     enabled, skipped = providers.profiles()
     assert len(enabled) == 2 and enabled[1].vision is True
@@ -151,3 +154,19 @@ def test_qwen_defaults_leave_room_for_reasoning_without_increasing_paid_budget(m
     enabled, _ = providers.profiles()
     assert next(p for p in enabled if p.provider == 'qwen').output_tokens == 16384
     assert next(p for p in enabled if p.provider == 'openai').output_tokens == 2048
+
+
+def test_production_configmap_preserves_qwen_budget_over_shared_defaults(monkeypatch):
+    import yaml
+    for key in ('RECEIPT_MODEL_PROFILES', 'COLLAB_CONTEXT_TOKENS', 'COLLAB_OUTPUT_TOKENS',
+                'QWEN_CONTEXT_TOKENS', 'QWEN_OUTPUT_TOKENS'):
+        monkeypatch.delenv(key, raising=False)
+    config = yaml.safe_load((Path(__file__).resolve().parents[1] / 'k8s/receipt-model-profiles.yaml').read_text())
+    for key, value in config['data'].items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    enabled, _ = providers.profiles()
+    qwen = next(p for p in enabled if p.provider == 'qwen')
+    openai = next(p for p in enabled if p.provider == 'openai')
+    assert (qwen.context_tokens, qwen.output_tokens) == (32768, 8192)
+    assert (openai.context_tokens, openai.output_tokens) == (16384, 2048)
