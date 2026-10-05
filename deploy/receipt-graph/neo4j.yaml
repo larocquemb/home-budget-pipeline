@@ -28,6 +28,8 @@ spec:
       labels:
         app: neo4j
     spec:
+      # Neo4j treats injected NEO4J_PORT_* service variables as configuration.
+      enableServiceLinks: false
       nodeSelector:
         kubernetes.io/hostname: arsene
       containers:
