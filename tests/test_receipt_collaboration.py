@@ -510,13 +510,13 @@ def test_qwen_expansion_recovery_increases_budget_once_then_stops_profile(monkey
     hypotheses = [{'reading': reading, 'source_ids': [SOURCE]} for reading in ['Oep Pic Med', 'Cep Pic Med', 'Gep Pic Med']]
     results = collab.expand_readings(hypotheses, [profile, providers.Profile('openai', 'openai', 'test')],
         'Sobeys', {}, verify=lambda result: True)
-    assert calls[:2] == [('qwen', 2048), ('qwen', 3072)]
+    assert calls[:2] == [('qwen', 2048), ('qwen', 4096)]
     assert profile.output_tokens == 2048
     assert results[0]['attempts'][0]['finish_reason'] == 'length'
     if recovered:
         assert len(calls) == 2 and results[0]['status'] == 'success'
     else:
-        assert calls == [('qwen', 2048), ('qwen', 3072), ('openai', 2048)]
+        assert calls == [('qwen', 2048), ('qwen', 4096), ('openai', 2048)]
         assert results[0]['stop_reason'] == 'provider_truncation_circuit_open'
         assert results[0]['status'] == 'error'
         assert results[1]['verified_search_match'] is True
@@ -534,8 +534,8 @@ def test_qwen_review_retries_truncation_once_with_bounded_budget(monkeypatch, re
     monkeypatch.setattr(providers, 'request', request)
     result = collab.review_with_citations(providers.Profile('qwen', 'qwen', 'test'), 'evidence',
         {SOURCE}, [candidate()], [], {})
-    assert budgets == [2048, 3072]
-    assert result['attempts'][1]['requested_output_tokens'] == 3072
+    assert budgets == [2048, 4096]
+    assert result['attempts'][1]['requested_output_tokens'] == 4096
     assert result['status'] == ('success' if recovered else 'error')
     assert result['attempts'][0]['finish_reason'] == 'length'
     if recovered: assert result['output']['source_ids'] == [SOURCE]
@@ -663,3 +663,11 @@ def test_truncated_qwen_sample_survives_logging_and_attempt_history(monkeypatch,
         assert len(sample['content_head']) + len(sample['content_tail']) == 1024
     logs = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert any(log.get('incomplete_output') == result['incomplete_output'] for log in logs)
+
+
+def test_qwen_retry_grows_reasoning_budget_and_stops_at_ceiling():
+    profile = providers.Profile('qwen', 'qwen', 'test', 32768, 8192)
+    retry = collab.qwen_retry_profile(profile)
+    assert retry.output_tokens == 16384
+    assert retry.context_tokens == 32768 and profile.output_tokens == 8192
+    assert collab.qwen_retry_profile(retry) is None

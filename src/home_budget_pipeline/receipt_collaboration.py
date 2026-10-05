@@ -192,6 +192,13 @@ def call(profile, stage, text, sources, candidates, images, context, candidate_t
     return result
 
 
+def qwen_retry_profile(profile):
+    """Grow reasoning headroom once without retrying an unchanged token ceiling."""
+    budget = min(16384, profile.context_tokens - 1,
+                 max(profile.output_tokens + 1024, profile.output_tokens * 2))
+    return replace(profile, output_tokens=budget) if budget > profile.output_tokens else None
+
+
 def expand_readings(hypotheses, profiles, merchant, context, verify=None):
     """Give each reading its own model call, isolated from competing hypotheses."""
     results = []
@@ -219,7 +226,9 @@ def expand_readings(hypotheses, profiles, merchant, context, verify=None):
                     if result.get('error_type') == 'IncompleteModelOutput' and attempt == 0:
                         text += '\nThe response was truncated. Use one short reading, at most three queries, one source ID and a one-sentence reason. Close the JSON object immediately.'
                         if profile.provider == 'qwen':
-                            request_profile = replace(profile, output_tokens=max(profile.output_tokens, min(3072, profile.output_tokens + 1024)))
+                            request_profile = qwen_retry_profile(profile)
+                            if request_profile is None:
+                                break
                         continue
                     break
                 output = result['output']
@@ -271,7 +280,9 @@ def review_with_citations(profile, text, sources, candidates, images, context):
                 result.update(status='error', error_type='EvidenceCitationError', invalid_output=result.pop('output'))
         attempts.append(deepcopy(result))
         if result.get('error_type') == 'IncompleteModelOutput' and profile.provider == 'qwen' and attempt == 0:
-            request_profile = replace(profile, output_tokens=max(profile.output_tokens, min(3072, profile.output_tokens + 1024)))
+            request_profile = qwen_retry_profile(profile)
+            if request_profile is None:
+                break
             text += '\nThe response was truncated. Return only the five required fields, at most three OCR source IDs, and a one-sentence reason. Close the JSON immediately.'
             continue
         if result['status'] == 'success' or result.get('error_type') != 'EvidenceCitationError':

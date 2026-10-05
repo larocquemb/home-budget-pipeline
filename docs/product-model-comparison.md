@@ -354,8 +354,15 @@ stop reason, expansion call count and whether the proposal round was skipped.
 Qwen receives the JSON schema in its prompt as well as Ollama's `format` argument.
 Expansion reading/query strings are limited to 160 characters, reasons to 300,
 and citations to six. Truncated expansion responses get one concise retry. Qwen recovery requests may
-increase the output budget by up to 1024 tokens, capped at 3072 (larger configured
-budgets are preserved); the existing context and image budget guard still applies.
+double the output budget, capped at 16384 tokens and the context ceiling.
+A retry is skipped when the budget cannot grow; the existing context and image
+budget guard still applies. Default Qwen profiles use 32768 context tokens and
+8192 output tokens, independently of OpenAI's 2048-token output default.
+Thinking and the final answer share Ollama's output budget. Override only Qwen
+with `make enrich-products COLLABORATE=1 LIMIT=1 QWEN_CONTEXT_TOKENS=32768 QWEN_OUTPUT_TOKENS=8192`.
+Shared `CONTEXT_TOKENS`/`OUTPUT_TOKENS` settings still apply to all defaults unless
+the Qwen-specific values are supplied; explicit JSON profiles retain their budgets.
+Larger contexts use more GPU memory and may cause CPU offload on the 24 GB card.
 If both attempts truncate, expansion calls stop for that Qwen profile rather than
 repeating failures across every remaining OCR reading. Other configured profiles
 can continue discovery. Qwen reviews also get one bounded truncation retry.
