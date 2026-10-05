@@ -115,7 +115,17 @@ separate least-privilege credentials if stronger role separation is required.
 ```sh
 kubectl kustomize deploy/receipt-graph
 make receipts-graph-secret
-argocd app set ledger --path deploy/receipt-graph --grpc-web
+```
+
+In `brownrook-infra/kubernetes/gitops/apps/ledger-app.yaml`, change
+`spec.source.path` to `deploy/receipt-graph`, then merge that change. The
+`brownrook-root` parent owns the Ledger Application and reverts direct
+`argocd app set` overrides. After merging, reconcile the parent before syncing
+Ledger:
+
+```sh
+argocd app sync brownrook-root --server argocd.brownrook.net --grpc-web
+argocd app get ledger --server argocd.brownrook.net --grpc-web
 make deploy-k3s
 kubectl --context brownrook-k3s1 -n home-budget rollout status statefulset/neo4j
 make receipts-graph
