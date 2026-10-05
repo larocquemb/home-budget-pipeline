@@ -77,6 +77,13 @@ def post(url, body, headers=None):
         return json.load(response)
 
 
+def qwen_content(text, schema, images):
+    content = text + '\nReturn one concise JSON object matching this schema; do not repeat instructions or evidence:\n' + json.dumps(schema, separators=(',', ':'))
+    if images:
+        content += '\nImages in order: ' + ', '.join(image['id'] for image in images)
+    return content
+
+
 def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> dict:
     """Return parsed structured output and usage; reject truncated/blocked responses."""
     images = images if profile.vision else []
@@ -134,10 +141,9 @@ def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> di
     if profile.provider != 'qwen':
         raise ValueError('Unknown model provider')
     base = os.getenv('OLLAMA_BASE_URL', 'http://192.168.2.201:11434').rstrip('/')
-    message = {'role': 'user', 'content': text}
+    message = {'role': 'user', 'content': qwen_content(text, schema, images)}
     if images:
         message['images'] = [image['data'] for image in images]
-        message['content'] += '\nImages in order: ' + ', '.join(image['id'] for image in images)
     data = post(base + '/api/chat', {'model': profile.model, 'messages': [message],
         'stream': False, 'think': False, 'format': schema, 'keep_alive': 0,
         'options': {'temperature': 0, 'num_ctx': profile.context_tokens, 'num_predict': profile.output_tokens}})

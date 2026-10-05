@@ -68,7 +68,8 @@ def collaboration(graph, receipt, item, payload, skipped=()):
     scope = (payload['run_uuid'], payload['item_id'])
     run = graph.node('Collaboration', scope, 'Shared evidence', run_uuid=payload['run_uuid'],
                      item_seconds=payload.get('item_seconds'), prompt_version=payload.get('prompt_version'),
-                     scoring_version=payload.get('scoring_version'), prompt_coverage=payload.get('prompt_coverage'))
+                     scoring_version=payload.get('scoring_version'), prompt_coverage=payload.get('prompt_coverage'),
+                     discovery=payload.get('discovery'))
     graph.edge(receipt, 'HAS_COLLABORATION', run)
     graph.edge(run, 'ANALYZES', item)
     worker(graph, run, payload.get('worker_identity', {}))

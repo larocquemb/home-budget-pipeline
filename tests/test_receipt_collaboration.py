@@ -214,14 +214,20 @@ def test_isolated_expansions_retry_unexpanded_tokens_then_search_full_product(mo
     monkeypatch.setattr(core, 'brave_candidates', search)
     monkeypatch.setattr(providers, 'request', request)
     profiles = [providers.Profile('openai', 'openai', 'test'), providers.Profile('qwen', 'qwen', 'test')]
+    collab.expand_readings(collab.reading_hypotheses(bundle()['sources'], 'Sobeys'), profiles, 'Sobeys', {})
+    assert set(targets) == {(p, r) for p in ('openai', 'qwen') for r in ('Cep Pic Med', 'Oep Pic Med')}
+    targets.clear()
+    attempts.clear()
     payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
         bundle(), profiles, 'key', .85, {'receipt': 'a.pdf'})
-    assert set(targets) == {(p, r) for p in ('openai', 'qwen') for r in ('Cep Pic Med', 'Oep Pic Med')}
+    assert set(targets) == {('openai', 'Cep Pic Med')}
     assert all(n == 2 for n in attempts.values())
     assert searches.count('site:sobeys.com Old El Paso medium picante salsa') == 1
     assert all('Pic Med' not in q for e in payload['expansions'] for q in e['output']['queries'])
     assert payload['decision']['disposition'] == 'recommended'
     assert payload['decision']['canonical_updated'] is False
+    assert payload['proposals'] == []
+    assert {r['provider'] for r in payload['reviews']} == {'openai', 'qwen'}
 
 
 def test_expansion_cannot_cite_competing_reading_and_can_abstain(monkeypatch):
@@ -236,6 +242,41 @@ def test_expansion_cannot_cite_competing_reading_and_can_abstain(monkeypatch):
     result = collab.expand_readings([hypothesis], [profile], 'Sobeys', {})[0]
     assert result['status'] == 'success' and result['expansion_state'] == 'unresolved'
     assert len(result['attempts']) == 1
+
+
+def test_truncated_expansion_retries_once_and_preserves_first_usage(monkeypatch):
+    calls = []
+    def request(profile, text, schema, images):
+        calls.append(text)
+        if len(calls) == 1:
+            raise providers.IncompleteModelOutput({'output_tokens': 2048, 'finish_reason': 'length'})
+        assert 'response was truncated' in text
+        return {'output': {'reading': TITLE, 'queries': [TITLE], 'source_ids': [SOURCE], 'reason': 'Hypothesis'}}
+    monkeypatch.setattr(providers, 'request', request)
+    result = collab.expand_readings([{'reading': 'Oep Pic Med', 'source_ids': [SOURCE]}],
+        [providers.Profile('openai', 'openai', 'test')], 'Sobeys', {})[0]
+    assert result['status'] == 'success' and len(result['attempts']) == 2
+    assert result['attempts'][0]['output_tokens'] == 2048
+
+
+@pytest.mark.parametrize('refs', [[SOURCE], [collab.candidate_id(URL)]])
+@pytest.mark.parametrize('repaired', [True, False])
+def test_review_requires_model_to_reissue_complete_product_and_ocr_citations(monkeypatch, refs, repaired):
+    calls = []
+    def request(profile, text, schema, images):
+        calls.append(text)
+        if len(calls) == 2:
+            assert 'previous review lacked valid evidence citations' in text
+        output = review('openai', refs=refs if len(calls) == 1 or not repaired else None)['output']
+        return {'output': output, 'output_tokens': 50}
+    monkeypatch.setattr(providers, 'request', request)
+    result = collab.review_with_citations(providers.Profile('openai', 'openai', 'test'), 'evidence',
+        {SOURCE, collab.candidate_id(URL)}, [candidate()], [], {})
+    assert len(calls) == 2
+    assert result['status'] == ('success' if repaired else 'error')
+    assert result['attempts'][0]['invalid_output']['source_ids'] == refs
+    if repaired:
+        assert result['output']['source_ids'] == [collab.candidate_id(URL), SOURCE]
 
 
 def test_brand_index_is_not_a_selectable_review_product(monkeypatch):
