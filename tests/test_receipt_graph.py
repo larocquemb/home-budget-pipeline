@@ -169,3 +169,16 @@ def test_explicit_product_citation_projects_without_mutating_review():
                      and nodes[e['target']]['kind'] == 'SearchResult']
     assert len(product_links) == 2
     assert data == before
+
+
+def test_graph_review_label_uses_verified_retailer_title_and_retains_recovery_audit():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    title = payload['search_results'][0]['title']
+    payload['decision']['recovered_discovery_errors'] = [{'profile': 'qwen', 'stage': 'expansion', 'error_type': 'IncompleteModelOutput'}]
+    for review in payload['reviews']:
+        review['output'].update(candidate_title=title, reason='Unverified different brand hypothesis')
+    graph = g.build(data)
+    assert all(n['label'] == title for n in graph['nodes'] if n['kind'] == 'ModelReview')
+    decision = next(n for n in graph['nodes'] if n['kind'] == 'Decision')
+    assert json.loads(decision['properties']['recovered_discovery_errors']) == payload['decision']['recovered_discovery_errors']

@@ -25,14 +25,15 @@ def bundle():
 
 
 def review(provider, identifier=None, refs=None):
-    return {'status': 'success', 'provider': provider, 'output': {
+    return {'status': 'success', 'provider': provider, 'profile': provider, 'output': {
         'candidate_id': identifier or collab.candidate_id(URL),
+        'candidate_title': TITLE,
         'product_source_id': identifier or collab.candidate_id(URL),
         'source_ids': refs if refs is not None else [collab.candidate_id(URL), SOURCE], 'reason': 'supported'}}
 
 
 def candidate():
-    return {'id': collab.candidate_id(URL), 'url': URL, 'confidence': .9167,
+    return {'id': collab.candidate_id(URL), 'title': TITLE, 'url': URL, 'confidence': .9167,
             'evidence': {'product_page': True}, 'ocr_support': [SOURCE]}
 
 
@@ -90,7 +91,7 @@ def test_review_schema_prevents_receipt_id_becoming_product(monkeypatch, candida
         assert 'item:canonical' not in schema['properties']['candidate_id']['enum']
         assert schema['properties']['product_source_id']['enum'] == [None, *sorted(candidates)]
         assert 'product_source_id' in schema['required']
-        return {'output': {'candidate_id': None, 'product_source_id': None, 'source_ids': [SOURCE], 'reason': 'No verified product'}}
+        return {'output': {'candidate_id': None, 'candidate_title': None, 'product_source_id': None, 'source_ids': [SOURCE], 'reason': 'No verified product'}}
     monkeypatch.setattr(providers, 'request', request)
     result = collab.call(providers.Profile('openai', 'openai', 'test'), 'review', '', {SOURCE}, candidates, [], {})
     assert result['status'] == 'success'
@@ -180,7 +181,7 @@ def test_alternative_search_precedes_models_even_when_models_favor_canonical(mon
             output = {'reading': 'Cep Pic Med', 'queries': ['Cepacol'],
                       'source_ids': ['item:canonical'], 'reason': 'Uncertain'}
         else:
-            output = {'candidate_id': None, 'product_source_id': None, 'source_ids': [SOURCE], 'reason': 'No verified product'}
+            output = {'candidate_id': None, 'candidate_title': None, 'product_source_id': None, 'source_ids': [SOURCE], 'reason': 'No verified product'}
         return {'output': output}
     monkeypatch.setattr(core, 'brave_candidates', search)
     monkeypatch.setattr(providers, 'request', request)
@@ -295,7 +296,7 @@ def test_brand_index_is_not_a_selectable_review_product(monkeypatch):
             output = {'reading': 'Cep Pic Med', 'queries': ['Cepacol'], 'source_ids': ['item:canonical'], 'reason': 'Unknown'}
         else:
             assert schema['properties']['candidate_id']['enum'] == [None]
-            output = {'candidate_id': None, 'product_source_id': None, 'source_ids': [SOURCE], 'reason': 'Only a brand index found'}
+            output = {'candidate_id': None, 'candidate_title': None, 'product_source_id': None, 'source_ids': [SOURCE], 'reason': 'Only a brand index found'}
         return {'output': output}
     monkeypatch.setattr(providers, 'request', request)
     payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
@@ -408,11 +409,11 @@ def test_collaboration_persists_only_evidence_and_run_summary(monkeypatch, capsy
     monkeypatch.setattr(providers, 'profiles', lambda: ([providers.Profile('test', 'openai', 'test')], []))
     monkeypatch.setattr(shared, 'load', lambda *a: bundle())
     monkeypatch.setattr(collab, 'collaborate_item', lambda *a: {
-        'decision': {'disposition': 'review'}, 'errors': [], 'item_seconds': 2.5})
+        'decision': {'disposition': 'review'}, 'errors': [{'stage': 'expansion'}], 'blocking_errors': [], 'item_seconds': 2.5})
     stats = collab.run(dsn='unused', api_key='unused', limit=1, threshold=.85, write_db=True)
     mutations = [sql for sql, _ in calls if not sql.lstrip().startswith('SELECT')]
     assert len(mutations) == 2 and all('INSERT INTO enrichment.receipt_collaboration' in sql for sql in mutations)
-    assert stats['review'] == 1 and stats['receipts'][0]['complete_receipt'] is False
+    assert stats['review'] == 1 and stats['incomplete'] == 0 and stats['receipts'][0]['complete_receipt'] is False
     assert stats['receipts'][0]['enrichment_seconds'] == 2.5
     assert 'enrichment_receipt_timing' in capsys.readouterr().out
 
@@ -453,7 +454,7 @@ def test_qwen_first_skips_paid_models_only_with_complete_supported_evidence(monk
             output = review(profile.provider, refs=[SOURCE])['output']
             if profile.provider == 'qwen' and issue == 'citation': output['product_source_id'] = None
             if profile.provider == 'qwen' and issue == 'abstention':
-                output.update(candidate_id=None, product_source_id=None)
+                output.update(candidate_id=None, candidate_title=None, product_source_id=None)
         else:
             refs = json.loads(text.splitlines()[-1])['target_reading']['source_ids'] if schema == collab.EXPANSION_SCHEMA else [SOURCE]
             output = {'reading': TITLE, 'queries': [TITLE], 'source_ids': refs[:1], 'reason': 'hypothesis'}
@@ -570,3 +571,77 @@ def test_empty_quoted_expansion_search_broadens_once_and_keeps_evidence(monkeypa
         assert expansion['query_fallbacks'] == [{'original_query': quoted, 'fallback_query': broad, 'reason': 'empty_quoted_results'}]
         recorded = {q['query']: q['candidate_ids'] for q in payload['search_queries']}
         assert recorded[quoted] == [] and recorded[broad] == [collab.candidate_id(URL)]
+
+
+@pytest.mark.parametrize('issue', [None, 'search', 'citation', 'arithmetic', 'unknown_arithmetic', 'context', 'weak', 'title', 'unverified', 'profile'])
+def test_discovery_truncation_recovers_only_after_same_profile_valid_review(issue):
+    error = {'stage': 'expansion', 'profile': 'qwen', 'error_type': 'IncompleteModelOutput'}
+    errors = [error]
+    reviews = [review('qwen')]
+    checks = {'item_arithmetic': 'pass', 'receipt_arithmetic': 'pass'}
+    c = candidate()
+    if issue == 'search': errors.append({'stage': 'expanded_search', 'error_type': 'OSError'})
+    if issue == 'citation': reviews[0]['output']['source_ids'] = ['item:canonical']
+    if issue == 'arithmetic': checks['item_arithmetic'] = 'fail'
+    if issue == 'unknown_arithmetic': checks['item_arithmetic'] = 'not_checkable'
+    if issue == 'weak': c['confidence'] = .6
+    if issue == 'title': reviews[0]['output']['candidate_title'] = 'Different Brand'
+    if issue == 'profile': error['profile'] = 'qwen-other'
+    blocking, recovered = collab.classify_discovery_errors(errors, [c], reviews, checks, .85,
+        issue != 'context', issue != 'unverified')
+    if issue is None:
+        assert blocking == [] and recovered == [error]
+    else:
+        assert blocking == errors and recovered == []
+    assert error in errors
+
+
+@pytest.mark.parametrize('repaired', [True, False])
+def test_review_product_title_must_match_id_and_gets_one_retry(monkeypatch, repaired):
+    calls = []
+    def request(profile, text, schema, images):
+        calls.append(text)
+        assert schema['properties']['candidate_title']['enum'] == [None, TITLE]
+        output = review('qwen', refs=[SOURCE])['output']
+        if len(calls) == 1 or not repaired: output['candidate_title'] = 'Que Pasa Picante Medium'
+        return {'output': output}
+    monkeypatch.setattr(providers, 'request', request)
+    result = collab.review_with_citations(providers.Profile('qwen', 'qwen', 'test'), 'evidence',
+        {SOURCE}, [candidate()], [], {})
+    assert len(calls) == 2 and 'title did not match' in calls[1]
+    assert result['status'] == ('success' if repaired else 'error')
+    assert result['attempts'][0]['invalid_output']['candidate_title'] == 'Que Pasa Picante Medium'
+    if repaired: assert result['output']['candidate_title'] == TITLE
+
+
+def test_recovered_expansion_is_audited_without_redundant_openai_review(monkeypatch):
+    calls = []
+    def search(key, query, item, domain):
+        return [core.SearchResult(TITLE, URL, '', .9167)] if TITLE in query else []
+    def request(profile, text, schema, images):
+        stage = 'review' if 'candidate_id' in schema['properties'] else 'expansion'
+        calls.append((profile.provider, stage))
+        if stage == 'expansion' and profile.provider == 'qwen':
+            raise providers.IncompleteModelOutput({'finish_reason': 'length', 'output_tokens': profile.output_tokens})
+        if stage == 'expansion':
+            target = json.loads(text.splitlines()[-1])['target_reading']
+            output = {'reading': 'Different Brand hypothesis', 'queries': [TITLE],
+                      'source_ids': target['source_ids'][:1], 'reason': 'unverified'}
+        else:
+            assert 'Different Brand hypothesis' not in text
+            assert 'use the retailer title' in text
+            output = review('qwen', refs=[SOURCE])['output']
+        return {'output': output}
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(providers, 'request', request)
+    data = bundle()
+    data['validations']['item_arithmetic'] = 'pass'
+    payload = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'}, data,
+        [providers.Profile('openai', 'openai', 'test'), providers.Profile('qwen', 'qwen', 'test')],
+        'key', .85, {'receipt': 'a.pdf'})
+    assert calls == [('qwen', 'expansion'), ('qwen', 'expansion'), ('openai', 'expansion'), ('qwen', 'review')]
+    assert payload['decision']['disposition'] == 'recommended'
+    assert payload['decision']['candidate_title'] == TITLE
+    assert payload['decision']['review_policy']['skipped_profiles'] == ['openai']
+    assert len(payload['errors']) == 1 and payload['recovered_errors'] == payload['errors']
+    assert payload['blocking_errors'] == []

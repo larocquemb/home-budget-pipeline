@@ -359,13 +359,28 @@ budgets are preserved); the existing context and image budget guard still applie
 If both attempts truncate, expansion calls stop for that Qwen profile rather than
 repeating failures across every remaining OCR reading. Other configured profiles
 can continue discovery. Qwen reviews also get one bounded truncation retry.
-Incomplete responses are never parsed as valid evidence, and persistent failures
-remain recorded.
-Reviews require `product_source_id` to equal `candidate_id` (both null when
-abstaining); `source_ids` must cite supporting OCR evidence. The schema restricts
+Incomplete responses are never parsed as valid evidence. Persistent failures
+remain recorded, including failures later superseded by verified discovery and
+a successful review.
+Reviews require `candidate_title` to exactly match the retailer title for
+`candidate_id`; both fields must be null when abstaining. The title schema is
+restricted to supplied retailer titles, and title/ID mismatches require a fresh
+review. Unverified expansion names are retained in discovery history but are
+not repeated as product identities in the review summary.
+`product_source_id` must equal `candidate_id` (both null when abstaining); `source_ids` must cite supporting OCR evidence. The schema restricts
 both product fields to supplied candidate IDs. Missing or mismatched product
 citations or missing supporting OCR citations get one new model review. Both attempts remain recorded; citations are never inserted
-by the application. Persistent failures continue to block recommendations.
+by the application. Unresolved evidence failures continue to block recommendations.
+
+An expansion `IncompleteModelOutput` can be classified as recovered only after
+verified retailer discovery, complete evidence, passing item and receipt
+arithmetic, and a valid, cited review from that same model profile. The review
+must meet the normal product-page, score, OCR-citation and title checks. Other
+search/model failures, missing evidence and failed reviews remain blocking.
+The original `errors` list is retained; `recovered_errors` and `blocking_errors`
+explain their effect on the final decision. Run `incomplete` counts use blocking
+errors, so successful recovery does not fail the Job. Logs and graph decision
+properties retain the recovered discovery failures.
 
 A model-generated quoted Brave search with no results gets one retry after
 removing phrase quotes. Every search term and the retailer site restriction remain;
