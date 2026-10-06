@@ -1,0 +1,12 @@
+{
+  "model": "qwen3-vl-receipts:30b-instruct",
+  "from": "qwen3-vl:30b-a3b-instruct-q4_K_M",
+  "template": "{{- range .Messages }}<|im_start|>{{ .Role }}\n{{ .Content }}<|im_end|>\n{{ end }}<|im_start|>assistant\n",
+  "parameters": {
+    "stop": ["<|im_start|>", "<|im_end|>"],
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20
+  },
+  "stream": false
+}

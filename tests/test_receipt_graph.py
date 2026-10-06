@@ -182,3 +182,22 @@ def test_graph_review_label_uses_verified_retailer_title_and_retains_recovery_au
     assert all(n['label'] == title for n in graph['nodes'] if n['kind'] == 'ModelReview')
     decision = next(n for n in graph['nodes'] if n['kind'] == 'Decision')
     assert json.loads(decision['properties']['recovered_discovery_errors']) == payload['decision']['recovered_discovery_errors']
+
+
+def test_descriptor_proposal_tracks_derivation_search_and_review():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    source = payload['evidence_bundle']['sources'][0]['id']
+    payload['descriptor_expansions'] = [{
+        'profile': 'qwen', 'provider': 'qwen', 'model': 'managed-vl', 'stage': 'descriptive_expansion',
+        'descriptive_tokens': ['pic', 'med'], 'derived_source_ids': [source], 'status': 'success',
+        'image_count': 0, 'searched_queries': ['Old El Paso picante medium'],
+        'output': {'queries': ['picante medium', 'pictorial medium', 'piccolo medium']}}]
+    graph = g.build(data)
+    invocation = next(n for n in graph['nodes'] if n['kind'] == 'ModelInvocation'
+                      and n['properties']['stage'] == 'descriptive_expansion')
+    proposal = next(n for n in graph['nodes'] if n['kind'] == 'Proposal' and n['label'] == 'picante medium')
+    assert any(e['kind'] == 'PRODUCED' and e['source'] == invocation['id'] and e['target'] == proposal['id'] for e in graph['edges'])
+    assert {'DERIVED_FROM', 'PROPOSED_SEARCH'} <= {e['kind'] for e in graph['edges'] if e['source'] == proposal['id']}
+    assert any(e['kind'] == 'CONSIDERED_PROPOSAL' and e['target'] == proposal['id'] for e in graph['edges'])
+    assert not any(e['kind'] == 'RECEIVED' and e['source'] == invocation['id'] for e in graph['edges'])

@@ -167,17 +167,20 @@ def validate_output(output, stage, allowed_sources, candidates):
     return output
 
 
-def call(profile, stage, text, sources, candidates, images, context, candidate_titles=None, candidate_sources=None):
+def call(profile, stage, text, sources, candidates, images, context, candidate_titles=None, candidate_sources=None, schema_override=None):
     started = time.monotonic()
     result = {**asdict(profile), 'profile': profile.name, 'stage': stage, 'status': 'error',
               'requested_output_tokens': profile.output_tokens}
     sampler = GpuSampler(comparison.emit, {**context, 'profile': profile.name, 'provider': profile.provider,
                                           'model': profile.model, 'stage': stage}) if profile.provider == 'qwen' else None
     try:
-        schema = deepcopy(EXPANSION_SCHEMA if stage == 'expansion' else
+        default_schema = (EXPANSION_SCHEMA if stage == 'expansion' else
                           PROPOSAL_SCHEMA if stage == 'proposal' else REVIEW_SCHEMA)
-        if stage == 'review':
+        schema = deepcopy(schema_override or default_schema)
+        if stage in {'proposal', 'expansion', 'review'}:
             schema['properties']['source_ids']['items']['enum'] = sorted(sources)
+            schema['properties']['source_ids']['maxItems'] = 6
+        if stage == 'review':
             schema['properties']['candidate_id']['enum'] = [None, *sorted(candidates)]
             schema['properties']['product_source_id']['enum'] = [None, *sorted(candidates)]
             if candidate_titles is not None:
@@ -205,7 +208,16 @@ def call(profile, stage, text, sources, candidates, images, context, candidate_t
                 result['citation_normalization'] = {'reason': 'excess_valid_citations',
                     'original_source_ids': refs[:], 'original_count': len(refs), 'retained_count': len(retained)}
                 raw_output = {**raw_output, 'source_ids': retained}
-            output = validate_output(raw_output, stage, sources, candidates)
+            if stage == 'descriptive_expansion':
+                queries = raw_output.get('queries') if isinstance(raw_output, dict) else None
+                pattern = schema['properties']['queries']['items']['pattern']
+                if (not isinstance(raw_output, dict) or set(raw_output) != {'queries'} or
+                    not isinstance(queries, list) or len(queries) != 3 or
+                    any(not isinstance(q, str) or not re.fullmatch(pattern, q) for q in queries)):
+                    raise ValueError('Invalid descriptive prefix expansion')
+                output = raw_output
+            else:
+                output = validate_output(raw_output, stage, sources, candidates)
         except ValueError:
             result['invalid_output'] = raw_output if len(json.dumps(raw_output)) <= 16000 else {'error': 'output_too_large'}
             raise
@@ -220,6 +232,37 @@ def call(profile, stage, text, sources, candidates, images, context, candidate_t
     result['image_count'] = len(images) if profile.vision else 0
     comparison.emit('enrichment_collaboration_model_result', {**context, **result})
     return result
+
+
+def expand_descriptive_prefixes(hypotheses, profiles, context):
+    """One bounded lexical task per distinct suffix; proposals are never proof."""
+    profile = next((p for p in profiles if p.provider == 'qwen'), None)
+    if profile is None:
+        return []
+    results, seen = [], set()
+    for h in hypotheses:
+        tokens = tuple(t for t in re.findall(r'[a-z]+', h['reading'].lower())[1:]
+                       if len(t) >= 3 and t not in core.NOISE_TOKENS)
+        if not 2 <= len(tokens) <= 3 or tokens in seen:
+            continue
+        seen.add(tokens)
+        pattern = '^' + ' '.join(re.escape(t) + ('[a-z]+' if len(t) <= 4 else '[a-z]*') for t in tokens) + '$'
+        schema = {'type': 'object', 'properties': {'queries': {'type': 'array', 'minItems': 3,
+            'maxItems': 3, 'items': {'type': 'string', 'pattern': pattern}}},
+            'required': ['queries'], 'additionalProperties': False}
+        text = (f"Expand grocery receipt descriptor prefixes {' '.join(tokens).upper()} into three possible full-word search phrases. "
+            "The first prefix describes a food flavour or style; the last describes size or heat intensity. "
+            f"Each phrase must use {' and '.join('a longer lowercase word beginning ' + t for t in tokens)}. "
+            "Prefer common food flavour/style and size/heat adjectives. Do not add brands, prices, quantities, "
+            "package sizes or unrelated product categories. These are unverified hypotheses for web search, "
+            "not confirmed products. Return only JSON.")
+        result = call(profile, 'descriptive_expansion', text, set(), set(), [], context, schema_override=schema)
+        result['descriptive_tokens'] = list(tokens)
+        result['derived_source_ids'] = h['source_ids']
+        results.append(result)
+        if len(results) == 3:
+            break
+    return results
 
 
 def qwen_retry_profile(profile):
@@ -540,6 +583,27 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             core.candidate_score(s['text'], core.retailer_domain(row['store_name']), result.title, result.url, result.snippet) >= threshold
             for s in bundle['sources'])
     verified_literal = any(p.provider == 'qwen' for p in profiles) and any(verified_product(r) for _, r in baseline)
+    descriptor_expansions = [] if verified_literal else expand_descriptive_prefixes(prompt_hypotheses, profiles, context)
+    for expansion in descriptor_expansions:
+        if expansion['status'] != 'success':
+            errors.append({'stage': 'descriptive_expansion', 'profile': expansion['profile'], 'error_type': expansion.get('error_type')})
+            continue
+        for terms in dict.fromkeys(expansion['output']['queries']):
+            query = core.scoped_search_query(terms, row['store_name'])
+            if query:
+                expansion.setdefault('searched_queries', []).append(query)
+            query_started = time.monotonic()
+            try:
+                if query and query not in cache:
+                    cache[query] = core.brave_candidates(api_key, query, row['item_name'], core.retailer_domain(row['store_name']))
+                    baseline.extend((query, r) for r in cache[query])
+            except Exception as exc:
+                errors.append({'stage': 'descriptive_expansion_search', 'query': query, 'error_type': type(exc).__name__})
+            finally:
+                brave_seconds += time.monotonic() - query_started
+            if any(verified_product(r) for _, r in baseline):
+                break
+    verified_descriptors = bool(descriptor_expansions) and any(verified_product(r) for _, r in baseline)
     def search_expanded(invocation, query):
         nonlocal brave_seconds
         broadened = re.sub(r'\s+', ' ', re.sub(r'["“”]', '', query)).strip()
@@ -593,7 +657,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             if len(cards) == 6:
                 break
         return cards
-    expansions = [] if verified_literal else expand_readings(unresolved, profiles, row['store_name'], context,
+    expansions = [] if (verified_literal or verified_descriptors) else expand_readings(unresolved, profiles, row['store_name'], context,
         verify_expansion, expansion_search_evidence)
     for expansion in expansions:
         if expansion['status'] != 'success':
@@ -627,13 +691,15 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
         'learned_searches': learned, 'reading_hypotheses': hypotheses,
         'arithmetic': bundle['validations']})
     proposals = []
-    verified_expansion = verified_literal or any(e.get('verified_search_match') for e in expansions)
+    verified_expansion = verified_literal or verified_descriptors or any(e.get('verified_search_match') for e in expansions)
     discovery = {'stop_reason': 'verified_search_match' if verified_expansion else 'expansion_budget_exhausted',
         'expansion_calls': sum(len(e['attempts']) for e in expansions),
+        'descriptive_expansion_calls': len(descriptor_expansions),
         'descriptive_queries': descriptive_queries[:3],
         'relaxed_descriptive_queries': relaxed_queries[:3],
         'grounded_descriptive_queries': grounded_queries[:3],
         'verified_literal_match': verified_literal,
+        'verified_descriptive_match': verified_descriptors,
         'shared_proposal_round': 'skipped_verified_match' if verified_expansion else 'fallback'}
     comparison.emit('enrichment_collaboration_discovery', {**context, **discovery})
     proposal_profiles = [p for p in profiles if p.provider == 'qwen'] or profiles
@@ -717,11 +783,11 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, blocking, complete_context, min_provider_families=min_families)
     decision['recovered_discovery_errors'] = recovered
     decision['review_policy'] = review_policy
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v13', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v14', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,
-        'reading_hypotheses': hypotheses, 'expansions': expansions, 'discovery': discovery,
+        'reading_hypotheses': hypotheses, 'expansions': expansions, 'descriptor_expansions': descriptor_expansions, 'discovery': discovery,
         'candidates': candidates, 'search_results': list(cards.values()), 'available_candidates': len(cards), 'proposals': proposals, 'reviews': reviews,
         'search_queries': [{'query': query, 'candidate_ids': [candidate_id(r.url) for r in results]} for query, results in cache.items()],
         'decision': decision, 'errors': errors, 'blocking_errors': blocking, 'recovered_errors': recovered, 'shared_brave_seconds': brave_seconds,

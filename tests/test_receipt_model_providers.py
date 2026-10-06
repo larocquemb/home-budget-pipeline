@@ -170,4 +170,14 @@ def test_production_configmap_preserves_qwen_budget_over_shared_defaults(monkeyp
     openai = next(p for p in enabled if p.provider == 'openai')
     assert (qwen.context_tokens, qwen.output_tokens) == (32768, 8192)
     assert (openai.context_tokens, openai.output_tokens) == (16384, 2048)
-    assert qwen.model == 'qwen3-vl:30b-a3b-instruct-q4_K_M'
+    assert qwen.model == 'qwen3-vl-receipts:30b-instruct'
+
+
+def test_prefix_task_uses_bounded_exploration_sampling(monkeypatch):
+    bodies = []
+    monkeypatch.setattr(providers, 'post', lambda url, body, headers=None: bodies.append(body) or {
+        'message': {'content': '{"queries":["picante medium"]}'}, 'done': True, 'done_reason': 'stop'})
+    providers.request(providers.Profile('qwen', 'qwen', 'local', 32768, 8192), 'expand prefixes',
+        {'type': 'object', 'properties': {'queries': {'type': 'array'}}}, [])
+    assert bodies[0]['options'] == {'temperature': .7, 'top_p': .8, 'top_k': 20, 'seed': 42,
+        'num_ctx': 32768, 'num_predict': 8192}

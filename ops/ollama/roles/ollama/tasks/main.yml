@@ -199,3 +199,51 @@
       - ollama_api.json.models is defined
     quiet: true
   when: not ansible_check_mode
+
+- name: Read the managed receipt model specification
+  ansible.builtin.set_fact:
+    ollama_receipt_model_spec: "{{ lookup('ansible.builtin.file', role_path + '/files/receipt-model.json') | from_json }}"
+
+- name: Read the installed receipt model template
+  ansible.builtin.uri:
+    url: "http://{{ ollama_listen_address }}:{{ ollama_port }}/api/show"
+    method: POST
+    body_format: json
+    body:
+      model: "{{ ollama_receipt_model_spec.model }}"
+    return_content: true
+    use_proxy: false
+    status_code: [200, 404]
+  register: ollama_receipt_model_current
+  check_mode: false
+
+- name: Determine whether the receipt model needs reconciliation
+  ansible.builtin.set_fact:
+    ollama_receipt_model_changed: >-
+      {{ ollama_receipt_model_current.status == 404
+         or ollama_receipt_model_current.json.template != ollama_receipt_model_spec.template
+         or ((ollama_receipt_model_current.json.parameters | regex_replace('[ \t]+', ' ')).splitlines() | sort)
+            != (['temperature 0.7', 'top_k 20', 'top_p 0.8', 'stop "<|im_start|>"', 'stop "<|im_end|>"'] | sort) }}
+
+- name: Create the receipt model with its chat template
+  ansible.builtin.uri:
+    url: "http://{{ ollama_listen_address }}:{{ ollama_port }}/api/create"
+    method: POST
+    body_format: json
+    body: "{{ lookup('ansible.builtin.file', role_path + '/files/receipt-model.json') }}"
+    return_content: true
+    use_proxy: false
+    status_code: 200
+    timeout: 120
+  when:
+    - not ansible_check_mode
+    - ollama_receipt_model_changed
+  changed_when: true
+
+- name: Report the receipt model reconciliation in check mode
+  ansible.builtin.debug:
+    msg: "Would create {{ ollama_receipt_model_spec.model }} from the installed {{ ollama_receipt_model_spec.from }} weights with the managed chat template."
+  when:
+    - ansible_check_mode
+    - ollama_receipt_model_changed
+  changed_when: true
