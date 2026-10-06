@@ -21,7 +21,18 @@ receipts** to investigate a worker, method, model, merchant or category.
 Blue nodes describe processing or infrastructure, purple nodes describe methods
 and models, amber nodes describe observations/proposals/search results, and green
 nodes describe canonical records. Red indicates failures or decisions requiring
-review. A recommendation never creates an accepted product or changes PostgreSQL.
+review. A model recommendation never creates an accepted product or changes PostgreSQL.
+The receipt page displays the latest saved collaboration per line item, even when
+no accepted enrichment exists. **Accept recommendation for this item** applies the
+saved product title and URL after checking the receipt, current item fields and
+latest collaboration. It preserves the OCR item name, amounts and category. The
+transaction records the user and old/new values in the description audit, marks
+the product enrichment accepted, updates the accepted search cache and appends a
+`product_recommendation_accepted` lineage event. Repeated clicks are idempotent;
+stale or ineligible recommendations cannot overwrite newer item descriptions.
+After projection, an explicit `ProductAcceptance` connects the decision to the
+canonical item and its audit through `ACCEPTED_AS`, `UPDATED` and `PERSISTED_AS`.
+The original model payload remains unchanged.
 The graph connects each review to the proposals it considered, the observations
 it cites, and its guardrail/reconciliation decision. The decision properties
 explain disagreements, missing evidence, insufficient independent providers,
