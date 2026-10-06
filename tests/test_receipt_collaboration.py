@@ -1,6 +1,7 @@
 from dataclasses import replace
 from decimal import Decimal
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,22 @@ from home_budget_pipeline import receipt_shared_evidence as shared
 from home_budget_pipeline import product_enrichment as core
 
 pytestmark = pytest.mark.usefixtures('offline_gpu_sampling')
+
+
+@pytest.fixture(autouse=True)
+def isolate_other_discovery_stages(monkeypatch):
+    # This module exercises the original discovery/review branches in isolation.
+    # The lexical stage and its complete flow have separate regression coverage.
+    monkeypatch.setattr(collab, 'expand_descriptive_prefixes', lambda *args: [])
+
+
+def is_schema(schema, expected):
+    schema, expected = deepcopy(schema), deepcopy(expected)
+    for value in (schema, expected):
+        field = value.get('properties', {}).get('source_ids', {})
+        field.pop('maxItems', None)
+        field.get('items', {}).pop('enum', None)
+    return schema == expected
 
 
 URL = 'https://sobeys.com/products/old-el-paso-salsa-picante-medium'
@@ -144,7 +161,7 @@ def test_two_rounds_share_ocr_then_pool_all_provider_queries(monkeypatch, capsys
         return [result]
     def request(profile, text, schema, images):
         calls.append((profile.provider, text))
-        if schema == collab.PROPOSAL_SCHEMA:
+        if is_schema(schema, collab.PROPOSAL_SCHEMA):
             output = {'reading': TITLE, 'queries': [profile.provider + ' salsa'], 'source_ids': [SOURCE], 'reason': 'reading'}
         else:
             assert 'openai salsa' in text and 'anthropic salsa' in text
@@ -174,12 +191,12 @@ def test_alternative_search_precedes_models_even_when_models_favor_canonical(mon
     def request(profile, text, schema, images):
         assert 'site:sobeys.com Oep Pic Med' in searches
         assert 'site:sobeys.com Jep Pic Med' in searches
-        if schema == collab.EXPANSION_SCHEMA:
+        if is_schema(schema, collab.EXPANSION_SCHEMA):
             target = json.loads(next(line for line in text.splitlines() if line.startswith('{')))['target_reading']
             return {'output': {'reading': target['reading'], 'queries': [],
                               'source_ids': target['source_ids'][:1], 'reason': 'No defensible expansion'}}
         assert 'reading_hypotheses' in text or 'expansion_hypotheses' in text
-        if schema == collab.PROPOSAL_SCHEMA:
+        if is_schema(schema, collab.PROPOSAL_SCHEMA):
             output = {'reading': 'Cep Pic Med', 'queries': ['Cepacol'],
                       'source_ids': ['item:canonical'], 'reason': 'Uncertain'}
         else:
@@ -201,7 +218,7 @@ def test_isolated_expansions_retry_unexpanded_tokens_then_search_full_product(mo
         assert item == 'Cep Pic Med'
         return [core.SearchResult(TITLE, URL, '', .9167)] if 'Old El Paso' in query else []
     def request(profile, text, schema, images):
-        if schema == collab.EXPANSION_SCHEMA:
+        if is_schema(schema, collab.EXPANSION_SCHEMA):
             target = json.loads(next(line for line in text.splitlines() if line.startswith('{')))['target_reading']
             reading = target['reading']
             assert images == []
@@ -211,7 +228,7 @@ def test_isolated_expansions_retry_unexpanded_tokens_then_search_full_product(mo
             attempts[key] = attempts.get(key, 0) + 1
             queries = ['Cepacol Pic Med'] if attempts[key] == 1 else ['Old El Paso medium picante salsa']
             output = {'reading': TITLE, 'queries': queries, 'source_ids': target['source_ids'][:1], 'reason': 'Unverified expansion'}
-        elif schema == collab.PROPOSAL_SCHEMA:
+        elif is_schema(schema, collab.PROPOSAL_SCHEMA):
             output = {'reading': 'Cep Pic Med', 'queries': ['Cepacol'], 'source_ids': ['item:canonical'], 'reason': 'Uncertain'}
         else:
             assert TITLE in text
@@ -292,10 +309,10 @@ def test_brand_index_is_not_a_selectable_review_product(monkeypatch):
     monkeypatch.setattr(core, 'brave_candidates', lambda *a: [core.SearchResult(
         'Cepacol Products', 'https://sobeys.com/products/brand/Cepacol', '', 0)])
     def request(profile, text, schema, images):
-        if schema == collab.EXPANSION_SCHEMA:
+        if is_schema(schema, collab.EXPANSION_SCHEMA):
             h = json.loads(next(line for line in text.splitlines() if line.startswith('{')))['target_reading']
             output = {'reading': h['reading'], 'queries': [], 'source_ids': h['source_ids'][:1], 'reason': 'Unknown'}
-        elif schema == collab.PROPOSAL_SCHEMA:
+        elif is_schema(schema, collab.PROPOSAL_SCHEMA):
             output = {'reading': 'Cep Pic Med', 'queries': ['Cepacol'], 'source_ids': ['item:canonical'], 'reason': 'Unknown'}
         else:
             assert schema['properties']['candidate_id']['enum'] == [None]
@@ -312,7 +329,7 @@ def test_failed_provider_does_not_stop_other_workers(monkeypatch):
     monkeypatch.setattr(core, 'brave_candidates', lambda *a: [core.SearchResult(TITLE, URL, '', .9167)])
     def request(profile, text, schema, images):
         if profile.provider == 'anthropic': raise OSError('credential secret')
-        output = {'reading': TITLE, 'queries': ['Salsa'], 'source_ids': [SOURCE], 'reason': 'ok'} if schema == collab.PROPOSAL_SCHEMA else review('openai')['output']
+        output = {'reading': TITLE, 'queries': ['Salsa'], 'source_ids': [SOURCE], 'reason': 'ok'} if is_schema(schema, collab.PROPOSAL_SCHEMA) else review('openai')['output']
         return {'output': output}
     monkeypatch.setattr(providers, 'request', request)
     profiles = [providers.Profile('openai', 'openai', 'test'), providers.Profile('anthropic', 'anthropic', 'test')]
@@ -459,7 +476,7 @@ def test_qwen_first_skips_paid_models_only_with_complete_supported_evidence(monk
             if profile.provider == 'qwen' and issue == 'abstention':
                 output.update(candidate_id=None, candidate_title=None, product_source_id=None)
         else:
-            refs = json.loads(text.splitlines()[-1])['target_reading']['source_ids'] if schema == collab.EXPANSION_SCHEMA else [SOURCE]
+            refs = json.loads(text.splitlines()[-1])['target_reading']['source_ids'] if is_schema(schema, collab.EXPANSION_SCHEMA) else [SOURCE]
             output = {'reading': TITLE, 'queries': [TITLE], 'source_ids': refs[:1], 'reason': 'hypothesis'}
         return {'output': output}
     monkeypatch.setattr(providers, 'request', request)
@@ -553,7 +570,7 @@ def test_empty_quoted_expansion_search_broadens_once_and_keeps_evidence(monkeypa
         return [core.SearchResult(TITLE, URL, '', .9167)] if query == broad or (query == quoted and quoted_has_match) else []
     def request(profile, text, schema, images):
         assert profile.provider == 'qwen'
-        if schema == collab.EXPANSION_SCHEMA:
+        if is_schema(schema, collab.EXPANSION_SCHEMA):
             target = json.loads(text.splitlines()[-1])['target_reading']
             output = {'reading': TITLE, 'queries': [quoted], 'source_ids': target['source_ids'][:1], 'reason': 'hypothesis'}
         else: output = review('qwen', refs=[SOURCE])['output']
@@ -792,7 +809,7 @@ def test_evidence_guided_qwen_resolves_without_any_paid_model_call(monkeypatch):
     def request(profile, text, schema, images):
         calls.append((profile.provider, schema))
         assert profile.provider == 'qwen'
-        if schema == collab.EXPANSION_SCHEMA:
+        if is_schema(schema, collab.EXPANSION_SCHEMA):
             evidence = json.loads(text.splitlines()[-1])
             assert evidence['retailer_search_evidence'][0]['title'] == 'Salsa Picante range'
             assert 'omit it from at least one query' in text
@@ -823,9 +840,9 @@ def test_brand_only_retailer_hits_do_not_steer_qwen_and_cannot_be_selected(monke
     def request(profile, text, schema, images):
         calls.append(text)
         assert medicine_title not in text
-        if schema in (collab.EXPANSION_SCHEMA, collab.PROPOSAL_SCHEMA):
+        if (is_schema(schema, collab.EXPANSION_SCHEMA) or is_schema(schema, collab.PROPOSAL_SCHEMA)):
             sources = json.loads(text.splitlines()[-1]).get('target_reading', {}).get('source_ids', [SOURCE])
-            return {'output': {'reading': 'Unresolved', 'queries': [] if schema == collab.EXPANSION_SCHEMA else ['size medium'],
+            return {'output': {'reading': 'Unresolved', 'queries': [] if is_schema(schema, collab.EXPANSION_SCHEMA) else ['size medium'],
                 'source_ids': sources[:1], 'reason': 'No supporting product/style evidence'}}
         assert schema['properties']['candidate_id']['enum'] == [None]
         return {'output': {'candidate_id': None, 'candidate_title': None, 'product_source_id': None,
@@ -927,12 +944,12 @@ def test_fallback_hypotheses_do_not_turn_repeated_ocr_into_votes(monkeypatch):
         assert item == 'Cep Pic Med'
         return [core.SearchResult(TITLE, URL, '', .9167)] if 'picante medium' in query.lower() else []
     def request(profile, text, schema, images):
-        if schema == collab.EXPANSION_SCHEMA:
+        if is_schema(schema, collab.EXPANSION_SCHEMA):
             stages.append('expansion')
             target = json.loads(text.splitlines()[-1])['target_reading']
             return {'output': {'reading': target['reading'], 'queries': [target['reading']],
                 'source_ids': target['source_ids'][:1], 'reason': 'Unresolved literal reading'}}
-        if schema == collab.PROPOSAL_SCHEMA:
+        if is_schema(schema, collab.PROPOSAL_SCHEMA):
             stages.append('proposal')
             prompt = json.loads(text.splitlines()[-1])
             assert 'receipt_sources' not in prompt and 'item' not in prompt

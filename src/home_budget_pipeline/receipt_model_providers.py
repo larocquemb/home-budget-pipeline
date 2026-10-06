@@ -167,9 +167,12 @@ def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> di
     message = {'role': 'user', 'content': qwen_content(text, schema, images)}
     if images:
         message['images'] = [image['data'] for image in images]
+    options = {'temperature': 0, 'num_ctx': profile.context_tokens, 'num_predict': profile.output_tokens}
+    if set(schema.get('properties', {})) == {'queries'}:
+        options.update(temperature=0.7, top_p=0.8, top_k=20, seed=42)
     data = post(base + '/api/chat', {'model': profile.model, 'messages': [message],
         'stream': False, 'think': False, 'format': schema, 'keep_alive': '5m',
-        'options': {'temperature': 0, 'num_ctx': profile.context_tokens, 'num_predict': profile.output_tokens}})
+        'options': options})
     usage = {'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count')}
     for field in ('total_duration', 'load_duration', 'prompt_eval_duration', 'eval_duration'):
         value = data.get(field)

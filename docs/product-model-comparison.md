@@ -248,13 +248,21 @@ Vision profiles also receive up to two receipt page images, verified against the
 source SHA-256 and read from the mounted receipt inbox. Text-only Qwen sees the
 OCR evidence. Models propose readings and search queries with source citations.
 
-The production collaboration profile uses `qwen3-vl:30b-a3b-instruct-q4_K_M` so Qwen receives the
+The production collaboration profile uses `qwen3-vl-receipts:30b-instruct` so Qwen receives the
 same page images as OpenAI. Before syncing this profile, install the model on
 Arsene (set `OLLAMA_HOST` to the managed service address):
 
 ```sh
 OLLAMA_HOST=http://192.168.2.201:11434 ollama pull qwen3-vl:30b-a3b-instruct-q4_K_M
+make ollama-gitops-check
+make ollama-gitops-apply
 ```
+
+The host role creates `qwen3-vl-receipts:30b-instruct` from these installed weights
+with a managed ChatML template and stop tokens; it does not download or duplicate
+the weights. The installed upstream tag was observed with `{{ .Prompt }}` as
+its template. The managed alias is tested through the standard chat API with
+both text and receipt images.
 
 Large scanned PDFs up to 128 MiB are hash-verified in a stream and rendered
 without loading the entire source into a Python byte buffer. Uploaded evidence
@@ -510,6 +518,17 @@ before supplying full words for a grounded follow-up query or guiding Qwen.
 The discovery log records these probes as `relaxed_descriptive_queries`.
 Verified product evidence skips the expansion and proposal rounds and goes
 directly to Qwen review with the receipt images and OCR.
+
+When searches still lack a verified product, one small Qwen lexical task per
+distinct descriptor suffix (at most three) generates brand-free full-word
+hypotheses. Its JSON grammar preserves each descriptor prefix and excludes
+brands, prices and extra product words. The application validates that grammar
+again before searching. Sampling uses temperature 0.7, top-p 0.8, top-k 20 and
+seed 42 for this task; final review retains temperature 0. The discovery log
+records `descriptive_expansion_calls` and `verified_descriptive_match`. These
+hypotheses remain unverified until a retailer product page passes original-item
+scoring and independent OCR support. Discovery citations are constrained to the
+IDs actually supplied in each prompt.
 
 If discovery remains unresolved, the fallback proposal prompt contains one
 citation per distinct OCR reading, rather than repeated engine observations.
