@@ -36,6 +36,10 @@ def receipt_url(source_sha256: str) -> str:
     return f"{BASE_PATH}/receipts/{quote(source_sha256, safe='')}"
 
 
+def receipt_graph_url(source_sha256: str) -> str:
+    return f"{BASE_PATH}/graph?receipt={quote(source_sha256, safe='')}"
+
+
 def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int) -> Page:
     count_rows = service._fetch("SELECT COUNT(*) AS total_count FROM ingest.receipts")
     total_count = int(count_rows[0]["total_count"]) if count_rows else 0
@@ -260,7 +264,7 @@ def receipts_page(
         label = Path(source_reference).name or source_reference or source_sha256[:12]
         rows.append(
             "<tr>"
-            f'<td><a href="{receipt_url(source_sha256)}">{esc(label)}</a><br><small class="muted">{esc(source_reference)}</small></td>'
+            f'<td><a href="{receipt_url(source_sha256)}">{esc(label)}</a> · <a href="{receipt_graph_url(source_sha256)}">Processing graph</a><br><small class="muted">{esc(source_reference)}</small></td>'
             f"<td>{esc(receipt.get('merchant'))}</td>"
             f"<td>{esc(receipt.get('transaction_datetime'))}</td>"
             f'<td class="num">{money(receipt.get("total"))}</td>'
@@ -408,7 +412,8 @@ def receipt_page(
 
     body = (
         f'<p><a href="{BASE_PATH}/receipts">← All receipts</a> · '
-        f'<a href="{BASE_PATH}/dashboard">Accounting &amp; review dashboard</a></p>'
+        f'<a href="{BASE_PATH}/dashboard">Accounting &amp; review dashboard</a> · '
+        f'<a href="{receipt_graph_url(source_sha256)}">View receipt knowledge graph</a></p>'
         + header
         + review_html
         + '<style>.receipt-recommendation{min-width:18rem;max-width:26rem;overflow-wrap:anywhere}.receipt-recommendation pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>'
