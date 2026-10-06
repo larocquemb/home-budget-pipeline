@@ -244,3 +244,18 @@ def test_story_shows_recommendation_provenance_and_does_not_invent_chronology():
     assert web.processing_story(g.build({**evidence(), 'collaborations': []}))['nodes'] == []
     with pytest.raises(HTTPException):
         web.processing_story(g.build(evidence()), 'unrelated-item')
+
+
+def test_only_recorded_human_acceptance_connects_recommendation_to_canonical_update():
+    data = evidence()
+    data['events'] = [{'id': 'acceptance-1', 'occurred_at': '2026-10-06T12:00:00+00:00',
+                      'payload': {'event': 'product_recommendation_accepted', 'item_id': 10,
+                                  'run_uuid': 'compare-1', 'audit_id': 7, 'actor_user': 'paul',
+                                  'product_description': 'Old El Paso Picante Medium',
+                                  'product_url': 'https://sobeys.com/products/1'}}]
+    story = web.processing_story(g.build(data))
+    acceptance = next(n for n in story['nodes'] if n['kind'] == 'ProductAcceptance')
+    assert acceptance['properties']['actor_user'] == 'paul'
+    assert acceptance['id'] in story['path_ids']
+    assert {'ACCEPTED_AS', 'UPDATED', 'PERSISTED_AS'} <= {e['kind'] for e in story['edges']}
+    assert not any(n['kind'] == 'ProductAcceptance' for n in g.build(evidence())['nodes'])

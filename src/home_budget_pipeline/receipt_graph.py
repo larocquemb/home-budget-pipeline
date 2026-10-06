@@ -11,7 +11,7 @@ import os
 import re
 from urllib.parse import urlencode
 
-VERSION = 2
+VERSION = 3
 
 
 def encoded(value):
@@ -233,6 +233,8 @@ def build(data):
     previous_retry = {}
     for event in data.get('events', []):
         e = event['payload']
+        if e.get('event') == 'product_recommendation_accepted':
+            continue
         message = graph.node('Message', e['message_id'], e['operation'], message_id=e['message_id'], request_id=e.get('request_id'), operation=e['operation'], batch_id=e.get('batch_id'))
         graph.edge(receipt, 'QUEUED_AS', message)
         if e.get('queue'):
@@ -265,6 +267,20 @@ def build(data):
         p = row['payload']
         if p['item_id'] in items:
             collaboration(graph, receipt, items[p['item_id']], p, row.get('summary', {}).get('skipped_profiles', []), row.get('completed_at'), row.get('id'))
+    for event in data.get('events', []):
+        e = event['payload']
+        if e.get('event') != 'product_recommendation_accepted' or e.get('item_id') not in items:
+            continue
+        decision = identifier('Decision', (e['run_uuid'], e['item_id']))
+        if decision not in graph.nodes:
+            continue
+        acceptance = graph.node('ProductAcceptance', str(event['id']), 'Accepted recommendation',
+                                accepted_at=event['occurred_at'], **e)
+        graph.edge(decision, 'ACCEPTED_AS', acceptance)
+        graph.edge(acceptance, 'UPDATED', items[e['item_id']])
+        audit = graph.node('PostgreSQLRecord', ('budget.expense_item_description_audit', e['audit_id']),
+                           'Audited product acceptance', table='budget.expense_item_description_audit', key=e['audit_id'])
+        graph.edge(acceptance, 'PERSISTED_AS', audit)
     return graph.export()
 
 

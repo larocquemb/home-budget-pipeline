@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
-from fastapi import Depends, HTTPException, Query, Request
+from fastapi import Depends, Header, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .app import (
@@ -21,7 +23,7 @@ from .app import (
     ledger_home,
     query_service,
 )
-from .queries import LedgerQueryService, Page
+from .queries import LedgerQueryService, Page, RecommendationConflict, recommendation_candidate
 from .render import esc, money, page, pager
 from . import receipt_graph as _receipt_graph_routes
 
@@ -112,10 +114,41 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
         enrichment_by_item = {
             int(row["expense_item_id"]): dict(row) for row in enrichment_rows
         }
+        recommendation_rows = service._fetch(
+            """SELECT DISTINCT ON (c.expense_item_id) c.id,c.expense_item_id,c.run_uuid,
+                      c.completed_at,c.payload,a.occurred_at AS accepted_at
+                 FROM enrichment.receipt_collaborations c
+                 LEFT JOIN LATERAL (SELECT occurred_at FROM lineage.receipt_events
+                     WHERE source_sha256=%s AND payload->>'event'='product_recommendation_accepted'
+                       AND payload->>'collaboration_id'=c.id::text
+                     ORDER BY occurred_at DESC LIMIT 1) a ON TRUE
+                WHERE c.expense_item_id=ANY(%s)
+                ORDER BY c.expense_item_id,c.completed_at DESC,c.id DESC""",
+            (source_sha256, [int(item["expense_item_id"]) for item in expense["items"]]),
+        )
+        recommendations = {}
+        for row in recommendation_rows:
+            payload = row['payload']
+            decision = payload.get('decision') or {}
+            try:
+                candidate = recommendation_candidate(payload)
+                eligible = True
+            except ValueError:
+                candidate = {}
+                eligible = False
+            recommendations[int(row['expense_item_id'])] = {
+                'id': row['id'], 'run_uuid': str(row['run_uuid']), 'completed_at': row['completed_at'],
+                'disposition': decision.get('disposition'), 'confidence': decision.get('confidence'),
+                'candidate_title': candidate.get('title') or decision.get('candidate_title'),
+                'candidate_url': candidate.get('url') or decision.get('candidate_url'),
+                'evidence': candidate.get('evidence'), 'eligible': eligible,
+                'accepted_at': row.get('accepted_at'), 'reasons': decision.get('reasons') or [],
+            }
         expense["items"] = tuple(
             {
                 **dict(item),
                 "enrichment": enrichment_by_item.get(int(item["expense_item_id"])),
+                "recommendation": recommendations.get(int(item["expense_item_id"])),
             }
             for item in expense["items"]
         )
@@ -182,6 +215,34 @@ def api_receipt_detail(
     return result
 
 
+class AcceptRecommendationRequest(BaseModel):
+    expense_item_id: int = Field(gt=0)
+    collaboration_id: int = Field(gt=0)
+    expected_description: str | None = Field(max_length=10000)
+    expected_url: str | None = Field(max_length=10000)
+
+
+@app.post(f"{BASE_PATH}/api/receipts/{{source_sha256}}/accept-recommendation")
+def accept_recommendation(source_sha256: str, request: AcceptRecommendationRequest,
+                          x_ledger_action: str | None = Header(default=None),
+                          service: LedgerQueryService = Depends(query_service),
+                          identity: dict[str, str] = Depends(authenticated_identity)):
+    if x_ledger_action != 'accept-product-recommendation':
+        raise HTTPException(403, 'Recommendation action header missing')
+    if not _RECEIPT_KEY_RE.fullmatch(source_sha256):
+        raise HTTPException(422, 'Invalid receipt identity')
+    try:
+        return service.accept_product_recommendation(source_sha256, request.expense_item_id,
+            request.collaboration_id, expected_description=request.expected_description,
+            expected_url=request.expected_url, actor_user=identity['user'], actor_email=identity.get('email') or None)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RecommendationConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.get(f"{BASE_PATH}/receipts", response_class=HTMLResponse)
 def receipts_page(
     limit: int = Query(100, ge=1, le=500),
@@ -228,6 +289,8 @@ def receipts_page(
 def _enrichment_html(item: dict[str, Any]) -> str:
     enrichment = item.get("enrichment") or {}
     if not enrichment:
+        if item.get('recommendation'):
+            return '<span class="muted">No accepted match yet</span>'
         return '<span class="muted">Not enriched</span>'
     provider = esc(enrichment.get("provider"))
     status = esc(enrichment.get("status"))
@@ -238,7 +301,7 @@ def _enrichment_html(item: dict[str, Any]) -> str:
     candidate_url = str(enrichment.get("candidate_url") or "")
     product_link = (
         f'<a href="{html.escape(candidate_url, quote=True)}" target="_blank" rel="noopener">{candidate or "Verified product"}</a>'
-        if candidate_url
+        if urlparse(candidate_url).scheme in {'http', 'https'} and urlparse(candidate_url).netloc
         else candidate
     )
     details = (
@@ -247,6 +310,36 @@ def _enrichment_html(item: dict[str, Any]) -> str:
         + (f"<details><summary>Search query</summary><code>{query}</code></details>" if query else "")
     )
     return details
+
+
+def _recommendation_html(item: dict[str, Any], source_sha256: str) -> str:
+    rec = item.get('recommendation')
+    if not rec:
+        return ''
+    score = rec.get('confidence')
+    confidence = f"{float(score)*100:.1f}%" if isinstance(score, (int, float)) else 'unknown'
+    url = str(rec.get('candidate_url') or '')
+    title = esc(rec.get('candidate_title') or 'No product recommendation')
+    if urlparse(url).scheme in {'http', 'https'} and urlparse(url).netloc:
+        title = f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{title}</a>'
+    state = 'Accepted recommendation' if rec.get('accepted_at') else 'Saved recommendation'
+    result = f'<div class="card receipt-recommendation"><strong>{state}</strong><br>{title}<br>Evidence score: {esc(confidence)} · {esc(rec.get("disposition"))}'
+    tokens = (rec.get('evidence') or {}).get('tokens') or []
+    if tokens:
+        result += '<br>' + esc(' · '.join(f"{t.get('token')} → {t.get('matched')} ({t.get('weight')})" for t in tokens))
+    result += f'<details><summary>Recommendation evidence</summary><p>Run: {esc(rec["run_uuid"])}<br>Completed: {esc(rec.get("completed_at"))}</p>'
+    result += f'<pre>{esc(json.dumps({"evidence":rec.get("evidence"), "reasons":rec.get("reasons")}, indent=2))}</pre></details>'
+    if rec.get('accepted_at'):
+        result += f'<small>Accepted {esc(rec["accepted_at"])}</small>'
+        if (item.get('product_description'), item.get('product_url')) != (rec.get('candidate_title'), rec.get('candidate_url')):
+            result += '<p class="muted">Acceptance recorded; the current description differs.</p>'
+    elif rec.get('eligible'):
+        values = {'expense_item_id': item['expense_item_id'], 'collaboration_id': rec['id'],
+                  'expected_description': item.get('product_description'), 'expected_url': item.get('product_url')}
+        result += f'<form class="accept-recommendation" data-receipt="{esc(source_sha256)}" data-request="{esc(json.dumps(values))}"><button type="submit">Accept recommendation for this item</button><p class="accept-status" role="status"></p></form>'
+    else:
+        result += '<p class="muted">Requires review; no eligible recommendation to accept.</p>'
+    return result + '</div>'
 
 
 @app.get(f"{BASE_PATH}/receipts/{{source_sha256}}", response_class=HTMLResponse)
@@ -288,7 +381,7 @@ def receipt_page(
             "<tr>"
             f"<td>{esc(item.get('item_name'))}</td>"
             f"<td>{esc(item.get('product_description'))}</td>"
-            f"<td>{_enrichment_html(dict(item))}</td>"
+            f"<td>{_enrichment_html(dict(item))}{_recommendation_html(dict(item), source_sha256)}</td>"
             f"<td>{esc(item.get('budget_category'))}</td>"
             f"<td>{esc(item.get('category_group_name'))}</td>"
             f'<td class="num">{money(item.get("line_total"))}</td>'
@@ -318,7 +411,22 @@ def receipt_page(
         f'<a href="{BASE_PATH}/dashboard">Accounting &amp; review dashboard</a></p>'
         + header
         + review_html
+        + '<style>.receipt-recommendation{min-width:18rem;max-width:26rem;overflow-wrap:anywhere}.receipt-recommendation pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>'
         + items_html
+        + """<script>
+for(const form of document.querySelectorAll('.accept-recommendation')) {
+  form.addEventListener('submit', async event => {
+    event.preventDefault();const button=form.querySelector('button'),status=form.querySelector('.accept-status');
+    button.disabled=true;status.textContent='Saving acceptance…';
+    try {
+      const response=await fetch(""" + json.dumps(BASE_PATH) + """+'/api/receipts/'+encodeURIComponent(form.dataset.receipt)+'/accept-recommendation', {
+        method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Ledger-Action':'accept-product-recommendation'},body:form.dataset.request});
+      const result=await response.json();if(!response.ok)throw Error(result.detail||'Unable to accept recommendation');
+      status.textContent='Accepted. Refreshing receipt…';window.location.reload();
+    } catch(error) {status.textContent=error.message;button.disabled=false;}
+  });
+}
+</script>"""
     )
     return page(f"Receipt – {filename}", body, base_path=BASE_PATH, identity=identity)
 

@@ -17,8 +17,8 @@ from .. import receipt_graph as graph
 PERSPECTIVES = {
     'story': None,
     'lineage': None,
-    'topology': {'Receipt', 'Message', 'MessageEvent', 'BrokerRoute', 'ResultMessage', 'ProcessingAttempt', 'AttemptEvent', 'Worker', 'Node', 'OCRRun', 'OCRPass', 'OCRMethod', 'Model', 'ModelInvocation', 'Provider', 'GPU', 'InferenceHost', 'ExtractionResult', 'Guardrail', 'Decision', 'Collaboration', 'PostgreSQLRecord'},
-    'domain': {'Receipt', 'CanonicalReceipt', 'Merchant', 'Item', 'Category', 'ProductPage', 'SearchResult', 'Decision', 'Collaboration'},
+    'topology': {'Receipt', 'Message', 'MessageEvent', 'BrokerRoute', 'ResultMessage', 'ProcessingAttempt', 'AttemptEvent', 'Worker', 'Node', 'OCRRun', 'OCRPass', 'OCRMethod', 'Model', 'ModelInvocation', 'Provider', 'GPU', 'InferenceHost', 'ExtractionResult', 'Guardrail', 'Decision', 'ProductAcceptance', 'Collaboration', 'PostgreSQLRecord'},
+    'domain': {'Receipt', 'CanonicalReceipt', 'Merchant', 'Item', 'Category', 'ProductPage', 'SearchResult', 'Decision', 'ProductAcceptance', 'Collaboration'},
 }
 
 
@@ -114,7 +114,8 @@ def processing_story(result, item_id='', run_id=''):
     # Follow only run-owned outputs and explicitly recorded supporting entities.
     follow = {'USES_EVIDENCE', 'HAS_IMAGE_REFERENCE', 'CONSIDERS', 'SEARCHED', 'HAS_INVOCATION',
               'RESULTED_IN', 'SKIPPED', 'PRODUCED', 'USES_MODEL', 'BELONGS_TO', 'OBSERVED_GPU',
-              'LOCATED_ON', 'REFERENCES', 'RETURNED', 'EVALUATED', 'EXECUTED_BY', 'RUNS_ON'}
+              'LOCATED_ON', 'REFERENCES', 'RETURNED', 'EVALUATED', 'EXECUTED_BY', 'RUNS_ON',
+              'ACCEPTED_AS', 'UPDATED', 'PERSISTED_AS'}
     queue = [chosen['id']]
     while queue:
         source = queue.pop()
@@ -130,7 +131,7 @@ def processing_story(result, item_id='', run_id=''):
     scoped = [e for e in edges if e['source'] in ids and e['target'] in ids]
     # A selected evidence path is explicit provenance, not an endorsement of model assertions.
     path = {n for n in ids if nodes[n]['kind'] == 'Decision'}
-    path.update(e['target'] for e in scoped if e['kind'] == 'RECOMMENDS')
+    path.update(e['target'] for e in scoped if e['kind'] in {'RECOMMENDS', 'ACCEPTED_AS'})
     provenance = {'SUPPORTS', 'CITES', 'SELECTS', 'INFORMS', 'PRODUCED', 'RETURNED',
                   'PROPOSED_SEARCH', 'DERIVED_FROM'}
     changed = True
