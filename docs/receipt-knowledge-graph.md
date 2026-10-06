@@ -24,7 +24,7 @@ nodes describe canonical records. Red indicates failures or decisions requiring
 review. A model recommendation never creates an accepted product or changes PostgreSQL.
 The receipt page displays the latest saved collaboration per line item, even when
 no accepted enrichment exists. **Accept recommendation for this item** applies the
-saved product title and URL after checking the receipt, current item fields and
+clean product name and URL after checking the receipt, current item fields and
 latest collaboration. It preserves the OCR item name, amounts and category. The
 transaction records the user and old/new values in the description audit, marks
 the product enrichment accepted, updates the accepted search cache and appends a
@@ -234,3 +234,19 @@ outage/catch-up and fresh-database replay are recorded. This implementation does
 not claim that current status overlays include every metric, that unavailable
 historical queue identities are reconstructed, or that a model recommendation is
 the accepted best product. The deployment commands are for the operator to run.
+
+## Product labels and OCR variants
+
+Product names omit leading shopping prompts (Buy, Shop, Purchase, Order) and
+a matching retailer suffix such as `| Sobeys Inc.`. The original webpage title
+stays in the saved candidate and recommendation evidence. New acceptance saves
+the clean name; existing accepted raw titles display cleanly without silently
+rewriting canonical data or manual descriptions.
+
+Receipt rows distinguish original OCR text from a proposed or accepted
+evidence-based initialism correction. **Recorded OCR variants** lists actual
+observations retained in that item's collaboration, grouped by reading with
+engine, pass, variant, run and original line text. Canonical text and model
+hypotheses are excluded from this list; a correction is never presented as a
+new OCR observation. Repeated observations remain inspectable without treating
+their count as independent agreement.
