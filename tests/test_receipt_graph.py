@@ -201,3 +201,46 @@ def test_descriptor_proposal_tracks_derivation_search_and_review():
     assert {'DERIVED_FROM', 'PROPOSED_SEARCH'} <= {e['kind'] for e in graph['edges'] if e['source'] == proposal['id']}
     assert any(e['kind'] == 'CONSIDERED_PROPOSAL' and e['target'] == proposal['id'] for e in graph['edges'])
     assert not any(e['kind'] == 'RECEIVED' and e['source'] == invocation['id'] for e in graph['edges'])
+
+
+def test_story_selects_latest_run_even_when_it_failed_and_keeps_items_separate(monkeypatch):
+    data = evidence()
+    data['collaborations'][0].update(completed_at='2026-10-01T12:00:00+00:00', id=1)
+    later = deepcopy(data['collaborations'][0])
+    later.update(completed_at='2026-10-02T12:00:00+00:00', id=2)
+    later['payload']['run_uuid'] = 'failed-latest'
+    later['payload']['decision'] = {'disposition': 'review', 'canonical_updated': False}
+    later['payload']['evidence_bundle']['sources'][0]['text'] = 'Latest reading'
+    data['collaborations'].append(later)
+    other = deepcopy(later)
+    other.update(completed_at='2026-09-01T12:00:00+00:00', id=3)
+    other['payload'].update(item_id=11, run_uuid='other-item')
+    data['items'].append({'id': 11, 'item_name': 'Other item'})
+    data['collaborations'].append(other)
+    result = g.build(data)
+    monkeypatch.setattr(web, 'read', lambda *a, **k: [{'graph': json.dumps(result), 'observed_at': 'now'}])
+    story = web.receipt('a'*64, perspective='story', offset=0, limit=1)
+    assert story['chronology_known'] is True
+    assert story['nodes'] and len(story['nodes']) > 1  # Story is scoped before pagination.
+    assert next(n for n in story['nodes'] if n['kind'] == 'Collaboration')['properties']['run_uuid'] == 'failed-latest'
+    assert {n['label'] for n in story['nodes'] if n['kind'] == 'Decision'} == {'review'}
+    assert {n['label'] for n in story['nodes'] if n['kind'] == 'Observation'} == {'Latest reading'}
+    assert {n['label'] for n in story['nodes'] if n['kind'] == 'Item'} == {'Cep Pic Med'}
+    assert len(story['runs']) == 2
+    historical = web.processing_story(result, story['item_id'], story['runs'][1]['id'])
+    assert {n['label'] for n in historical['nodes'] if n['kind'] == 'Observation'} == {'Oep Pic Med'}
+    other_item = next(i['id'] for i in story['items'] if i['label'] == 'Other item')
+    with pytest.raises(HTTPException):
+        web.processing_story(result, other_item, story['run_id'])
+
+
+def test_story_shows_recommendation_provenance_and_does_not_invent_chronology():
+    story = web.processing_story(g.build(evidence()))
+    assert not story['chronology_known']
+    path = set(story['path_ids'])
+    for kind in ['Observation', 'SearchResult', 'ModelInvocation', 'ModelReview', 'Decision']:
+        assert any(n['kind'] == kind and n['id'] in path for n in story['nodes'])
+    assert next(n for n in story['nodes'] if n['kind'] == 'Decision')['properties']['canonical_updated'] is False
+    assert web.processing_story(g.build({**evidence(), 'collaborations': []}))['nodes'] == []
+    with pytest.raises(HTTPException):
+        web.processing_story(g.build(evidence()), 'unrelated-item')

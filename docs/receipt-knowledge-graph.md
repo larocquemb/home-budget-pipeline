@@ -2,8 +2,17 @@
 
 The authenticated Ledger page `/ledger/graph` shows how receipt workers, OCR
 methods, model proposals, Brave searches and reviews contribute to a result.
-Three perspectives share the same evidence: receipt lineage and collaboration,
-operational topology, and merchant/item/category relationships. Select a node
+The default **Processing story** follows one item and collaboration run from OCR
+and receipt evidence through model expansion, Brave results and model verification
+to the final recommendation. Green borders highlight recorded supporting citations;
+expand alternatives to inspect other attempts. Item and run selectors keep older
+attempts separate. Completion timestamps select the latest run, including failures;
+older projections without timestamps explicitly report unknown completion order.
+The summary shows recorded token evidence, arithmetic checks, item duration and
+whether the canonical record changed. Model explanations remain reported claims.
+
+Three additional perspectives share the same evidence: receipt lineage and
+collaboration, operational topology, and merchant/item/category relationships. Select a node
 for its evidence, usage, timing, citations and links; use **Explore related
 receipts** to investigate a worker, method, model, merchant or category.
 

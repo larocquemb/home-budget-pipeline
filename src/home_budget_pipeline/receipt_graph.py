@@ -11,7 +11,7 @@ import os
 import re
 from urllib.parse import urlencode
 
-VERSION = 1
+VERSION = 2
 
 
 def encoded(value):
@@ -64,9 +64,9 @@ def worker(graph, parent, identity):
             graph.edge(w, 'RUNS_ON', n)
 
 
-def collaboration(graph, receipt, item, payload, skipped=()):
+def collaboration(graph, receipt, item, payload, skipped=(), completed_at=None, sequence=None):
     scope = (payload['run_uuid'], payload['item_id'])
-    run = graph.node('Collaboration', scope, 'Shared evidence', run_uuid=payload['run_uuid'],
+    run = graph.node('Collaboration', scope, 'Shared evidence', run_uuid=payload['run_uuid'], completed_at=completed_at, sequence=sequence,
                      item_seconds=payload.get('item_seconds'), prompt_version=payload.get('prompt_version'),
                      scoring_version=payload.get('scoring_version'), prompt_coverage=payload.get('prompt_coverage'),
                      discovery=payload.get('discovery'))
@@ -264,7 +264,7 @@ def build(data):
     for row in data.get('collaborations', []):
         p = row['payload']
         if p['item_id'] in items:
-            collaboration(graph, receipt, items[p['item_id']], p, row.get('summary', {}).get('skipped_profiles', []))
+            collaboration(graph, receipt, items[p['item_id']], p, row.get('summary', {}).get('skipped_profiles', []), row.get('completed_at'), row.get('id'))
     return graph.export()
 
 
@@ -279,7 +279,7 @@ def load(conn, sha):
     events = conn.execute('SELECT * FROM lineage.receipt_events WHERE source_sha256=%s ORDER BY occurred_at,id', (sha,)).fetchall()
     result_events = conn.execute('SELECT * FROM budget.ocr_result_events WHERE source_sha256=%s ORDER BY persisted_at,message_id', (sha,)).fetchall()
     items = conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=%s ORDER BY id', (expense['id'],)).fetchall() if expense else []
-    collaborations = conn.execute('SELECT c.payload,COALESCE(r.summary,\'{}\'::jsonb) AS summary FROM enrichment.receipt_collaborations c LEFT JOIN enrichment.receipt_collaboration_runs r USING(run_uuid) JOIN budget.expense_items i ON i.id=c.expense_item_id WHERE i.expense_pk=%s ORDER BY c.completed_at,c.id', (expense['id'],)).fetchall() if expense else []
+    collaborations = conn.execute('SELECT c.payload,c.completed_at,c.id,COALESCE(r.summary,\'{}\'::jsonb) AS summary FROM enrichment.receipt_collaborations c LEFT JOIN enrichment.receipt_collaboration_runs r USING(run_uuid) JOIN budget.expense_items i ON i.id=c.expense_item_id WHERE i.expense_pk=%s ORDER BY c.completed_at,c.id', (expense['id'],)).fetchall() if expense else []
     return {'receipt': receipt, 'expense': expense, 'items': items, 'ocr_runs': runs, 'ocr_passes': passes, 'events': events,
             'result_events': result_events, 'collaborations': collaborations}
 

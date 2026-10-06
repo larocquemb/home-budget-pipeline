@@ -15,6 +15,7 @@ from .render import page
 from .. import receipt_graph as graph
 
 PERSPECTIVES = {
+    'story': None,
     'lineage': None,
     'topology': {'Receipt', 'Message', 'MessageEvent', 'BrokerRoute', 'ResultMessage', 'ProcessingAttempt', 'AttemptEvent', 'Worker', 'Node', 'OCRRun', 'OCRPass', 'OCRMethod', 'Model', 'ModelInvocation', 'Provider', 'GPU', 'InferenceHost', 'ExtractionResult', 'Guardrail', 'Decision', 'Collaboration', 'PostgreSQLRecord'},
     'domain': {'Receipt', 'CanonicalReceipt', 'Merchant', 'Item', 'Category', 'ProductPage', 'SearchResult', 'Decision', 'Collaboration'},
@@ -85,15 +86,82 @@ def kubernetes_health():
             for p in rows if p['status'].get('phase') not in {'Succeeded', 'Failed'}]
 
 
+def processing_story(result, item_id='', run_id=''):
+    """Scope the whole snapshot before display; historical runs cannot mix evidence."""
+    nodes = {n['id']: n for n in result['nodes']}
+    edges = result['edges']
+    runs = [n for n in nodes.values() if n['kind'] == 'Collaboration']
+    item_for = {e['source']: e['target'] for e in edges if e['kind'] == 'ANALYZES'}
+    items = [nodes[key] for key in dict.fromkeys(item_for.values()) if key in nodes]
+    if item_id and item_id not in {n['id'] for n in items}:
+        raise HTTPException(422, 'Item is not part of this receipt collaboration')
+    # SQL completion time and row ID are authoritative, never UUID lexical order.
+    runs.sort(key=lambda n: (str(n['properties'].get('completed_at') or ''),
+                             n['properties'].get('sequence') or 0), reverse=True)
+    selected_item = item_id or (item_for.get(runs[0]['id'], '') if runs else '')
+    available = [r for r in runs if item_for.get(r['id']) == selected_item]
+    chosen = next((r for r in available if r['id'] == run_id), None) if run_id else next(iter(available), None)
+    if run_id and chosen is None:
+        raise HTTPException(422, 'Run is not part of this item')
+    info = {'items': [{'id': n['id'], 'label': n['label']} for n in items],
+            'runs': [{'id': n['id'], 'run_uuid': n['properties'].get('run_uuid'),
+                      'completed_at': n['properties'].get('completed_at')} for n in available],
+            'item_id': selected_item, 'run_id': chosen['id'] if chosen else '',
+            'chronology_known': bool(chosen and chosen['properties'].get('completed_at'))}
+    if not chosen:
+        return {**info, 'nodes': [], 'edges': [], 'path_ids': []}
+    ids = {chosen['id'], selected_item}
+    # Follow only run-owned outputs and explicitly recorded supporting entities.
+    follow = {'USES_EVIDENCE', 'HAS_IMAGE_REFERENCE', 'CONSIDERS', 'SEARCHED', 'HAS_INVOCATION',
+              'RESULTED_IN', 'SKIPPED', 'PRODUCED', 'USES_MODEL', 'BELONGS_TO', 'OBSERVED_GPU',
+              'LOCATED_ON', 'REFERENCES', 'RETURNED', 'EVALUATED', 'EXECUTED_BY', 'RUNS_ON'}
+    queue = [chosen['id']]
+    while queue:
+        source = queue.pop()
+        for e in edges:
+            if e['source'] == source and e['kind'] in follow and e['target'] not in ids:
+                ids.add(e['target'])
+                # OCR passes shared across runs must not pull in their other outputs.
+                if nodes[e['target']]['kind'] != 'Observation':
+                    queue.append(e['target'])
+    for e in edges:
+        if e['kind'] == 'PRODUCED' and e['target'] in ids and nodes[e['source']]['kind'] == 'OCRPass':
+            ids.add(e['source'])
+    scoped = [e for e in edges if e['source'] in ids and e['target'] in ids]
+    # A selected evidence path is explicit provenance, not an endorsement of model assertions.
+    path = {n for n in ids if nodes[n]['kind'] == 'Decision'}
+    path.update(e['target'] for e in scoped if e['kind'] == 'RECOMMENDS')
+    provenance = {'SUPPORTS', 'CITES', 'SELECTS', 'INFORMS', 'PRODUCED', 'RETURNED',
+                  'PROPOSED_SEARCH', 'DERIVED_FROM'}
+    changed = True
+    while changed:
+        before = len(path)
+        for e in scoped:
+            if e['kind'] in provenance and e['target'] in path:
+                path.add(e['source'])
+            if e['kind'] in {'CITES', 'DERIVED_FROM'} and e['source'] in path:
+                path.add(e['target'])
+        changed = len(path) != before
+    return {**info, 'nodes': [nodes[n] for n in nodes if n in ids], 'edges': scoped,
+            'path_ids': sorted(path)}
+
+
 @app.get(f'{BASE_PATH}/api/graph/receipts/{{sha}}')
 def receipt(sha: str, perspective: str = 'lineage', offset: int = Query(0, ge=0),
-            limit: int = Query(100, ge=1, le=200), _: dict = Depends(authenticated_identity)):
+            limit: int = Query(100, ge=1, le=200), item_id: str = '', run_id: str = '',
+            _: dict = Depends(authenticated_identity)):
     if perspective not in PERSPECTIVES or not graph.re.fullmatch('[0-9a-f]{64}', sha):
         raise HTTPException(422, 'Invalid receipt or perspective')
     rows = read('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.graph_json AS graph,s.observed_at AS observed_at', sha=sha)
     if not rows:
         raise HTTPException(404, 'Receipt not projected yet')
     result = json.loads(rows[0]['graph'])
+    if perspective == 'story':
+        story = processing_story(result, item_id, run_id)
+        for node in story['nodes']:
+            node['links'] = links(node)
+        return {**story, 'total_nodes': len(story['nodes']), 'offset': 0,
+                'observed_at': rows[0]['observed_at']}
     kinds = PERSPECTIVES[perspective]
     nodes = [n for n in result['nodes'] if kinds is None or n['kind'] in kinds]
     # Breadth-first order keeps connected steps visible on the first page.
