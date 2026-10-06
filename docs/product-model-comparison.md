@@ -440,7 +440,9 @@ does not override the evidence requirements of a new collaboration run.
 Models on your Mac are not automatically available on Arsene. The Job never
 pulls models. Qwen profiles containing `vl` are treated as vision capable by the
 default configuration; use explicit profiles for custom model names. GPU requests
-run sequentially and unload each model after its call. The managed Ollama host
+run sequentially and keep a requested model loaded for five minutes after each
+call to reuse it across stages; Ollama manages replacement when another model
+is requested. The managed Ollama host
 limits loaded models and parallel requests to one. Apply the updated host role
 with `make ollama-gitops-check` / `make ollama-gitops-apply`. No new replica count or
 worker CPU allocation is required.
@@ -508,6 +510,15 @@ before supplying full words for a grounded follow-up query or guiding Qwen.
 The discovery log records these probes as `relaxed_descriptive_queries`.
 Verified product evidence skips the expansion and proposal rounds and goes
 directly to Qwen review with the receipt images and OCR.
+
+If discovery remains unresolved, the fallback proposal prompt contains one
+citation per distinct OCR reading, rather than repeated engine observations.
+This round generates plausible full-word grocery search hypotheses without
+requiring prior search confirmation; its first query should omit the uncertain
+brand. Final review receives the full OCR evidence and still requires a verified
+retailer product page, original-item scoring and independent OCR support.
+Qwen requests keep the model loaded for five minutes after each call so adjacent
+stages can reuse it instead of paying the model load cost each time.
 
 Search hits that do not explain every descriptive receipt token are excluded
 from model discovery context, preventing brand-only hits from steering Qwen.

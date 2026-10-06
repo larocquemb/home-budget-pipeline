@@ -915,3 +915,43 @@ def test_relaxed_descriptor_retrieval_grounds_full_query_before_qwen(monkeypatch
     assert result['decision']['disposition'] == 'recommended'
     assert result['decision']['canonical_updated'] is False and calls == ['qwen']
     assert len(searches) == len(set(searches))
+
+
+def test_fallback_hypotheses_do_not_turn_repeated_ocr_into_votes(monkeypatch):
+    stages = []
+    evidence = bundle()
+    evidence['validations']['item_arithmetic'] = 'pass'
+    evidence['sources'].extend({'id': f'pass:repeat:{n}', 'kind': 'ocr_pass',
+        'engine': 'tesseract', 'text': 'Cep Pic Med'} for n in range(12))
+    def search(key, query, item, domain):
+        assert item == 'Cep Pic Med'
+        return [core.SearchResult(TITLE, URL, '', .9167)] if 'picante medium' in query.lower() else []
+    def request(profile, text, schema, images):
+        if schema == collab.EXPANSION_SCHEMA:
+            stages.append('expansion')
+            target = json.loads(text.splitlines()[-1])['target_reading']
+            return {'output': {'reading': target['reading'], 'queries': [target['reading']],
+                'source_ids': target['source_ids'][:1], 'reason': 'Unresolved literal reading'}}
+        if schema == collab.PROPOSAL_SCHEMA:
+            stages.append('proposal')
+            prompt = json.loads(text.splitlines()[-1])
+            assert 'receipt_sources' not in prompt and 'item' not in prompt
+            assert len(prompt['reading_hypotheses']) == 2
+            assert all(len(h['source_ids']) == 1 for h in prompt['reading_hypotheses'])
+            assert 'does not require an existing search' in text
+            assert 'first search must omit the uncertain leading brand' in text
+            assert 'a final product decision' in text
+            return {'output': {'reading': 'Possible expanded grocery item',
+                'queries': ['picante medium'], 'source_ids': [SOURCE], 'reason': 'Unverified style and size hypothesis'}}
+        stages.append('review')
+        assert TITLE in text and 'pass:repeat:11' in text
+        return {'output': review('qwen', refs=[SOURCE])['output']}
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(providers, 'request', request)
+    monkeypatch.setattr(shared, 'render_images', lambda _: ([{'id': 'image:1:1', 'data': 'image'}], []))
+    result = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'}, evidence,
+        [providers.Profile('qwen', 'qwen', 'local', vision=True)], 'key', .85, {'receipt': 'a.pdf'})
+    assert stages == ['expansion', 'expansion', 'proposal', 'review']
+    assert result['decision']['disposition'] == 'recommended'
+    assert result['decision']['canonical_updated'] is False
+    assert result['decision']['candidate_title'] == TITLE
