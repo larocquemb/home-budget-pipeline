@@ -334,11 +334,11 @@ def _item_reading_html(item: dict[str, Any]) -> str:
     if variants:
         result += f'<details><summary>Recorded OCR variants ({len(variants)})</summary><ul>'
         for variant in variants:
-            result += f'<li><strong>{esc(variant["reading"])}</strong><ul>'
+            result += f'<li><details><summary><strong>{esc(variant["reading"])}</strong> · {len(variant["observations"])} observations</summary><ul>'
             for source in variant['observations']:
                 label = ' · '.join(f'{key.replace("_", " ")}: {source[key]}' for key in ('engine', 'pass_id', 'variant', 'ocr_run_uuid', 'line_number') if source.get(key) is not None)
                 result += f'<li><small>{esc(label)}</small><br><code>{esc(source.get("text"))}</code></li>'
-            result += '</ul></li>'
+            result += '</ul></details></li>'
         result += '</ul></details>'
     return result
 
