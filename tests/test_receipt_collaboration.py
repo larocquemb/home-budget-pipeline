@@ -441,7 +441,7 @@ def test_qwen_first_skips_paid_models_only_with_complete_supported_evidence(monk
     if issue == 'image':
         monkeypatch.setattr(shared, 'render_images', lambda bundle: ([], [{'error_type': 'ImageError'}]))
     def search(key, query, item, domain):
-        if issue == 'expansion' and query.endswith('Pic Med'): return []
+        if issue == 'expansion' and (query.endswith('Pic Med') or query in {'site:sobeys.com pic', 'site:sobeys.com med'}): return []
         if issue == 'search' and query.endswith('Oep Pic Med'):
             raise OSError('unavailable')
         return [core.SearchResult(TITLE, URL, '', .9167)]
@@ -836,6 +836,8 @@ def test_brand_only_retailer_hits_do_not_steer_qwen_and_cannot_be_selected(monke
     assert result['decision']['disposition'] == 'review'
     assert result['decision']['candidate_id'] is None
     assert result['candidates'] == []
+    assert result['discovery']['relaxed_descriptive_queries'] == ['site:sobeys.com pic', 'site:sobeys.com med']
+    assert result['discovery']['grounded_descriptive_queries'] == []
     assert all(medicine_title not in text for text in calls)
 
 
@@ -882,3 +884,34 @@ def test_short_brand_discovery_keeps_both_tokens_in_grounded_queries(monkeypatch
     assert 'site:sobeys.com medicine' not in searches and 'site:sobeys.com media' not in searches
     assert payload['decision']['disposition'] == 'recommended'
     assert len(prompts) == 1 and payload['decision']['canonical_updated'] is False
+
+
+def test_relaxed_descriptor_retrieval_grounds_full_query_before_qwen(monkeypatch):
+    searches, calls = [], []
+    def search(key, query, item, domain):
+        searches.append(query)
+        assert item == 'Cep Pic Med' and domain == 'sobeys.com'
+        if query == 'site:sobeys.com pic':
+            return [core.SearchResult('Picante Medium Salsa Recipes', 'https://sobeys.com/recipes/salsa', '', 0)]
+        if query == 'site:sobeys.com picante medium':
+            return [core.SearchResult(TITLE, URL, '', .9167)]
+        return [core.SearchResult('Medicine', 'https://sobeys.com/category/medicine', '', 0)]
+    def request(profile, text, schema, images):
+        calls.append(profile.provider)
+        assert profile.provider == 'qwen' and 'Medicine' not in text
+        assert TITLE in text and images
+        return {'output': review('qwen', refs=[SOURCE])['output']}
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    monkeypatch.setattr(providers, 'request', request)
+    monkeypatch.setattr(shared, 'render_images', lambda _: ([{'id': 'image:1:1', 'data': 'image'}], []))
+    evidence = bundle()
+    evidence['validations']['item_arithmetic'] = 'pass'
+    result = collab.collaborate_item({'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'}, evidence,
+        [providers.Profile('qwen', 'qwen', 'local', vision=True)], 'key', .85, {'receipt': 'a.pdf'})
+    assert result['discovery']['relaxed_descriptive_queries'] == ['site:sobeys.com pic', 'site:sobeys.com med']
+    assert result['discovery']['grounded_descriptive_queries'] == ['site:sobeys.com picante medium']
+    assert result['discovery']['expansion_calls'] == 0
+    assert result['decision']['candidate_title'] == TITLE
+    assert result['decision']['disposition'] == 'recommended'
+    assert result['decision']['canonical_updated'] is False and calls == ['qwen']
+    assert len(searches) == len(set(searches))

@@ -464,6 +464,30 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             errors.append({'stage': 'descriptive_search', 'query': query, 'error_type': type(exc).__name__})
         finally:
             brave_seconds += time.monotonic() - query_started
+    # An abbreviated conjunction can miss indexed full product words. Relax
+    # retrieval only when no hit explains the whole suffix; validation still
+    # requires every descriptive token on the same result.
+    relaxed_queries = []
+    if not any(descriptive_token_evidence(h['reading'], row['store_name'], r)
+               for h in hypotheses[:8] for _, r in baseline):
+        for hypothesis in hypotheses[:8]:
+            words = re.findall(r'[a-z0-9]+', hypothesis['reading'].lower())[1:]
+            for word in dict.fromkeys(words):
+                if len(word) < 3 or word.isdigit() or word in core.NOISE_TOKENS:
+                    continue
+                query = core.product_query(word, row['store_name'])
+                if query and query not in relaxed_queries:
+                    relaxed_queries.append(query)
+        for query in relaxed_queries[:3]:
+            query_started = time.monotonic()
+            try:
+                if query not in cache:
+                    cache[query] = core.brave_candidates(api_key, query, row['item_name'], core.retailer_domain(row['store_name']))
+                    baseline.extend((query, result) for result in cache[query])
+            except Exception as exc:
+                errors.append({'stage': 'relaxed_descriptive_search', 'query': query, 'error_type': type(exc).__name__})
+            finally:
+                brave_seconds += time.monotonic() - query_started
     grounded_queries = []
     for hypothesis in hypotheses[:8]:
         for _, result in list(baseline):
@@ -591,6 +615,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     discovery = {'stop_reason': 'verified_search_match' if verified_expansion else 'expansion_budget_exhausted',
         'expansion_calls': sum(len(e['attempts']) for e in expansions),
         'descriptive_queries': descriptive_queries[:3],
+        'relaxed_descriptive_queries': relaxed_queries[:3],
         'grounded_descriptive_queries': grounded_queries[:3],
         'verified_literal_match': verified_literal,
         'shared_proposal_round': 'skipped_verified_match' if verified_expansion else 'fallback'}
@@ -671,7 +696,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, blocking, complete_context, min_provider_families=min_families)
     decision['recovered_discovery_errors'] = recovered
     decision['review_policy'] = review_policy
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v11', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v12', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,

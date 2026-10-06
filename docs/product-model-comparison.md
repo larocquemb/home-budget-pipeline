@@ -501,6 +501,14 @@ filters short or noise tokens. Thus `ep Pic Med` still requires evidence for
 both `Pic` and `Med`; a match for `medicine` alone cannot produce a grounded
 query. Matches for `picante` and `medium` preserve both words in the query.
 
+When the combined suffix search produces no hit explaining all descriptive
+tokens, discovery tries up to three distinct individual descriptor searches.
+These broader hits still must explain every descriptor on the same result
+before supplying full words for a grounded follow-up query or guiding Qwen.
+The discovery log records these probes as `relaxed_descriptive_queries`.
+Verified product evidence skips the expansion and proposal rounds and goes
+directly to Qwen review with the receipt images and OCR.
+
 Search hits that do not explain every descriptive receipt token are excluded
 from model discovery context, preventing brand-only hits from steering Qwen.
 Selectable review products must pass the original-item score threshold, explain
