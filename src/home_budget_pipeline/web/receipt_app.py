@@ -24,6 +24,7 @@ from .app import (
     query_service,
 )
 from .queries import LedgerQueryService, Page, RecommendationConflict, recommendation_candidate
+from ..product_labels import product_name, corrected_reading, ocr_variants
 from .render import esc, money, page, pager
 from . import receipt_graph as _receipt_graph_routes
 
@@ -146,6 +147,7 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
                 'candidate_title': candidate.get('title') or decision.get('candidate_title'),
                 'candidate_url': candidate.get('url') or decision.get('candidate_url'),
                 'evidence': candidate.get('evidence'), 'eligible': eligible,
+                'ocr_variants': ocr_variants(payload),
                 'accepted_at': row.get('accepted_at'), 'reasons': decision.get('reasons') or [],
             }
         expense["items"] = tuple(
@@ -301,7 +303,7 @@ def _enrichment_html(item: dict[str, Any]) -> str:
     confidence = enrichment.get("confidence")
     confidence_text = f"{float(confidence) * 100:.1f}%" if confidence is not None else ""
     query = esc(enrichment.get("search_query"))
-    candidate = esc(enrichment.get("candidate_title"))
+    candidate = esc(product_name(enrichment.get("candidate_title"), enrichment.get("candidate_url")))
     candidate_url = str(enrichment.get("candidate_url") or "")
     product_link = (
         f'<a href="{html.escape(candidate_url, quote=True)}" target="_blank" rel="noopener">{candidate or "Verified product"}</a>'
@@ -313,7 +315,41 @@ def _enrichment_html(item: dict[str, Any]) -> str:
         + (f"<br>{product_link}" if product_link else "")
         + (f"<details><summary>Search query</summary><code>{query}</code></details>" if query else "")
     )
+    raw_title = enrichment.get('candidate_title')
+    if raw_title and raw_title != product_name(raw_title, enrichment.get('candidate_url')):
+        details += f'<details><summary>Source webpage title</summary>{esc(raw_title)}</details>'
     return details
+
+
+def _item_reading_html(item: dict[str, Any]) -> str:
+    original = str(item.get('item_name') or '')
+    rec = item.get('recommendation') or {}
+    accepted = bool(rec.get('accepted_at'))
+    correction = corrected_reading(original, rec.get('evidence')) if rec.get('eligible') or accepted else None
+    result = f'<span>{esc(original)}</span>'
+    if correction:
+        label = 'Corrected reading' if accepted else 'Proposed corrected reading'
+        result = f'<small class="muted">Original OCR</small><br>{esc(original)}<br><small>{label}</small><br><strong>{esc(correction)}</strong>'
+    variants = rec.get('ocr_variants') or []
+    if variants:
+        result += f'<details><summary>Recorded OCR variants ({len(variants)})</summary><ul>'
+        for variant in variants:
+            result += f'<li><details><summary><strong>{esc(variant["reading"])}</strong> · {len(variant["observations"])} observations</summary><ul>'
+            for source in variant['observations']:
+                label = ' · '.join(f'{key.replace("_", " ")}: {source[key]}' for key in ('engine', 'pass_id', 'variant', 'ocr_run_uuid', 'line_number') if source.get(key) is not None)
+                result += f'<li><small>{esc(label)}</small><br><code>{esc(source.get("text"))}</code></li>'
+            result += '</ul></details></li>'
+        result += '</ul></details>'
+    return result
+
+
+def _item_description(item: dict[str, Any]) -> str | None:
+    description = item.get('product_description')
+    for record in (item.get('enrichment') or {}, item.get('recommendation') or {}):
+        if (description and description == record.get('candidate_title')
+                and item.get('product_url') == record.get('candidate_url')):
+            return product_name(description, item.get('product_url'))
+    return description
 
 
 def _recommendation_html(item: dict[str, Any], source_sha256: str) -> str:
@@ -323,7 +359,7 @@ def _recommendation_html(item: dict[str, Any], source_sha256: str) -> str:
     score = rec.get('confidence')
     confidence = f"{float(score)*100:.1f}%" if isinstance(score, (int, float)) else 'unknown'
     url = str(rec.get('candidate_url') or '')
-    title = esc(rec.get('candidate_title') or 'No product recommendation')
+    title = esc(product_name(rec.get('candidate_title'), url) or 'No product recommendation')
     if urlparse(url).scheme in {'http', 'https'} and urlparse(url).netloc:
         title = f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{title}</a>'
     state = 'Accepted recommendation' if rec.get('accepted_at') else 'Saved recommendation'
@@ -332,10 +368,10 @@ def _recommendation_html(item: dict[str, Any], source_sha256: str) -> str:
     if tokens:
         result += '<br>' + esc(' · '.join(f"{t.get('token')} → {t.get('matched')} ({t.get('weight')})" for t in tokens))
     result += f'<details><summary>Recommendation evidence</summary><p>Run: {esc(rec["run_uuid"])}<br>Completed: {esc(rec.get("completed_at"))}</p>'
-    result += f'<pre>{esc(json.dumps({"evidence":rec.get("evidence"), "reasons":rec.get("reasons")}, indent=2))}</pre></details>'
+    result += f'<pre>{esc(json.dumps({"source_title":rec.get("candidate_title"), "evidence":rec.get("evidence"), "reasons":rec.get("reasons")}, indent=2))}</pre></details>'
     if rec.get('accepted_at'):
         result += f'<small>Accepted {esc(rec["accepted_at"])}</small>'
-        if (item.get('product_description'), item.get('product_url')) != (rec.get('candidate_title'), rec.get('candidate_url')):
+        if item.get('product_url') != rec.get('candidate_url') or item.get('product_description') not in {rec.get('candidate_title'), product_name(rec.get('candidate_title'), rec.get('candidate_url'))}:
             result += '<p class="muted">Acceptance recorded; the current description differs.</p>'
     elif rec.get('eligible'):
         values = {'expense_item_id': item['expense_item_id'], 'collaboration_id': rec['id'],
@@ -383,8 +419,8 @@ def receipt_page(
     for item in expense.get("items", ()):
         item_rows.append(
             "<tr>"
-            f"<td>{esc(item.get('item_name'))}</td>"
-            f"<td>{esc(item.get('product_description'))}</td>"
+            f"<td>{_item_reading_html(dict(item))}</td>"
+            f"<td>{esc(_item_description(dict(item)))}</td>"
             f"<td>{_enrichment_html(dict(item))}{_recommendation_html(dict(item), source_sha256)}</td>"
             f"<td>{esc(item.get('budget_category'))}</td>"
             f"<td>{esc(item.get('category_group_name'))}</td>"

@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 from home_budget_pipeline.web.queries import LedgerQueryService, RecommendationConflict
 from home_budget_pipeline.web.receipt_app import _receipt_detail
 from home_budget_pipeline import receipt_graph
+from home_budget_pipeline.product_labels import product_name
 from home_budget_pipeline.web.receipt_graph import processing_story
 from test_receipt_recommendation_acceptance import payload
 
@@ -29,6 +30,8 @@ def receipt():
         conn.execute("INSERT INTO budget.receipt_evidence(expense_pk,evidence_type,source_sha256,source_reference) VALUES (%s,'scanned',%s,'acceptance.pdf')", (expense,source))
         items = [conn.execute("INSERT INTO budget.expense_items(expense_pk,item_name,unit_qty,unit_cost,line_total) VALUES (%s,'Cep Pic Med',1,6.49,6.49) RETURNING id",(expense,)).fetchone()['id'] for _ in range(2)]
         p = payload();p.update(run_uuid=run,item_id=items[0])
+        raw='Buy '+p['decision']['candidate_title']+' | Sobeys Inc.'
+        p['decision']['candidate_title']=p['search_results'][0]['title']=raw
         collaboration = conn.execute('INSERT INTO enrichment.receipt_collaborations(run_uuid,expense_item_id,payload) VALUES (%s,%s,%s) RETURNING id', (run,items[0],Jsonb(p))).fetchone()['id']
     service = LedgerQueryService(connect=lambda: psycopg.connect(dsn,row_factory=dict_row))
     yield service,source,expense,items,collaboration,p
@@ -52,7 +55,8 @@ def test_acceptance_updates_one_duplicate_item_and_retains_audit_and_graph_prove
     assert repeat['already_accepted'] and repeat['audit_id'] == first['audit_id']
     rows = service._fetch('SELECT item_name,line_total,product_description,product_url FROM budget.expense_items WHERE expense_pk=%s ORDER BY id',(expense,))
     assert all(r['item_name']=='Cep Pic Med' and r['line_total']==Decimal('6.49') for r in rows)
-    assert rows[0]['product_description']==p['decision']['candidate_title']
+    assert rows[0]['product_description']==product_name(p['decision']['candidate_title'],p['decision']['candidate_url'])
+    assert service._fetch('SELECT candidate_title FROM budget.product_enrichment_results WHERE expense_item_id=%s',(items[0],))[0]['candidate_title']==p['decision']['candidate_title']
     assert rows[1]['product_description'] is None and rows[1]['product_url'] is None
     audits = service._fetch('SELECT * FROM budget.expense_item_description_audit WHERE expense_item_id=%s',(items[0],))
     assert len(audits)==1 and audits[0]['actor_user']=='paul' and audits[0]['old_description'] is None
@@ -102,3 +106,15 @@ def test_acceptance_rejects_stale_or_ineligible_requests_and_rolls_back(receipt,
     assert rows[0]['product_description']==('Manual correction' if conflict=='changed_item' else None)
     assert not service._fetch('SELECT id FROM budget.expense_item_description_audit WHERE expense_item_id=%s',(items[0],))
     assert not service._fetch('SELECT id FROM budget.product_enrichment_results WHERE expense_item_id=%s',(items[0],))
+
+
+def test_old_acceptances_with_raw_webpage_titles_remain_idempotent(receipt):
+    service,source,expense,items,collaboration,p=receipt
+    first=accept(receipt)
+    with service._connect() as conn:
+        conn.execute('UPDATE budget.expense_items SET product_description=%s WHERE id=%s', (p['decision']['candidate_title'],items[0]))
+        conn.execute("UPDATE lineage.receipt_events SET payload=jsonb_set(payload,'{product_description}',%s) WHERE source_sha256=%s", (Jsonb(p['decision']['candidate_title']),source))
+    repeat=accept(receipt)
+    assert repeat['already_accepted'] and repeat['audit_id']==first['audit_id']
+    assert repeat['product_description']==p['decision']['candidate_title']
+    assert len(service._fetch('SELECT id FROM budget.expense_item_description_audit WHERE expense_item_id=%s',(items[0],)))==1

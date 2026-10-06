@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 from .app import app, BASE_PATH, authenticated_identity
 from .render import page
 from .. import receipt_graph as graph
+from ..product_labels import product_name
 
 PERSPECTIVES = {
     'story': None,
@@ -143,7 +144,9 @@ def processing_story(result, item_id='', run_id=''):
             if e['kind'] in {'CITES', 'DERIVED_FROM'} and e['source'] in path:
                 path.add(e['target'])
         changed = len(path) != before
-    return {**info, 'nodes': [nodes[n] for n in nodes if n in ids], 'edges': scoped,
+    decision = next((nodes[n] for n in ids if nodes[n]['kind'] == 'Decision'), None)
+    label = product_name(decision['properties'].get('candidate_title'), decision['properties'].get('candidate_url')) if decision else ''
+    return {**info, 'product_name': label, 'nodes': [nodes[n] for n in nodes if n in ids], 'edges': scoped,
             'path_ids': sorted(path)}
 
 
