@@ -509,6 +509,15 @@ The discovery log records these probes as `relaxed_descriptive_queries`.
 Verified product evidence skips the expansion and proposal rounds and goes
 directly to Qwen review with the receipt images and OCR.
 
+If discovery remains unresolved, the fallback proposal prompt contains one
+citation per distinct OCR reading, rather than repeated engine observations.
+This round generates plausible full-word grocery search hypotheses without
+requiring prior search confirmation; its first query should omit the uncertain
+brand. Final review receives the full OCR evidence and still requires a verified
+retailer product page, original-item scoring and independent OCR support.
+Qwen requests keep the model loaded for five minutes after each call so adjacent
+stages can reuse it instead of paying the model load cost each time.
+
 Search hits that do not explain every descriptive receipt token are excluded
 from model discovery context, preventing brand-only hits from steering Qwen.
 Selectable review products must pass the original-item score threshold, explain

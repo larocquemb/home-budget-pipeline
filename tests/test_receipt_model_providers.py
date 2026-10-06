@@ -37,7 +37,7 @@ def test_invalid_profiles_are_rejected_before_requests(monkeypatch, rows):
     with pytest.raises(ValueError): providers.profiles()
 
 
-def test_qwen_text_and_vision_requests_use_explicit_budgets_and_release_model(monkeypatch):
+def test_qwen_text_and_vision_requests_use_explicit_budgets_and_reuse_model(monkeypatch):
     calls = []
     monkeypatch.setattr(providers, 'post', lambda url, body, headers=None: calls.append(body) or {
         'message': {'content': json.dumps(OUTPUT)}, 'done': True, 'done_reason': 'stop',
@@ -49,7 +49,7 @@ def test_qwen_text_and_vision_requests_use_explicit_budgets_and_release_model(mo
     assert 'images' not in calls[0]['messages'][0]
     assert calls[1]['messages'][0]['images'] == ['encoded-image']
     assert calls[1]['options'] == {'temperature': 0, 'num_ctx': 16384, 'num_predict': 4096}
-    assert calls[1]['keep_alive'] == 0
+    assert calls[1]['keep_alive'] == '5m'
     assert json.dumps(PROPOSAL_SCHEMA, separators=(',', ':')) in calls[0]['messages'][0]['content']
     assert calls[0]['format'] == PROPOSAL_SCHEMA
 
