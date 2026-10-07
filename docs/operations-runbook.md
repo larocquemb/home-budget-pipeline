@@ -115,6 +115,7 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make enrich-products COMPARE=1 LIMIT=10 RECEIPT='receipt.pdf'` | Compare OpenAI and Qwen matches without changing accepted products; see [model comparison](product-model-comparison.md). |
 | `make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf'` | Save a Qwen-first collaborative recommendation for review in Ledger. Paid fallback is opt-in with `PAID_FALLBACK=1`. |
 | `make enrich-products COLLABORATE=1 LIMIT=1 DRY_RUN=1` | Validate the Kubernetes Job without creating it or calling providers. |
+| `make enrich-products COLLABORATE=1 LIMIT=1 REFRESH=1` | Deliberately include accepted items and refresh Brave search evidence. Default runs skip accepted items and reuse persistent search results. |
 | `make receipts-graph` | Refresh the Neo4j projection from retained PostgreSQL evidence, including recommendations and acceptance events. |
 | `make receipts-publish NODE=longbow` | Start and follow a receipt publisher Job on Longbow using the live `receipt-processor` CronJob. Omit `NODE` to let Kubernetes select a node. |
 | `make receipts-worker-test NODE=longbow` | Run a temporary OCR consumer on Longbow using the live `receipt-worker` Deployment configuration. Ctrl+C deletes the Job and initiates graceful worker shutdown. |

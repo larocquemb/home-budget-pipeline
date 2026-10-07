@@ -1,4 +1,47 @@
-# Compare OpenAI and Qwen product matches
+# Product comparison and receipt collaboration
+
+## Query caching and accepted items
+
+Brave raw search results are persisted in `enrichment.brave_query_cache` and reused
+across items and jobs. The key includes the exact trimmed query, endpoint/version,
+country, language and result count. API keys are never stored. Results are rescored
+against each item's original text and retailer; a cached score from another item
+is never reused as proof. Positive results expire after 90 days and empty
+results after one hour. Set `BRAVE_CACHE_DAYS=180` on the Make command to retain
+newly fetched positive responses longer (1–3650 days). Existing entries keep
+the expiry recorded when fetched; changing the setting does not rewrite history.
+Failed requests are not cached. Concurrent jobs serialize
+a shared cache miss to avoid duplicate requests.
+
+Normal enrichment and collaboration skip accepted items with complete product
+fields before applying `LIMIT`, including receipt-scoped runs. Comparison mode
+deliberately still includes accepted items to compare both models. In collaboration,
+a skipped accepted item makes no image, model or search request. Cached Brave
+results do not suppress Qwen processing for pending items.
+
+```sh
+# Process pending items using cached search evidence where available.
+make enrich-products COLLABORATE=1 LIMIT=100 RECEIPT='receipt.pdf'
+# Deliberately include accepted items and fetch fresh search evidence.
+make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf' REFRESH=1
+```
+
+`REFRESH=1` can incur fresh API calls. It retains normal review/acceptance
+requirements and deduplicates a repeated query within the job. With `COMPARE=1`,
+it refreshes search evidence without changing accepted products. The CLI equivalent
+is `ENRICHMENT_REFRESH=1`. `DRY_RUN=1` on the Make target validates the Job and
+makes no provider or cache calls; CLI runs without `--write-db` still perform
+searches and populate the query cache, but do not save product decisions.
+
+`enrichment_brave_cache` logs identify `memory_hit`, `persistent_hit`, `miss` or
+`refresh`, with original fetch time and item/run identifiers where available.
+Collaboration and comparison payloads retain cache provenance; summaries report
+`brave_api_requests` (request attempts) and `brave_cache_hits`. The graph's search
+queries retain cache status and fetch time. Reused evidence is historical evidence,
+not another independent search result. The cache table is created additively for
+existing deployments when a job starts and is included in database bootstrap.
+
+## Paired comparison
 
 Use `make enrich-products COMPARE=1` to run both models on the **same database
 receipt items**. This is product enrichment after OCR, not a comparison of OCR

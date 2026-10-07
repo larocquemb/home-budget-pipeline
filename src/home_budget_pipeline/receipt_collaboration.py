@@ -830,22 +830,31 @@ def run(*, dsn, api_key, limit, threshold, write_db, item_ids=()):
              'profiles': [asdict(p) for p in profiles], 'skipped_profiles': skipped, 'receipts': []}
     comparison.emit('enrichment_collaboration_started', stats)
     receipt_timings = {}
-    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+    from .brave_query_cache import BraveQueryCache, refresh_requested
+    refresh = refresh_requested()
+    with psycopg.connect(dsn, row_factory=dict_row) as conn, BraveQueryCache(dsn, refresh=refresh) as query_cache:
         rows = conn.execute('''SELECT i.id, i.item_name, i.unit_qty, i.unit_cost, i.line_total,
             e.id AS receipt_id, e.store_name, e.receipt_filename, e.source_reference,
             e.receipt_item_subtotal,e.receipt_gst,e.receipt_pst,e.receipt_discount_total,e.expense_total,e.total_recon_diff,
             (SELECT count(*) FROM budget.expense_items ri WHERE ri.expense_pk=e.id) AS receipt_item_count
             FROM budget.expense_items i JOIN budget.expenses e ON e.id=i.expense_pk
-            WHERE e.store_name ILIKE ANY(%s) AND (%s OR i.id=ANY(%s)) ORDER BY i.id LIMIT %s''',
-            ([f'%{name}%' for name in core.RETAILER_DOMAINS], not item_ids, list(item_ids), limit)).fetchall()
+            WHERE e.store_name ILIKE ANY(%s) AND (%s OR i.id=ANY(%s))
+            AND (%s OR NOT (COALESCE(i.product_description,'')<>'' AND COALESCE(i.product_url,'')<>''
+                AND EXISTS (SELECT 1 FROM budget.product_enrichment_results accepted
+                    WHERE accepted.expense_item_id=i.id AND accepted.status='accepted')))
+            ORDER BY i.id LIMIT %s''',
+            ([f'%{name}%' for name in core.RETAILER_DOMAINS], not item_ids, list(item_ids), refresh, limit)).fetchall()
         conn.commit()
         for row in rows:
             context = {'run_uuid': run_id, 'receipt_id': row['receipt_id'], 'item_id': row['id'],
                 'item_name': row['item_name'], 'receipt': row['receipt_filename'] or row['source_reference']}
+            query_cache.context = context
+            query_cache.observations.clear()
             bundle = shared.load(conn, row)
             priors = core.accepted_search_priors(conn, row['store_name'])
             conn.commit()
             payload = collaborate_item(row, bundle, profiles, api_key, threshold, context, priors)
+            payload['brave_cache'] = list(query_cache.observations)
             if write_db:
                 conn.execute('INSERT INTO enrichment.receipt_collaborations (run_uuid,expense_item_id,payload) VALUES (%s,%s,%s)',
                              (run_id, row['id'], Jsonb(payload)))
@@ -863,6 +872,9 @@ def run(*, dsn, api_key, limit, threshold, write_db, item_ids=()):
             timing['complete_receipt'] = timing['selected_items'] == timing['receipt_item_count']
             comparison.emit('enrichment_receipt_timing', timing)
         stats['receipts'] = list(receipt_timings.values())
+        stats['brave_api_requests'] = query_cache.requests
+        stats['brave_cache_hits'] = query_cache.hits
+        stats['refresh'] = refresh
         if write_db:
             conn.execute('INSERT INTO enrichment.receipt_collaboration_runs (run_uuid,summary) VALUES (%s,%s)', (run_id, Jsonb(stats)))
             conn.commit()

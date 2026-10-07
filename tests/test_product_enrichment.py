@@ -53,8 +53,8 @@ def test_model_search_scope_is_not_duplicated_or_redirected():
 
 def test_pending_query_does_not_reprocess_existing_review_results():
     source = inspect.getsource(product_enrichment.run)
-    assert 'missing_filter = "TRUE" if item_ids else' in source
-    assert 'result_filter = "" if item_ids else' in source
+    assert 'missing_filter = "TRUE" if item_ids or refresh else' in source
+    assert 'result_filter = "" if item_ids or refresh else' in source
 
 
 def test_ai_product_queries_returns_bounded_structured_expansions():
@@ -172,7 +172,7 @@ def test_unmatched_variant_cannot_reach_default_acceptance_threshold():
                            'https://sobeys.com/products/salsa') < .85
 
 
-def test_normal_enrichment_rechecks_stale_cache_and_scores_original_text(monkeypatch):
+def test_normal_enrichment_rechecks_stale_cache_and_scores_original_text(monkeypatch, mock_brave_query_cache):
     import psycopg
     class Connection:
         def __enter__(self): return self

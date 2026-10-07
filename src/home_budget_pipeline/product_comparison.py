@@ -194,7 +194,8 @@ def baseline_search(item: str, merchant: str, api_key: str, cache: dict, prior_m
     results = []
     for query in dict.fromkeys(queries):
         if query:
-            cache[query] = core.brave_candidates(api_key, query, item, core.retailer_domain(merchant))
+            if query not in cache:
+                cache[query] = core.brave_candidates(api_key, query, item, core.retailer_domain(merchant))
             results.extend((query, r) for r in cache[query])
     return results
 
@@ -229,7 +230,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
     if not os.getenv("OPENAI_API_KEY", "").strip():
         raise RuntimeError("OPENAI_API_KEY is required to compare both providers")
     run_id = str(uuid.uuid4())
-    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+    from .brave_query_cache import BraveQueryCache, refresh_requested
+    with psycopg.connect(dsn, row_factory=dict_row) as conn, BraveQueryCache(dsn, refresh=refresh_requested()) as query_cache:
         rows = conn.execute("""
             SELECT i.id, i.item_name, e.id AS receipt_id, e.store_name, e.receipt_filename, e.source_reference,
                    (SELECT count(*) FROM budget.expense_items ri WHERE ri.expense_pk=e.id) AS receipt_item_count
@@ -251,6 +253,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                        "receipt_id": row["receipt_id"],
                        "threshold": threshold, "scoring_version": "receipt-evidence-v2"}
             search_cache = {}
+            query_cache.context = context
+            query_cache.observations.clear()
             priors = core.accepted_search_priors(conn, row['store_name'])
             learned = core.learned_discovery(row['item_name'], row['store_name'], priors)
             conn.commit()
@@ -279,7 +283,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                     "prompt_version": "product-queries-v3",
                     "shared_brave_seconds": brave_seconds, "baseline_error_type": baseline_error,
                     "learned_searches": learned,
-                    "item_seconds": round(time.monotonic() - item_started, 3)}
+                    "item_seconds": round(time.monotonic() - item_started, 3),
+                    "brave_cache": list(query_cache.observations)}
             if write_db:
                 conn.execute("""INSERT INTO enrichment.product_comparisons
                     (run_uuid, expense_item_id, payload) VALUES (%s, %s, %s)""",
@@ -302,6 +307,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
             timing["complete_receipt"] = timing["selected_items"] == timing["receipt_item_count"]
             emit("enrichment_receipt_timing", timing)
         stats["receipts"] = list(receipts.values())
+        stats['brave_api_requests'] = query_cache.requests
+        stats['brave_cache_hits'] = query_cache.hits
         if write_db:
             conn.execute("INSERT INTO enrichment.product_comparison_runs (run_uuid, summary) VALUES (%s, %s)",
                          (run_id, Jsonb(stats)))

@@ -414,7 +414,7 @@ def test_large_verified_pdf_is_rendered_from_stream(monkeypatch, tmp_path):
     assert not images and errors[0]['reason'] == 'source_too_large'
 
 
-def test_collaboration_persists_only_evidence_and_run_summary(monkeypatch, capsys):
+def test_collaboration_persists_only_evidence_and_run_summary(monkeypatch, capsys, mock_brave_query_cache):
     import psycopg
     calls = []
     row = {'id': 42, 'receipt_id': 7, 'item_name': 'Cep Pic Med', 'store_name': 'Sobeys',

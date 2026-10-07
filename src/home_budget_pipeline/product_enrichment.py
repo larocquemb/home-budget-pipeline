@@ -288,14 +288,32 @@ def brave_search(api_key: str, query: str, item_name: str, domain: str) -> Optio
     return max(brave_candidates(api_key, query, item_name, domain), key=lambda result: result.score, default=None)
 
 
-def brave_candidates(api_key: str, query: str, item_name: str, domain: str) -> list[SearchResult]:
+def brave_query_results(api_key: str, query: str, *, timeout: float | None = None) -> list[dict]:
+    from .brave_query_cache import ACTIVE_CACHE
+    cache = ACTIVE_CACHE.get()
+    if cache is not None:
+        return cache.get(query, lambda: _fetch_brave_query(api_key, query, timeout=timeout))
+    return _fetch_brave_query(api_key, query, timeout=timeout)
+
+
+def _fetch_brave_query(api_key: str, query: str, *, timeout: float | None = None) -> list[dict]:
     url = "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode({"q": query, "count": 10, "country": "ca", "search_lang": "en"})
     request = urllib.request.Request(url, headers={"X-Subscription-Token": api_key, "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=float(os.getenv("BRAVE_TIMEOUT_SECONDS", "20"))) as response:
+    with urllib.request.urlopen(request, timeout=timeout if timeout is not None else float(os.getenv("BRAVE_TIMEOUT_SECONDS", "20"))) as response:
         payload = json.load(response)
+    if not isinstance(payload, dict) or payload.get('error') or payload.get('type') == 'ErrorResponse':
+        raise ValueError('Brave returned an error response')
+    rows = payload.get('web', {}).get('results', [])
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError('Invalid Brave search results')
+    return [{key: str(row.get(field) or '') for key, field in
+             [('title', 'title'), ('url', 'url'), ('snippet', 'description')]} for row in rows]
+
+
+def brave_candidates(api_key: str, query: str, item_name: str, domain: str) -> list[SearchResult]:
     candidates = []
-    for row in payload.get("web", {}).get("results", []):
-        title, candidate_url, snippet = row.get("title", ""), row.get("url", ""), row.get("description", "")
+    for row in brave_query_results(api_key, query):
+        title, candidate_url, snippet = row['title'], row['url'], row['snippet']
         candidates.append(SearchResult(title, candidate_url, snippet, candidate_score(item_name, domain, title, candidate_url, snippet)))
     return candidates
 
@@ -305,26 +323,32 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
     from psycopg.rows import dict_row
 
     stats = {"considered": 0, "db_hits": 0, "searched": 0, "ai_queries": 0, "ai_expanded": 0, "accepted": 0, "review": 0, "unsupported": 0}
-    with psycopg.connect(dsn, row_factory=dict_row) as conn:
-        result_filter = "" if item_ids else """AND NOT EXISTS (
+    from .brave_query_cache import BraveQueryCache, refresh_requested
+    with psycopg.connect(dsn, row_factory=dict_row) as conn, BraveQueryCache(dsn, refresh=refresh_requested()) as query_cache:
+        refresh = refresh_requested()
+        result_filter = "" if item_ids or refresh else """AND NOT EXISTS (
                    SELECT 1 FROM budget.product_enrichment_results r WHERE r.expense_item_id=i.id
                )"""
         item_filter = "AND i.id = ANY(%s)" if item_ids else ""
-        missing_filter = "TRUE" if item_ids else "(i.product_description IS NULL OR i.product_url IS NULL)"
+        missing_filter = "TRUE" if item_ids or refresh else "(i.product_description IS NULL OR i.product_url IS NULL)"
         params = ([f"%{name}%" for name in RETAILER_DOMAINS],)
         if item_ids:
             params += (list(item_ids),)
-        params += (limit,)
+        params += (refresh, limit)
         rows = conn.execute(f"""
             SELECT i.id, i.item_name, e.store_name
               FROM budget.expense_items i JOIN budget.expenses e ON e.id=i.expense_pk
              WHERE {missing_filter} {result_filter}
                AND (e.store_name ILIKE ANY(%s)) {item_filter}
+               AND (%s OR NOT (COALESCE(i.product_description,'')<>'' AND COALESCE(i.product_url,'')<>''
+                   AND EXISTS (SELECT 1 FROM budget.product_enrichment_results accepted
+                       WHERE accepted.expense_item_id=i.id AND accepted.status='accepted')))
              ORDER BY i.id LIMIT %s
         """, params).fetchall()
         cache: dict[tuple[str, str], Optional[SearchResult]] = {}
         expansion_cache: dict[tuple[str, str], tuple[str, ...]] = {}
         for row in rows:
+            query_cache.context = {'item_id': row['id'], 'merchant': row['store_name']}
             stats["considered"] += 1
             original_item_name = row["item_name"]
             merchant = row["store_name"] or ""
@@ -344,7 +368,7 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
             """, (domain, item_key, threshold)).fetchone()
 
             previous_score = candidate_score(original_item_name, domain, previous["product_description"] or "", previous["product_url"] or "") if previous else 0
-            if previous and previous_score >= threshold:
+            if previous and previous_score >= threshold and not refresh:
                 result = SearchResult(previous["product_description"], previous["product_url"], "", previous_score)
                 selected_query = previous["search_query"] or query
                 provider = "db-cache"
@@ -352,17 +376,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
             else:
                 query_key = (original_item_name, query)
                 if query_key not in cache:
-                    old_search = conn.execute("""
-                        SELECT candidate_title, candidate_url, confidence
-                          FROM budget.product_enrichment_results
-                         WHERE provider='brave' AND search_query=%s AND candidate_url IS NOT NULL
-                         ORDER BY searched_at DESC LIMIT 1
-                    """, (query,)).fetchone()
-                    if old_search:
-                        cache[query_key] = SearchResult(old_search["candidate_title"] or "", old_search["candidate_url"], "", candidate_score(original_item_name, domain, old_search["candidate_title"] or "", old_search["candidate_url"]))
-                    else:
-                        cache[query_key] = brave_search(api_key, query, original_item_name, domain)
-                        stats["searched"] += 1
+                    cache[query_key] = brave_search(api_key, query, original_item_name, domain)
+                    stats["searched"] += 1
                 result = cache[query_key]
                 selected_query = query
                 provider = "brave"
@@ -432,6 +447,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                     """, (row["id"], result.title, result.url))
         if write_db:
             conn.commit()
+        stats['brave_api_requests'] = query_cache.requests
+        stats['brave_cache_hits'] = query_cache.hits
     return stats
 
 

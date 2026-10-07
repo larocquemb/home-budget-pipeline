@@ -29,16 +29,8 @@ def brave_search(
     timeout = float(os.getenv("BRAVE_TIMEOUT_SECONDS", "10"))
     started = time.monotonic()
     _log(f"enrichment brave_start timeout={timeout:g}s query={query!r}")
-    url = "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode(
-        {"q": query, "count": 10, "country": "ca", "search_lang": "en"}
-    )
-    request = urllib.request.Request(
-        url,
-        headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
-    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.load(response)
+        rows = core.brave_query_results(api_key, query, timeout=timeout)
     except Exception as exc:
         elapsed = time.monotonic() - started
         _log(
@@ -48,10 +40,10 @@ def brave_search(
         return None
 
     candidates = []
-    for row in payload.get("web", {}).get("results", []):
+    for row in rows:
         title = row.get("title", "")
         candidate_url = row.get("url", "")
-        snippet = row.get("description", "")
+        snippet = row.get("snippet", "")
         candidates.append(
             core.SearchResult(
                 title,

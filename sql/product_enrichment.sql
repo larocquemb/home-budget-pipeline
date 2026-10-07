@@ -2,6 +2,14 @@ BEGIN;
 
 CREATE SCHEMA IF NOT EXISTS enrichment;
 
+CREATE TABLE IF NOT EXISTS enrichment.brave_query_cache (
+    cache_key TEXT PRIMARY KEY,
+    request JSONB NOT NULL,
+    results JSONB NOT NULL,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS enrichment.product_cache (
     id BIGSERIAL PRIMARY KEY,
     merchant_key TEXT NOT NULL,
