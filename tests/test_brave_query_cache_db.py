@@ -54,7 +54,17 @@ def test_expiration_negative_results_and_failures_are_distinct():
         assert cache.get('q', lambda: RESULTS) == RESULTS
         assert cache.requests == 1
     with psycopg.connect(dsn) as conn:
-        assert conn.execute('SELECT extract(epoch FROM expires_at-fetched_at) FROM enrichment.brave_query_cache').fetchone()[0] == 604800
+        assert conn.execute('SELECT extract(epoch FROM expires_at-fetched_at) FROM enrichment.brave_query_cache').fetchone()[0] == 90 * 86400
+
+
+def test_positive_retention_is_configurable_without_changing_negative_retention(monkeypatch):
+    monkeypatch.setenv('BRAVE_CACHE_DAYS', '180')
+    with BraveQueryCache(os.environ['TEST_DATABASE_URL']) as cache:
+        cache.get('positive', lambda: RESULTS)
+        cache.get('negative', lambda: [])
+    with psycopg.connect(os.environ['TEST_DATABASE_URL']) as conn:
+        lifetimes = [row[0] for row in conn.execute('SELECT extract(epoch FROM expires_at-fetched_at) FROM enrichment.brave_query_cache')]
+        assert sorted(lifetimes) == [3600, 180 * 86400]
 
 
 def test_concurrent_jobs_make_only_one_api_request_for_a_shared_cache_miss():

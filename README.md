@@ -268,7 +268,7 @@ collaboration uses local Qwen first and leaves paid model fallback disabled unle
 and Qwen for paired comparison; choose one mode per run.
 
 Brave results are cached in PostgreSQL across items and jobs, and rescored for
-each item. Positive results expire after seven days; empty results after one hour.
+each item. Positive results expire after 90 days; empty results after one hour.
 Normal enrichment and collaboration skip accepted items before applying `LIMIT`.
 Use `REFRESH=1` only to deliberately include accepted items and fetch fresh search
 evidence. Comparison still includes accepted items. Run summaries expose API

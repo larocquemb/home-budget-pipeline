@@ -6,8 +6,11 @@ Brave raw search results are persisted in `enrichment.brave_query_cache` and reu
 across items and jobs. The key includes the exact trimmed query, endpoint/version,
 country, language and result count. API keys are never stored. Results are rescored
 against each item's original text and retailer; a cached score from another item
-is never reused as proof. Positive results expire after seven days and empty
-results after one hour. Failed requests are not cached. Concurrent jobs serialize
+is never reused as proof. Positive results expire after 90 days and empty
+results after one hour. Set `BRAVE_CACHE_DAYS=180` on the Make command to retain
+newly fetched positive responses longer (1–3650 days). Existing entries keep
+the expiry recorded when fetched; changing the setting does not rewrite history.
+Failed requests are not cached. Concurrent jobs serialize
 a shared cache miss to avoid duplicate requests.
 
 Normal enrichment and collaboration skip accepted items with complete product

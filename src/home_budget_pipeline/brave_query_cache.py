@@ -26,6 +26,10 @@ class BraveQueryCache:
         self.dsn, self.refresh = dsn, refresh
         self.context, self.observations, self.memory = {}, [], {}
         self.hits = self.requests = 0
+        days = os.getenv('BRAVE_CACHE_DAYS', '90')
+        if not days.isdigit() or not 1 <= int(days) <= 3650:
+            raise ValueError('BRAVE_CACHE_DAYS must be between 1 and 3650')
+        self.positive_ttl = int(days) * 86400
 
     def __enter__(self):
         import psycopg
@@ -70,7 +74,7 @@ class BraveQueryCache:
                     self.requests += 1
                     results = fetch()
                     fetched_at = datetime.now(timezone.utc)
-                    ttl = 604800 if results else 3600
+                    ttl = self.positive_ttl if results else 3600
                     self.conn.execute('''INSERT INTO enrichment.brave_query_cache
                         (cache_key,request,results,fetched_at,expires_at)
                         VALUES (%s,%s,%s,%s,%s + %s * interval '1 second')
