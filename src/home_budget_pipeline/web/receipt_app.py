@@ -328,8 +328,11 @@ def _item_reading_html(item: dict[str, Any]) -> str:
     correction = corrected_reading(original, rec.get('evidence')) if rec.get('eligible') or accepted else None
     result = f'<span>{esc(original)}</span>'
     if correction:
-        label = 'Accepted product-based reading' if accepted else 'Proposed product-based reading'
-        result = f'<small class="muted">Stored item reading</small><br>{esc(original)}<br><small>{label}</small><br><strong>{esc(correction)}</strong>'
+        if accepted:
+            result = f'<strong>{esc(correction)}</strong><br><small>Accepted interpretation</small>'
+            result += f'<details><summary>Import history</summary><small>Text selected during import</small><br>{esc(original)}</details>'
+        else:
+            result += f'<br><small>Proposed interpretation</small><br><strong>{esc(correction)}</strong>'
     variants = rec.get('ocr_variants') or []
     if variants:
         result += f'<details><summary>Related OCR observations ({len(variants)} readings)</summary>'

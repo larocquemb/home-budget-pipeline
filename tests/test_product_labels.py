@@ -20,7 +20,8 @@ def test_correction_uses_explicit_scored_initialism_and_keeps_original_observati
     assert corrected_reading('Cep Pic Med', None) is None
     item = {'item_name':'Cep Pic Med', 'recommendation':{'eligible':True,'evidence':evidence}}
     text = _item_reading_html(item)
-    assert 'Stored item reading' in text and 'Cep Pic Med' in text and 'Proposed product-based reading' in text and 'Oep Pic Med' in text
+    assert text.startswith('<span>Cep Pic Med</span>')
+    assert 'Proposed interpretation' in text and 'Oep Pic Med' in text
     assert item['item_name'] == 'Cep Pic Med'
 
 
@@ -40,8 +41,23 @@ def test_ocr_variants_show_only_real_observations_and_their_provenance():
     text = _item_reading_html({'item_name':'Cep Pic Med','recommendation':{'ocr_variants':variants}})
     assert 'Related OCR observations (2 readings)' in text and 'Oep Pic Med' in text
     assert 'engine: paddle' in text and 'pass id: 3' in text
-    assert 'Proposed product-based reading' not in text
+    assert 'Proposed interpretation' not in text
     assert ocr_variants({}) == []
+
+
+def test_accepted_interpretation_leads_with_imported_text_in_collapsed_history():
+    item = {'item_name': 'Cep Pic Med', 'recommendation': {
+        'accepted_at': '2026-10-06T19:59:19Z',
+        'evidence': {'tokens': [{'token': 'cep', 'matched': 'oep', 'kind': 'ocr_brand_initialism'}]},
+        'ocr_variants': [{'reading': 'Oep Pic Med', 'observations': [
+            {'text': 'Oep Pic Med', 'engine': 'tesseract', 'pass_id': 10, 'line_number': 2}]}]}}
+    text = _item_reading_html(item)
+    assert text.startswith('<strong>Oep Pic Med</strong><br><small>Accepted interpretation</small>')
+    assert '<details><summary>Import history</summary><small>Text selected during import</small><br>Cep Pic Med</details>' in text
+    assert '<details open' not in text
+    assert 'Related OCR observations' in text and 'Row association unverified' in text
+    assert 'Stored item reading' not in text
+    assert item['item_name'] == 'Cep Pic Med'
 
 
 def test_existing_accepted_raw_titles_display_cleanly_without_rewriting_manual_descriptions():
