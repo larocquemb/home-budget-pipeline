@@ -328,15 +328,16 @@ def _item_reading_html(item: dict[str, Any]) -> str:
     correction = corrected_reading(original, rec.get('evidence')) if rec.get('eligible') or accepted else None
     result = f'<span>{esc(original)}</span>'
     if correction:
-        label = 'Corrected reading' if accepted else 'Proposed corrected reading'
-        result = f'<small class="muted">Original OCR</small><br>{esc(original)}<br><small>{label}</small><br><strong>{esc(correction)}</strong>'
+        label = 'Accepted product-based reading' if accepted else 'Proposed product-based reading'
+        result = f'<small class="muted">Stored item reading</small><br>{esc(original)}<br><small>{label}</small><br><strong>{esc(correction)}</strong>'
     variants = rec.get('ocr_variants') or []
     if variants:
-        result += f'<details><summary>Recorded OCR variants ({len(variants)})</summary><ul>'
+        result += f'<details><summary>Related OCR observations ({len(variants)} readings)</summary>'
+        result += '<p class="muted">Row association unverified. These observations may include neighbouring or duplicate receipt items. OCR output line numbers are not Ledger item numbers.</p><ul>'
         for variant in variants:
             result += f'<li><details><summary><strong>{esc(variant["reading"])}</strong> · {len(variant["observations"])} observations</summary><ul>'
             for source in variant['observations']:
-                label = ' · '.join(f'{key.replace("_", " ")}: {source[key]}' for key in ('engine', 'pass_id', 'variant', 'ocr_run_uuid', 'line_number') if source.get(key) is not None)
+                label = ' · '.join(f'{"OCR output line" if key == "line_number" else key.replace("_", " ")}: {source[key]}' for key in ('engine', 'pass_id', 'variant', 'ocr_run_uuid', 'page_number', 'line_number') if source.get(key) is not None)
                 result += f'<li><small>{esc(label)}</small><br><code>{esc(source.get("text"))}</code></li>'
             result += '</ul></details></li>'
         result += '</ul></details>'

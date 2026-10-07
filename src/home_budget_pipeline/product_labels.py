@@ -41,7 +41,7 @@ def corrected_reading(original: str, evidence: dict | None) -> str | None:
 
 
 def ocr_variants(payload: dict) -> list[dict]:
-    """Group recorded OCR observations; canonical text and proposals are excluded."""
+    """Group related OCR observations; text retrieval does not prove item identity."""
     sources = {s['id']: s for s in (payload.get('evidence_bundle') or {}).get('sources', [])
                if s.get('id') and s.get('kind') in {'ocr_pass', 'ocr_consensus'}}
     grouped, seen = {}, set()
@@ -53,6 +53,7 @@ def ocr_variants(payload: dict) -> list[dict]:
     for key, source in sources.items():
         if key not in seen:
             grouped.setdefault(source.get('text') or '', []).append(source)
-    fields = ['id', 'text', 'engine', 'pass_id', 'variant', 'ocr_run_uuid', 'line_number']
-    return [{'reading': reading, 'observations': [{key: source.get(key) for key in fields}
+    fields = ['id', 'text', 'engine', 'pass_id', 'variant', 'ocr_run_uuid', 'line_number', 'page_number', 'evidence_id']
+    return [{'reading': reading, 'observations': [{**{key: source.get(key) for key in fields},
+                'row_association': 'unverified', 'association_method': 'text_similarity'}
             for source in observations]} for reading, observations in grouped.items() if reading]
