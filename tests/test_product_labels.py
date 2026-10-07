@@ -20,7 +20,7 @@ def test_correction_uses_explicit_scored_initialism_and_keeps_original_observati
     assert corrected_reading('Cep Pic Med', None) is None
     item = {'item_name':'Cep Pic Med', 'recommendation':{'eligible':True,'evidence':evidence}}
     text = _item_reading_html(item)
-    assert 'Original OCR' in text and 'Cep Pic Med' in text and 'Proposed corrected reading' in text and 'Oep Pic Med' in text
+    assert 'Stored item reading' in text and 'Cep Pic Med' in text and 'Proposed product-based reading' in text and 'Oep Pic Med' in text
     assert item['item_name'] == 'Cep Pic Med'
 
 
@@ -38,9 +38,9 @@ def test_ocr_variants_show_only_real_observations_and_their_provenance():
     assert len(variants[1]['observations']) == 2
     assert variants[0]['observations'][0]['text'] == 'Cep Pic Med $6.49 C'
     text = _item_reading_html({'item_name':'Cep Pic Med','recommendation':{'ocr_variants':variants}})
-    assert 'Recorded OCR variants (2)' in text and 'Oep Pic Med' in text
+    assert 'Related OCR observations (2 readings)' in text and 'Oep Pic Med' in text
     assert 'engine: paddle' in text and 'pass id: 3' in text
-    assert 'Proposed corrected reading' not in text
+    assert 'Proposed product-based reading' not in text
     assert ocr_variants({}) == []
 
 
@@ -51,3 +51,36 @@ def test_existing_accepted_raw_titles_display_cleanly_without_rewriting_manual_d
     assert _item_description(item)=='Salsa Medium 650 ml'
     item['product_description']='Buy snacks for the picnic'
     assert _item_description(item)=='Buy snacks for the picnic'
+
+
+def test_duplicate_item_rows_do_not_turn_pass_line_numbers_into_confirmed_item_identity():
+    payload = {'evidence_bundle': {'sources': [
+        {'id': 'pass:run-1:10:line:2', 'kind': 'ocr_pass', 'engine': 'tesseract',
+         'pass_id': 10, 'ocr_run_uuid': 'run-1', 'line_number': 2, 'page_number': 1, 'text': 'Oep Pic Med'},
+        {'id': 'pass:run-1:10:line:3', 'kind': 'ocr_pass', 'engine': 'tesseract',
+         'pass_id': 10, 'ocr_run_uuid': 'run-1', 'line_number': 3, 'page_number': 1, 'text': 'Cep Pic Med'}]}}
+    variants = ocr_variants(payload)
+    assert {o['line_number'] for v in variants for o in v['observations']} == {2, 3}
+    assert all(o['row_association'] == 'unverified' for v in variants for o in v['observations'])
+    for item_id in [4300, 4301]:
+        text = _item_reading_html({'expense_item_id': item_id, 'item_name': 'Cep Pic Med',
+                                  'recommendation': {'ocr_variants': variants}})
+        assert 'Row association unverified' in text
+        assert 'OCR output line: 2' in text and 'OCR output line: 3' in text
+        assert 'OCR output line numbers are not Ledger item numbers' in text
+        assert 'Original OCR' not in text and 'Recorded OCR variants' not in text
+
+
+def test_text_retrieval_and_legacy_prompt_metadata_explicitly_retain_row_uncertainty():
+    from home_budget_pipeline.receipt_shared_evidence import relevant_lines
+    from home_budget_pipeline.receipt_collaboration import prompt_observation
+    lines = relevant_lines('Oep Pic Med\nCep Pic Med', 'Cep Pic Med', 'sobeys.com')
+    assert len(lines) == 2
+    assert all(line['row_association'] == 'unverified' for line in lines)
+    assert all(line['association_method'] == 'text_similarity' for line in lines)
+    for kind in ['ocr_pass', 'ocr_consensus', 'ocr_layout']:
+        observation = prompt_observation({'id': 'old-observation', 'kind': kind,
+                                         'line_number': 2, 'pass_id': 10})
+        assert observation['row_association'] == 'unverified'
+        assert observation['line_number'] == 2 and observation['pass_id'] == 10
+    assert 'row_association' not in prompt_observation({'id': 'item:canonical', 'kind': 'canonical_item'})

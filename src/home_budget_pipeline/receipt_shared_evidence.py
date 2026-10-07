@@ -99,7 +99,8 @@ def relevant_lines(text: str, item: str, domain: str, limit=3) -> list[dict]:
         score = max(SequenceMatcher(None, normalized, core.normalized_cache_item_name(line)).ratio(),
             core.candidate_score(item, domain, line, f'https://{domain}/products/evidence') if domain == 'sobeys.com' else 0)
         if score >= .5:
-            ranked.append({'line_number': index + 1, 'text': line[:500], 'retrieval_score': round(score, 4)})
+            ranked.append({'line_number': index + 1, 'text': line[:500], 'retrieval_score': round(score, 4),
+                           'row_association': 'unverified', 'association_method': 'text_similarity'})
     return sorted(ranked, key=lambda line: (-line['retrieval_score'], line['line_number']))[:limit]
 
 
@@ -150,7 +151,7 @@ def load(conn, row: dict) -> dict:
     for line in geometry:
         if relevant_lines(line['text'], row['item_name'], domain, limit=1):
             source = {'id': f"layout:{line['evidence_id']}:{line['page_number']}:{line['line_number']}",
-                'kind': 'ocr_layout', **{key: line[key] for key in (
+                'kind': 'ocr_layout', 'row_association': 'unverified', 'association_method': 'text_similarity', **{key: line[key] for key in (
                     'text', 'evidence_id', 'page_number', 'line_number', 'x', 'y', 'width', 'height')}}
             matched_geometry.append(source)
     sources.extend(matched_geometry[:12])

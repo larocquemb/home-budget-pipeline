@@ -243,10 +243,20 @@ stays in the saved candidate and recommendation evidence. New acceptance saves
 the clean name; existing accepted raw titles display cleanly without silently
 rewriting canonical data or manual descriptions.
 
-Receipt rows distinguish original OCR text from a proposed or accepted
-evidence-based initialism correction. **Recorded OCR variants** lists actual
+Receipt rows distinguish the stored item reading from a proposed or accepted
+product-based initialism correction. **Related OCR observations** lists actual
 observations retained in that item's collaboration, grouped by reading with
 engine, pass, variant, run and original line text. Canonical text and model
 hypotheses are excluded from this list; a correction is never presented as a
 new OCR observation. Repeated observations remain inspectable without treating
 their count as independent agreement.
+
+OCR text retrieval identifies related lines, not an exact canonical item row.
+The retained canonical items have no per-pass bounding box or source-line link;
+OCR output line numbers must not be interpreted as Ledger item numbers. This is
+especially ambiguous for duplicate descriptions and amounts. The receipt page
+and graph label these observations **row association unverified**, including old
+collaborations. New retrieval metadata and model prompts retain this uncertainty.
+Product-based corrections remain separate from observed OCR. Exact row attribution
+requires an explicitly retained item-to-source-position mapping; text similarity,
+matching amounts or pass line order alone do not establish it.
