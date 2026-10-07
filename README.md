@@ -21,6 +21,8 @@ Operational documentation:
 - [Receipt backlog processing](docs/receipt-processing.md)
 - [RabbitMQ receipt processing design](docs/rabbitmq-receipt-design.md)
 - [RabbitMQ receipt processing runbook](docs/rabbitmq-receipts.md)
+- [Product comparison and collaborative evidence](docs/product-model-comparison.md)
+- [Receipt knowledge graph](docs/receipt-knowledge-graph.md)
 
 ---
 
@@ -248,6 +250,47 @@ and progress monitoring in worker logs and the RabbitMQ GUI.
 
 ### AI-grounded product enrichment
 
+#### Collaborative review and acceptance
+
+For a review using retained OCR readings, receipt images, Qwen and Brave search,
+run a bounded collaboration job:
+
+```sh
+make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf' DRY_RUN=1
+make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf'
+```
+
+Here `DRY_RUN=1` validates the Kubernetes Job without creating it or calling
+providers. The real collaboration saves proposals, search evidence and a
+recommendation for review; it does not accept a product automatically. Production
+collaboration uses local Qwen first and leaves paid model fallback disabled unless
+`PAID_FALLBACK=1` is supplied. `COMPARE=1` is a separate mode that calls OpenAI
+and Qwen for paired comparison; choose one mode per run.
+
+Open the receipt in Ledger and review **Recommendation evidence** before choosing
+**Accept recommendation for this item**. Acceptance saves the selected item's
+description and product link with an audit record. A supported reading correction
+then leads the row as **Accepted interpretation**, while the imported text stays
+under **Import history**. For example, `Oep Pic Med` can lead an accepted Old El
+Paso item while `Cep Pic Med` remains in history. The original item text, amount
+and recorded OCR observations remain intact; duplicate rows need separate review.
+
+**Related OCR observations** preserves different readings and their pass/run
+citations. Text retrieval can include neighbouring rows, so **row association
+unverified** is explicit. OCR output line numbers are not Ledger item numbers.
+Product labels omit shopping prompts such as “Buy”; full webpage titles remain
+in the evidence.
+
+Use **Processing graph** in the receipt list or **View receipt knowledge graph**
+on a receipt to follow OCR evidence, model expansion, Brave search, verification,
+and the recommendation/acceptance. Refresh its saved projection with
+`make receipts-graph` after a new run or acceptance. See the
+[user guide](docs/user-guide.md#understand-item-readings-and-product-recommendations)
+for review and the [collaboration manual](docs/product-model-comparison.md)
+for model budgets, GPU telemetry and diagnostics.
+
+#### Original automatic enrichment path
+
 Product enrichment is a separate post-import stage. It does not alter the raw
 receipt evidence. The enrichment command first searches Brave using the literal
 OCR item name and the known retailer domain. If that result is weak, the AI
@@ -265,7 +308,9 @@ example, a Sobeys page titled `Old El Paso ...` establishes the initialism
 `OEP`; an OCR item named `Cep Pic Med` may therefore be normalized to
 `Oep Pic Med` only when the retailer match confidence is at least `0.95`.
 The rule is based on the verified product title rather than a receipt-specific
-override.
+override. This `0.95` automatic-normalization threshold belongs to the original
+enrichment path; collaborative review separately records scored evidence and
+requires explicit acceptance in Ledger.
 
 Run enrichment for the pending backlog:
 

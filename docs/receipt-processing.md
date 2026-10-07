@@ -265,6 +265,34 @@ interactive prompt. Those items remain unenriched for manual review in Ledger.
 
 ## Kubernetes
 
+### Review a collaborative product recommendation
+
+The receipt-scoped CLI above uses the original enrichment path. To pool retained
+OCR observations, receipt images, local Qwen proposals and Brave evidence instead,
+use the Kubernetes collaboration job:
+
+```sh
+make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf' DRY_RUN=1
+make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf'
+```
+
+Replace the filename with your receipt. `LIMIT=1` bounds the run to one item;
+it does not process every item on that receipt. The first command validates the
+Job without creating it; the second saves collaborative evidence for review.
+Open the receipt in Ledger, inspect the recommendation, and explicitly accept
+it for the selected item. Saved recommendations do not change accepted products.
+Duplicate rows need separate acceptance.
+
+An accepted reading correction leads the row; **Import history** retains the
+imported text. **Related OCR observations** shows different retained readings
+without claiming that nearby OCR lines belong to that exact Ledger row. See the
+[user guide](user-guide.md#understand-item-readings-and-product-recommendations)
+and [collaboration manual](product-model-comparison.md) for evidence and model
+configuration. After a new run or acceptance, use `make receipts-graph` and open
+the receipt's **View receipt knowledge graph** link to inspect the updated story.
+
+### Scheduled discovery
+
 `k8s/receipt-processor-cronjob.yaml` publishes eligible receipts every 15 minutes.
 `concurrencyPolicy: Forbid` prevents overlapping scheduled discovery runs. The
 publisher mounts receipt storage read-only and requests 100m CPU and 256Mi memory.
