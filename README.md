@@ -273,7 +273,10 @@ description and product link with an audit record. A supported reading correctio
 then leads the row as **Accepted interpretation**, while the imported text stays
 under **Import history**. For example, `Oep Pic Med` can lead an accepted Old El
 Paso item while `Cep Pic Med` remains in history. The original item text, amount
-and recorded OCR observations remain intact; duplicate rows need separate review.
+and recorded OCR observations remain intact. Supported category rules resolve
+uncategorized accepted products. **Apply accepted matches and category rules**
+repairs older rows and fills empty products from accepted exact retailer/text cache
+matches after rechecking evidence; other duplicate rows need separate review.
 
 **Related OCR observations** preserves different readings and their pass/run
 citations. Text retrieval can include neighbouring rows, so **row association

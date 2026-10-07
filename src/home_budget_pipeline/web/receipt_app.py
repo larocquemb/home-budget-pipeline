@@ -119,6 +119,14 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
         enrichment_by_item = {
             int(row["expense_item_id"]): dict(row) for row in enrichment_rows
         }
+        from ..product_enrichment import retailer_domain, candidate_evidence
+        domain = retailer_domain(expense.get('store_name') or '')
+        if domain:
+            for item in expense['items']:
+                enrichment = enrichment_by_item.get(int(item['expense_item_id']))
+                if enrichment and enrichment.get('status') == 'accepted':
+                    enrichment['reading_evidence'] = candidate_evidence(item.get('item_name') or '', domain,
+                        enrichment.get('candidate_title') or '', enrichment.get('candidate_url') or '')
         recommendation_rows = service._fetch(
             """SELECT DISTINCT ON (c.expense_item_id) c.id,c.expense_item_id,c.run_uuid,
                       c.completed_at,c.payload,a.occurred_at AS accepted_at
@@ -249,6 +257,21 @@ def accept_recommendation(source_sha256: str, request: AcceptRecommendationReque
         raise HTTPException(422, str(exc)) from exc
 
 
+@app.post(f"{BASE_PATH}/api/receipts/{{source_sha256}}/refresh-items")
+def refresh_items(source_sha256: str, x_ledger_action: str | None = Header(default=None),
+                  service: LedgerQueryService = Depends(query_service),
+                  identity: dict[str, str] = Depends(authenticated_identity)):
+    if x_ledger_action != 'refresh-receipt-items':
+        raise HTTPException(403, 'Receipt refresh action header missing')
+    if not _RECEIPT_KEY_RE.fullmatch(source_sha256):
+        raise HTTPException(422, 'Invalid receipt identity')
+    try:
+        return service.refresh_receipt_items(source_sha256, actor_user=identity['user'],
+                                              actor_email=identity.get('email') or None)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @app.get(f"{BASE_PATH}/receipts", response_class=HTMLResponse)
 def receipts_page(
     limit: int = Query(100, ge=1, le=500),
@@ -326,6 +349,11 @@ def _item_reading_html(item: dict[str, Any]) -> str:
     rec = item.get('recommendation') or {}
     accepted = bool(rec.get('accepted_at'))
     correction = corrected_reading(original, rec.get('evidence')) if rec.get('eligible') or accepted else None
+    enrichment = item.get('enrichment') or {}
+    if correction is None and enrichment.get('status') == 'accepted':
+        correction = corrected_reading(original, enrichment.get('reading_evidence'))
+        if correction:
+            accepted = True
     result = f'<span>{esc(original)}</span>'
     if correction:
         if accepted:
@@ -421,10 +449,11 @@ def receipt_page(
 
     item_rows = []
     for item in expense.get("items", ()):
+        description_html = esc(_item_description(dict(item))) or '<span class="muted">Awaiting product identification</span>'
         item_rows.append(
             "<tr>"
             f"<td>{_item_reading_html(dict(item))}</td>"
-            f"<td>{esc(_item_description(dict(item)))}</td>"
+            f"<td>{description_html}</td>"
             f"<td>{_enrichment_html(dict(item))}{_recommendation_html(dict(item), source_sha256)}</td>"
             f"<td>{esc(item.get('budget_category'))}</td>"
             f"<td>{esc(item.get('category_group_name'))}</td>"
@@ -433,7 +462,11 @@ def receipt_page(
             "</tr>"
         )
     items_html = (
-        "<h2>Line items</h2><table><thead><tr><th>Receipt item</th><th>Description</th>"
+        '<h2>Line items</h2>'
+        + (f'<form id="refresh-items" data-receipt="{esc(source_sha256)}"><button type="submit">Apply accepted matches and category rules</button>'
+           '<p>Fills empty product fields from previously accepted matches and categorizes unresolved items. Existing descriptions and categories are preserved. No model or search calls.</p>'
+           '<p id="refresh-status" role="status"></p></form>' if expense.get('items') else '')
+        + '<table><thead><tr><th>Receipt item</th><th>Description</th>'
         "<th>Enrichment</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th>"
         "</tr></thead><tbody>"
         + "".join(item_rows)
@@ -470,6 +503,22 @@ for(const form of document.querySelectorAll('.accept-recommendation')) {
       status.textContent='Accepted. Refreshing receipt…';window.location.reload();
     } catch(error) {status.textContent=error.message;button.disabled=false;}
   });
+}
+const refresh=document.getElementById('refresh-items');
+if(refresh) refresh.addEventListener('submit',async event=>{
+  event.preventDefault();const button=refresh.querySelector('button'),status=document.getElementById('refresh-status');
+  button.disabled=true;status.textContent='Applying accepted matches and category rules…';
+  try{
+    const response=await fetch(""" + json.dumps(BASE_PATH) + """+'/api/receipts/'+encodeURIComponent(refresh.dataset.receipt)+'/refresh-items',{
+      method:'POST',credentials:'same-origin',headers:{'X-Ledger-Action':'refresh-receipt-items'}});
+    const result=await response.json();if(!response.ok)throw Error(result.detail||'Unable to refresh items');
+    sessionStorage.setItem('receipt-refresh:'+refresh.dataset.receipt,JSON.stringify(result));window.location.reload();
+  }catch(error){status.textContent=error.message;button.disabled=false;}
+});
+if(refresh){const key='receipt-refresh:'+refresh.dataset.receipt,saved=sessionStorage.getItem(key);
+  if(saved){sessionStorage.removeItem(key);const result=JSON.parse(saved);
+    document.getElementById('refresh-status').textContent='Applied '+result.products_applied+' products and '+result.categories_applied+' categories. '+result.products_pending+' items still need product identification.';
+  }
 }
 </script>"""
     )

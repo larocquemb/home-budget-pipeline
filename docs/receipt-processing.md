@@ -281,7 +281,9 @@ it does not process every item on that receipt. The first command validates the
 Job without creating it; the second saves collaborative evidence for review.
 Open the receipt in Ledger, inspect the recommendation, and explicitly accept
 it for the selected item. Saved recommendations do not change accepted products.
-Duplicate rows need separate acceptance.
+Duplicate rows need separate acceptance unless the receipt-wide **Apply accepted
+matches and category rules** action can reuse an accepted exact retailer/text cache
+match. That action also repairs unresolved categories without provider calls.
 
 An accepted reading correction leads the row; **Import history** retains the
 imported text. **Related OCR observations** shows different retained readings
