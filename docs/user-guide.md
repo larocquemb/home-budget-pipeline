@@ -45,9 +45,23 @@ shopping prompts such as “Buy”; the original search-result title stays in th
 evidence. An evidence score is a matching score, not a guarantee of correctness.
 
 Acceptance saves the description and product link for the selected item and
-records an audit event. The imported item text and amount remain intact. A second
-identical receipt row needs its own review and acceptance. If the item or saved
+records an audit event. It also applies supported category rules to an unresolved
+category, so an accepted salsa product can become **Groceries**. Existing categories
+and human overrides are preserved. The imported item text and amount remain intact.
+If the item or saved
 recommendation changes during review, reload the receipt before accepting again.
+
+Use **Apply accepted matches and category rules** above the receipt's line items
+to repair older accepted rows and fill empty product fields from previously
+accepted matches for the same retailer and normalized item text. Cached matches
+are rechecked against product-page and token evidence. This explicit receipt-wide
+action can fill an identical second row without another model call; it preserves
+existing descriptions, categories and per-item collaboration reviews, and records
+changes in the audit history. It does not accept a new model recommendation.
+
+**Awaiting product identification** means there is no accepted description for that
+item yet. A one-item collaboration does not enrich the whole receipt. Ask the
+operator to process the remaining items; unmatched products stay unresolved.
 
 #### Follow the processing story
 

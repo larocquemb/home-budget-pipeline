@@ -25,11 +25,18 @@ review. A model recommendation never creates an accepted product or changes Post
 The receipt page displays the latest saved collaboration per line item, even when
 no accepted enrichment exists. **Accept recommendation for this item** applies the
 clean product name and URL after checking the receipt, current item fields and
-latest collaboration. It preserves the OCR item name, amounts and category. The
+latest collaboration. It preserves the OCR item name, amounts and established
+categories; supported category rules resolve uncategorized items. The
 transaction records the user and old/new values in the description audit, marks
 the product enrichment accepted, updates the accepted search cache and appends a
 `product_recommendation_accepted` lineage event. Repeated clicks are idempotent;
 stale or ineligible recommendations cannot overwrite newer item descriptions.
+
+The receipt-wide **Apply accepted matches and category rules** action repairs
+older uncategorized rows and fills empty products from accepted exact retailer/text
+cache matches after rechecking product-page evidence. Per-item collaboration reviews
+and existing descriptions are preserved. Each change records a `receipt_item_refreshed`
+lineage event, projected as an **ItemRefresh** with its audit record.
 After projection, an explicit `ProductAcceptance` connects the decision to the
 canonical item and its audit through `ACCEPTED_AS`, `UPDATED` and `PERSISTED_AS`.
 The original model payload remains unchanged.

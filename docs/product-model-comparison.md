@@ -506,7 +506,26 @@ URL, the search evidence and the retained OCR readings. An evidence score is a
 matching score rather than a calibrated probability. Choose **Accept
 recommendation for this item** to save the description and product URL with an
 audit event. Acceptance applies to one item; it does not automatically accept
-other identical rows.
+other identical rows. Supported category rules are applied to unresolved categories
+during acceptance, while established categories and manual overrides are retained.
+
+To repair older rows, use **Apply accepted matches and category rules** on the
+receipt page. It reuses accepted exact retailer/text cache matches, rechecks their
+product-page evidence, and fills only empty product fields without a per-item
+collaboration review. It makes no provider calls and audits each change.
+
+To gather evidence for remaining items without an accepted match, run a larger
+receipt-scoped collaboration:
+
+```sh
+make enrich-products COLLABORATE=1 LIMIT=100 RECEIPT='receipt.pdf' DRY_RUN=1
+make enrich-products COLLABORATE=1 LIMIT=100 RECEIPT='receipt.pdf'
+```
+
+Replace the filename with your receipt. `LIMIT=100` permits up to 100 items;
+`LIMIT=1` only processes one. Review and accept eligible saved recommendations
+in Ledger. The cached repair action does not generate descriptions for unknown
+products or classify every item from a grocery merchant as Groceries.
 
 If a supported reading correction was accepted, the item label leads with
 **Accepted interpretation**, for example `Oep Pic Med`. **Import history** retains

@@ -69,6 +69,15 @@ def test_existing_accepted_raw_titles_display_cleanly_without_rewriting_manual_d
     assert _item_description(item)=='Buy snacks for the picnic'
 
 
+def test_accepted_cache_reading_leads_without_inventing_an_ocr_observation():
+    item = {'item_name': 'Cep Pic Med', 'enrichment': {'status': 'accepted',
+            'reading_evidence': {'tokens': [{'token': 'cep', 'matched': 'oep', 'kind': 'ocr_brand_initialism'}]}}}
+    result = _item_reading_html(item)
+    assert result.startswith('<strong>Oep Pic Med</strong>')
+    assert 'Import history' in result and 'Cep Pic Med' in result
+    assert 'Related OCR observations' not in result
+
+
 def test_duplicate_item_rows_do_not_turn_pass_line_numbers_into_confirmed_item_identity():
     payload = {'evidence_bundle': {'sources': [
         {'id': 'pass:run-1:10:line:2', 'kind': 'ocr_pass', 'engine': 'tesseract',

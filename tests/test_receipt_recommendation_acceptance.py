@@ -90,3 +90,21 @@ def test_acceptance_endpoint_authenticates_and_requires_explicit_action_header()
             assert response.status_code == 200 and response.json()['audit_id'] == 42
     finally:
         app.dependency_overrides.clear()
+
+
+def test_receipt_refresh_requires_authentication_action_header_and_receipt_identity():
+    class Service:
+        def refresh_receipt_items(self, sha, **kwargs):
+            assert sha == 'a'*64 and kwargs == {'actor_user': 'paul', 'actor_email': None}
+            return {'products_applied': 1, 'categories_applied': 2, 'products_pending': 0}
+    app.dependency_overrides[query_service] = lambda: Service()
+    try:
+        with TestClient(app) as client:
+            url = f'{BASE_PATH}/api/receipts/{"a"*64}/refresh-items'
+            assert client.post(url).status_code == 401
+            assert client.post(url, headers={'X-Forwarded-User': 'paul'}).status_code == 403
+            headers = {'X-Forwarded-User': 'paul', 'X-Ledger-Action': 'refresh-receipt-items'}
+            assert client.post(url, headers=headers).json()['products_applied'] == 1
+            assert client.post(url.replace('a'*64, 'invalid'), headers=headers).status_code == 422
+    finally:
+        app.dependency_overrides.clear()
