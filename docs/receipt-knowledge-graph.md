@@ -237,6 +237,9 @@ the accepted best product. The deployment commands are for the operator to run.
 
 ## Product labels and OCR variants
 
+For the receipt-page review and acceptance workflow, see
+[Understand item readings and product recommendations](user-guide.md#understand-item-readings-and-product-recommendations).
+
 Product names omit leading shopping prompts (Buy, Shop, Purchase, Order) and
 a matching retailer suffix such as `| Sobeys Inc.`. The original webpage title
 stays in the saved candidate and recommendation evidence. New acceptance saves
