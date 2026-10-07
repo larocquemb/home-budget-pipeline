@@ -30,6 +30,17 @@ def evidence():
             'collaborations': [{'payload': p}]}
 
 
+def test_search_queries_retain_cache_provenance_and_original_fetch_time():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    payload['brave_cache'] = [{'query': payload['search_queries'][0]['query'],
+                             'cache_status': 'persistent_hit', 'fetched_at': '2026-10-01T00:00:00+00:00',
+                             'cache_key': 'cache-key'}]
+    query = next(n for n in g.build(data)['nodes'] if n['kind'] == 'SearchQuery' and n['label'] == payload['search_queries'][0]['query'])
+    assert query['properties']['cache_status'] == 'persistent_hit'
+    assert query['properties']['fetched_at'] == '2026-10-01T00:00:00+00:00'
+
+
 def test_graph_connects_shared_evidence_without_accepting_proposals():
     graph = g.build(evidence())
     nodes = {n['id']: n for n in graph['nodes']}

@@ -149,7 +149,7 @@ def test_openai_uses_same_schema_and_reports_usage(monkeypatch):
 
 
 @pytest.mark.parametrize('receipt_item_count', [1, 3])
-def test_run_persists_comparisons_only_and_emits_paired_events(monkeypatch, capsys, receipt_item_count):
+def test_run_persists_comparisons_only_and_emits_paired_events(monkeypatch, capsys, receipt_item_count, mock_brave_query_cache):
     import psycopg
     calls = []
     class Connection:

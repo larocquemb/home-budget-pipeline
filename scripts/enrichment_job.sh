@@ -10,6 +10,7 @@ receipt="${RECEIPT:-}"
 limit="${LIMIT:-}"
 case "$compare" in 0|1) ;; *) echo 'COMPARE must be 0 or 1' >&2; exit 2 ;; esac
 case "$collaborate" in 0|1) ;; *) echo 'COLLABORATE must be 0 or 1' >&2; exit 2 ;; esac
+case "${REFRESH:-0}" in 0|1) ;; *) echo 'REFRESH must be 0 or 1' >&2; exit 2 ;; esac
 case "${PAID_FALLBACK:-0}" in 0|1) ;; *) echo 'PAID_FALLBACK must be 0 or 1' >&2; exit 2 ;; esac
 if [[ "$compare" == 1 && "$collaborate" == 1 ]]; then
   echo 'Choose COMPARE=1 or COLLABORATE=1.' >&2; exit 2
@@ -47,6 +48,7 @@ kubectl patch --local -f "$work_dir/job.json" --type=json \
   -p "[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/args\",\"value\":$args}]" \
   -o json > "$work_dir/prepared.json"
 overrides=()
+overrides+=("ENRICHMENT_REFRESH=${REFRESH:-0}")
 [[ -z "${PAID_FALLBACK:-}" ]] || overrides+=("COLLAB_PAID_FALLBACK=$PAID_FALLBACK")
 [[ -z "${CONTEXT_TOKENS:-}" ]] || overrides+=("COLLAB_CONTEXT_TOKENS=$CONTEXT_TOKENS")
 [[ -z "${OUTPUT_TOKENS:-}" ]] || overrides+=("COLLAB_OUTPUT_TOKENS=$OUTPUT_TOKENS")

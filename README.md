@@ -267,6 +267,13 @@ collaboration uses local Qwen first and leaves paid model fallback disabled unle
 `PAID_FALLBACK=1` is supplied. `COMPARE=1` is a separate mode that calls OpenAI
 and Qwen for paired comparison; choose one mode per run.
 
+Brave results are cached in PostgreSQL across items and jobs, and rescored for
+each item. Positive results expire after seven days; empty results after one hour.
+Normal enrichment and collaboration skip accepted items before applying `LIMIT`.
+Use `REFRESH=1` only to deliberately include accepted items and fetch fresh search
+evidence. Comparison still includes accepted items. Run summaries expose API
+request attempts and cache hits; Qwen calls for pending items still run.
+
 Open the receipt in Ledger and review **Recommendation evidence** before choosing
 **Accept recommendation for this item**. Acceptance saves the selected item's
 description and product link with an audit record. A supported reading correction

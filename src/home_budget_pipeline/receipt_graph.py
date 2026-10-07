@@ -11,7 +11,7 @@ import os
 import re
 from urllib.parse import urlencode
 
-VERSION = 4
+VERSION = 5
 
 
 def encoded(value):
@@ -97,7 +97,12 @@ def collaboration(graph, receipt, item, payload, skipped=(), completed_at=None, 
             if source_id in citations:
                 graph.edge(citations[source_id], 'SUPPORTS', c)
     for query in payload.get('search_queries', []):
-        q = graph.node('SearchQuery', (*scope, query['query']), query['query'])
+        query = dict(query)
+        cached = next((entry for entry in payload.get('brave_cache', []) if entry['query'] == query['query']), None)
+        if cached:
+            query.update(cache_status=cached['cache_status'], fetched_at=cached['fetched_at'], cache_key=cached['cache_key'])
+        q = graph.node('SearchQuery', (*scope, query['query']), query['query'],
+                       **{key: query[key] for key in ('cache_status', 'fetched_at', 'cache_key') if key in query})
         graph.edge(run, 'SEARCHED', q)
         for c in query.get('candidate_ids', []):
             if c in citations:
