@@ -243,8 +243,11 @@ stays in the saved candidate and recommendation evidence. New acceptance saves
 the clean name; existing accepted raw titles display cleanly without silently
 rewriting canonical data or manual descriptions.
 
-Receipt rows distinguish the stored item reading from a proposed or accepted
-product-based initialism correction. **Related OCR observations** lists actual
+Receipt rows lead with the **accepted interpretation** when a product-based
+initialism correction has been accepted. The text selected during import stays
+in collapsed **Import history**. Before acceptance, the imported text remains the
+main label and any correction is labelled **Proposed interpretation**.
+**Related OCR observations** lists actual
 observations retained in that item's collaboration, grouped by reading with
 engine, pass, variant, run and original line text. Canonical text and model
 hypotheses are excluded from this list; a correction is never presented as a
