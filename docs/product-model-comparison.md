@@ -498,6 +498,31 @@ FROM enrichment.receipt_collaborations
 ORDER BY completed_at DESC;
 ```
 
+### Review and accept saved results in Ledger
+
+A completed collaboration records a recommendation, not an accepted product.
+Open its receipt in Ledger and inspect **Recommendation evidence**, the product
+URL, the search evidence and the retained OCR readings. An evidence score is a
+matching score rather than a calibrated probability. Choose **Accept
+recommendation for this item** to save the description and product URL with an
+audit event. Acceptance applies to one item; it does not automatically accept
+other identical rows.
+
+If a supported reading correction was accepted, the item label leads with
+**Accepted interpretation**, for example `Oep Pic Med`. **Import history** retains
+the selected import text, such as `Cep Pic Med`. Neither value describes every
+OCR pass. **Related OCR observations** retains actual readings and provenance,
+with **row association unverified** when the observations were retrieved by text
+similarity. The imported item text, financial amount and recorded observations
+are preserved. Product labels omit shopping prompts while the full source title
+remains inspectable.
+
+Use `make receipts-graph` after a new collaboration or acceptance to refresh the
+projection, then open **View receipt knowledge graph** from the receipt. Select
+the item and run to follow evidence, expansion, search, verification and the final
+recommendation/acceptance. See the [user guide](user-guide.md#follow-the-processing-story)
+and [graph manual](receipt-knowledge-graph.md) for navigation and provenance limits.
+
 ### Local-only collaboration
 
 Discovery also searches the descriptive tokens without the uncertain brand,
