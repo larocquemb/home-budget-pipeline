@@ -126,6 +126,22 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make postgres-config-apply` | Provision `postgres-secret` from `.env.k3s` for a new deployment. |
 | `make postgres-password-rotate` | Rotate an existing database password and Secret, verify authentication, and restart database clients. |
 
+Neo4j runs on Arsene as the `neo4j` StatefulSet. Its GitOps manifest reserves
+4 GiB of memory and permits up to 6 GiB, with a 2 GiB Java heap, 1 GiB page cache,
+and a 1 GiB aggregate transaction-memory budget. Transaction state shares the heap;
+the remaining container allowance covers native memory and runtime overhead.
+The projector commits each receipt separately, so more receipts increase total
+work and storage rather than combining all receipts into one transaction.
+This budget raises the previous 358.4 MiB transaction ceiling; it does not
+guarantee that arbitrarily large evidence histories fit in one receipt transaction.
+After syncing a memory-budget change, wait for Neo4j before rerunning projection:
+
+```sh
+make deploy-k3s
+kubectl --context brownrook-k3s1 -n home-budget rollout status statefulset/neo4j --timeout=300s
+make receipts-graph
+```
+
 Both manual receipt targets default to context `brownrook-k3s1` and namespace
 `home-budget`; override with `KUBE_CONTEXT` and `KUBE_NAMESPACE`. Add `DRY_RUN=1`
 to validate the generated Job with the API server without creating it. The
