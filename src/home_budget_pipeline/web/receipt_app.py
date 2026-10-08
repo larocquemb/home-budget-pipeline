@@ -368,10 +368,24 @@ def _item_reading_html(item: dict[str, Any]) -> str:
         for variant in variants:
             result += f'<li><details><summary><strong>{esc(variant["reading"])}</strong> · {len(variant["observations"])} observations</summary><ul>'
             for source in variant['observations']:
+                kind = source.get('kind')
+                if kind == 'ocr_consensus':
+                    provenance = 'Combined OCR text · OCR run UUID not recorded for this source'
+                elif kind == 'ocr_pass' or source.get('pass_id') is not None:
+                    provenance = 'OCR pass'
+                    if not source.get('ocr_run_uuid'):
+                        provenance += ' · OCR run UUID not recorded for this source'
+                else:
+                    provenance = 'OCR observation'
                 label = ' · '.join(f'{"OCR output line" if key == "line_number" else key.replace("_", " ")}: {source[key]}' for key in ('engine', 'pass_id', 'variant', 'ocr_run_uuid', 'page_number', 'line_number') if source.get(key) is not None)
-                result += f'<li><small>{esc(label)}</small><br><code>{esc(source.get("text"))}</code></li>'
+                result += f'<li><small>{esc(provenance)}</small><br><small>{esc(label)}</small><br><code>{esc(source.get("text"))}</code>'
+                if source.get('id'):
+                    result += f'<br><small>Observation ID: {esc(source["id"])}</small>'
+                if source.get('evidence_id') is not None:
+                    result += f'<br><small>Receipt evidence ID: {esc(source["evidence_id"])}</small>'
+                result += '</li>'
             result += '</ul></details></li>'
-        result += '</ul></details>'
+        result += '</ul><p class="muted">An OCR run UUID is shared by the passes and lines from that run. Observation IDs distinguish the individual sources.</p></details>'
     return result
 
 

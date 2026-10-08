@@ -53,7 +53,7 @@ def ocr_variants(payload: dict) -> list[dict]:
     for key, source in sources.items():
         if key not in seen:
             grouped.setdefault(source.get('text') or '', []).append(source)
-    fields = ['id', 'text', 'engine', 'pass_id', 'variant', 'ocr_run_uuid', 'line_number', 'page_number', 'evidence_id']
+    fields = ['id', 'kind', 'text', 'engine', 'pass_id', 'variant', 'ocr_run_uuid', 'line_number', 'page_number', 'evidence_id']
     return [{'reading': reading, 'observations': [{**{key: source.get(key) for key in fields},
                 'row_association': 'unverified', 'association_method': 'text_similarity'}
             for source in observations]} for reading, observations in grouped.items() if reading]
