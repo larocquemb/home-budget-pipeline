@@ -96,6 +96,26 @@ def test_duplicate_item_rows_do_not_turn_pass_line_numbers_into_confirmed_item_i
         assert 'Original OCR' not in text and 'Recorded OCR variants' not in text
 
 
+def test_ocr_provenance_distinguishes_combined_text_and_lines_in_a_shared_run():
+    payload = {'evidence_bundle': {'sources': [
+        {'id': 'consensus:42:2', 'kind': 'ocr_consensus', 'evidence_id': 42,
+         'line_number': 2, 'text': 'Cep Pic Med $6.49 C'},
+        {'id': 'consensus:42:3', 'kind': 'ocr_consensus', 'evidence_id': 42,
+         'line_number': 3, 'text': 'Cep Pic Med $6.49 C'},
+        {'id': 'pass:run-1:20:line:2', 'kind': 'ocr_pass', 'engine': 'tesseract',
+         'pass_id': 20, 'ocr_run_uuid': 'run-1', 'line_number': 2, 'text': 'Cep Pic Med $6.49 C'},
+        {'id': 'pass:run-1:20:line:3', 'kind': 'ocr_pass', 'engine': 'tesseract',
+         'pass_id': 20, 'ocr_run_uuid': 'run-1', 'line_number': 3, 'text': 'Cep Pic Med $6.49 C'}]}}
+    text = _item_reading_html({'item_name': 'Cep Pic Med',
+                              'recommendation': {'ocr_variants': ocr_variants(payload)}})
+    assert text.count('Combined OCR text · OCR run UUID not recorded for this source') == 2
+    assert text.count('ocr run uuid: run-1') == 2
+    assert 'Receipt evidence ID: 42' in text
+    for source in payload['evidence_bundle']['sources']:
+        assert f'Observation ID: {source["id"]}' in text
+    assert 'An OCR run UUID is shared by the passes and lines from that run' in text
+
+
 def test_text_retrieval_and_legacy_prompt_metadata_explicitly_retain_row_uncertainty():
     from home_budget_pipeline.receipt_shared_evidence import relevant_lines
     from home_budget_pipeline.receipt_collaboration import prompt_observation
