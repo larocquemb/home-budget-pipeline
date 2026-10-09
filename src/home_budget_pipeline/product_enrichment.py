@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional
+
+LOG = logging.getLogger(__name__)
 
 RETAILER_DOMAINS = {
     "costco": "costco.ca",
@@ -336,18 +339,24 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
             params += (list(item_ids),)
         params += (refresh, limit)
         rows = conn.execute(f"""
-            SELECT i.id, i.item_name, e.store_name
+            SELECT i.id, i.item_name, e.store_name, i.expense_pk AS receipt_id
               FROM budget.expense_items i JOIN budget.expenses e ON e.id=i.expense_pk
              WHERE {missing_filter} {result_filter}
                AND (e.store_name ILIKE ANY(%s)) {item_filter}
                AND (%s OR NOT (COALESCE(i.product_description,'')<>'' AND COALESCE(i.product_url,'')<>''
                    AND EXISTS (SELECT 1 FROM budget.product_enrichment_results accepted
-                       WHERE accepted.expense_item_id=i.id AND accepted.status='accepted')))
+                       WHERE accepted.expense_item_id=i.id AND accepted.status='accepted'
+                         AND accepted.ocr_evidence ? 'readings')))
              ORDER BY i.id LIMIT %s
         """, params).fetchall()
         cache: dict[tuple[str, str], Optional[SearchResult]] = {}
         expansion_cache: dict[tuple[str, str], tuple[str, ...]] = {}
-        for row in rows:
+        receipt_readings = {}
+        from .receipt_ocr_alternatives import load as load_ocr_alternatives
+        LOG.info("enrichment_selected items=%s write_db=%s", len(rows), write_db)
+        for index, row in enumerate(rows, start=1):
+            LOG.info("enrichment_item_started item=%s/%s item_id=%s merchant=%s description=%r",
+                     index, len(rows), row['id'], row['store_name'], row['item_name'])
             query_cache.context = {'item_id': row['id'], 'merchant': row['store_name']}
             stats["considered"] += 1
             original_item_name = row["item_name"]
@@ -356,8 +365,20 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
             query = product_query(original_item_name, merchant)
             if not query or not domain:
                 stats["unsupported"] += 1
+                LOG.info("enrichment_item_completed item_id=%s status=unsupported", row['id'])
                 continue
 
+            readings = [{'text': original_item_name, 'sources': []}]
+            artifact_errors = []
+            if row.get('receipt_id') is not None:
+                if row['receipt_id'] not in receipt_readings:
+                    receipt_readings[row['receipt_id']] = load_ocr_alternatives(conn, row['receipt_id'])
+                by_item, artifact_errors = receipt_readings[row['receipt_id']]
+                readings = by_item.get(row['id'], readings)
+            selected_reading = original_item_name
+            evaluated_candidates = []
+            LOG.info("enrichment_ocr_readings item_id=%s alternatives=%s artifact_errors=%s",
+                     row['id'], len(readings), artifact_errors)
             item_key = normalized_cache_item_name(original_item_name)
             previous = conn.execute("""
                 SELECT provider, search_query, product_description, product_url, confidence
@@ -368,50 +389,89 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
             """, (domain, item_key, threshold)).fetchone()
 
             previous_score = candidate_score(original_item_name, domain, previous["product_description"] or "", previous["product_url"] or "") if previous else 0
-            if previous and previous_score >= threshold and not refresh:
+            if previous and previous_score >= threshold and not refresh and len(readings) == 1:
                 result = SearchResult(previous["product_description"], previous["product_url"], "", previous_score)
                 selected_query = previous["search_query"] or query
                 provider = "db-cache"
                 stats["db_hits"] += 1
+                evaluated_candidates.append({'reading': original_item_name, 'title': result.title,
+                                             'url': result.url, 'confidence': result.score})
             else:
-                query_key = (original_item_name, query)
-                if query_key not in cache:
-                    cache[query_key] = brave_search(api_key, query, original_item_name, domain)
-                    stats["searched"] += 1
-                result = cache[query_key]
+                result = None
                 selected_query = query
                 provider = "brave"
+                # Try every aligned OCR spelling before asking AI to expand it.
+                for reading in readings:
+                    text = reading['text']
+                    reading_query = product_query(text, merchant)
+                    if not reading_query:
+                        continue
+                    query_key = (text, reading_query)
+                    if query_key not in cache:
+                        LOG.info("enrichment_search_started item_id=%s provider=brave reading=%r",
+                                 row["id"], text)
+                        cache[query_key] = brave_search(api_key, reading_query, text, domain)
+                        stats["searched"] += 1
+                    candidate = cache[query_key]
+                    if candidate:
+                        evaluated_candidates.append({'reading': text, 'title': candidate.title,
+                                                     'url': candidate.url, 'confidence': candidate.score})
+                    if candidate and (not result or candidate.score > result.score):
+                        result, selected_query, selected_reading = candidate, reading_query, text
                 if not result or result.score < threshold:
-                    expansion_key = (original_item_name, merchant)
-                    if expansion_key not in expansion_cache:
-                        expansion_cache[expansion_key] = ai_product_queries(*expansion_key)
-                        stats["ai_queries"] += len(expansion_cache[expansion_key])
-                    for expansion in expansion_cache[expansion_key]:
-                        expanded_query = f"site:{domain} {expansion}"
-                        expanded_key = (original_item_name, expanded_query)
-                        if expanded_key not in cache:
-                            cache[expanded_key] = brave_search(api_key, expanded_query, original_item_name, domain)
-                            stats["searched"] += 1
-                        expanded_result = cache[expanded_key]
-                        if expanded_result and (not result or expanded_result.score > result.score):
-                            result = expanded_result
-                            selected_query = expanded_query
-                            provider = "brave+ai"
+                    for reading in readings:
+                        text = reading['text']
+                        expansion_key = (text, merchant)
+                        if expansion_key not in expansion_cache:
+                            LOG.info("enrichment_ai_started item_id=%s reading=%r", row["id"], text)
+                            expansion_cache[expansion_key] = ai_product_queries(*expansion_key)
+                            stats["ai_queries"] += len(expansion_cache[expansion_key])
+                        for expansion in expansion_cache[expansion_key]:
+                            expanded_query = scoped_search_query(expansion, merchant)
+                            if not expanded_query:
+                                continue
+                            expanded_key = (text, expanded_query)
+                            if expanded_key not in cache:
+                                cache[expanded_key] = brave_search(api_key, expanded_query, text, domain)
+                                stats["searched"] += 1
+                            expanded_result = cache[expanded_key]
+                            if expanded_result:
+                                evaluated_candidates.append({'reading': text, 'title': expanded_result.title,
+                                                             'url': expanded_result.url,
+                                                             'confidence': expanded_result.score})
+                            if expanded_result and (not result or expanded_result.score > result.score):
+                                result = expanded_result
+                                selected_query = expanded_query
+                                selected_reading = text
+                                provider = "brave+ai"
                     if provider == "brave+ai":
                         stats["ai_expanded"] += 1
 
             status = "accepted" if result and result.score >= threshold else "review"
+            conflicting_products = bool(result and any(
+                candidate['reading'] != selected_reading and candidate['url'] != result.url
+                and candidate['confidence'] >= threshold
+                and result.score - candidate['confidence'] <= .02
+                for candidate in evaluated_candidates))
+            if conflicting_products:
+                status = "review"
+                LOG.info("enrichment_ocr_conflict item_id=%s status=review", row['id'])
             stats[status] += 1
             if write_db:
                 conn.execute("""
                     INSERT INTO budget.product_enrichment_results
-                        (expense_item_id, provider, search_query, candidate_title, candidate_url, confidence, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        (expense_item_id, provider, search_query, candidate_title, candidate_url, confidence, status, ocr_evidence)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (expense_item_id) DO UPDATE SET
                         provider=EXCLUDED.provider, search_query=EXCLUDED.search_query,
                         candidate_title=EXCLUDED.candidate_title, candidate_url=EXCLUDED.candidate_url,
-                        confidence=EXCLUDED.confidence, status=EXCLUDED.status, searched_at=NOW()
-                """, (row["id"], provider, selected_query, result.title if result else None, result.url if result else None, result.score if result else 0, status))
+                        confidence=EXCLUDED.confidence, status=EXCLUDED.status,
+                        ocr_evidence=EXCLUDED.ocr_evidence, searched_at=NOW()
+                """, (row["id"], provider, selected_query, result.title if result else None, result.url if result else None, result.score if result else 0, status,
+                    json.dumps({'selected_reading': selected_reading, 'readings': readings,
+                                'artifact_errors': artifact_errors,
+                                'candidates': evaluated_candidates,
+                                'conflicting_products': conflicting_products})))
                 if status == "accepted":
                     if provider == "db-cache":
                         conn.execute("""
@@ -435,18 +495,22 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                                 last_used_at=NOW(),
                                 use_count=enrichment.product_cache.use_count + 1
                         """, (domain, item_key, result.title, result.url, provider, selected_query, result.score))
-                    normalized_name = normalized_item_name_from_verified_product(original_item_name, result.title, result.score)
+                    normalized_name = normalized_item_name_from_verified_product(selected_reading, result.title, result.score)
                     conn.execute("""UPDATE budget.expense_items
                                       SET item_name=COALESCE(%s, item_name), product_description=%s,
                                           product_url=%s, updated_at=NOW() WHERE id=%s""",
-                                 (normalized_name, result.title, result.url, row["id"]))
+                                 (normalized_name or (selected_reading if selected_reading != original_item_name else None),
+                                  result.title, result.url, row["id"]))
                     conn.execute("""
                         INSERT INTO budget.expense_item_description_audit
                             (expense_item_id, actor_user, actor_email, old_description, new_description, old_url, new_url)
                         VALUES (%s, 'product-enrichment', NULL, NULL, %s, NULL, %s)
                     """, (row["id"], result.title, result.url))
+            LOG.info("enrichment_item_completed item_id=%s status=%s provider=%s confidence=%.4f saved=%s reading=%r",
+                     row['id'], status, provider, result.score if result else 0, write_db, selected_reading)
         if write_db:
             conn.commit()
+            LOG.info("enrichment_committed items=%s", stats['considered'])
         stats['brave_api_requests'] = query_cache.requests
         stats['brave_cache_hits'] = query_cache.hits
     return stats

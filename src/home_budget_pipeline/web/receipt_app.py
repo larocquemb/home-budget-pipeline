@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 from fastapi import Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -31,6 +31,15 @@ from . import receipt_graph as _receipt_graph_routes
 _RECEIPT_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _EXPENSE_DETAIL_RE = re.compile(rf"^{re.escape(BASE_PATH)}/expenses/(\d+)$")
 _EVIDENCE_DETAIL_RE = re.compile(rf"^{re.escape(BASE_PATH)}/evidence/(\d+)$")
+_RECEIPT_SORT_COLUMNS = {
+    'expense_id': 're.expense_pk',
+    'receipt': 'r.source_reference',
+    'merchant': 'COALESCE(re.merchant, e.store_name)',
+    'date': 'COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp)',
+    'total': 'COALESCE(re.total, e.expense_total)',
+    'processing': 's.status',
+    'extraction': 'COALESCE(re.extraction_status, e.extraction_status)',
+}
 
 
 def receipt_url(source_sha256: str) -> str:
@@ -41,20 +50,22 @@ def receipt_graph_url(source_sha256: str) -> str:
     return f"{BASE_PATH}/graph?receipt={quote(source_sha256, safe='')}"
 
 
-def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int) -> Page:
-    count_rows = service._fetch("SELECT COUNT(*) AS total_count FROM ingest.receipts")
-    total_count = int(count_rows[0]["total_count"]) if count_rows else 0
-    rows = service._fetch(
-        """
-        SELECT r.source_sha256, r.source_reference,
-               s.status AS processing_status, s.attempts,
-               re.id AS evidence_id, re.expense_pk,
-               COALESCE(re.merchant, e.store_name) AS merchant,
-               COALESCE(re.transaction_datetime, e.transaction_datetime,
-                        e.order_date::timestamp) AS transaction_datetime,
-               COALESCE(re.total, e.expense_total) AS total,
-               COALESCE(re.extraction_status, e.extraction_status) AS extraction_status,
-               re.extraction_confidence
+def receipt_label(expense_pk, merchant, receipt_date, total) -> str:
+    parts = [f'Expense {expense_pk}' if expense_pk is not None else 'Receipt']
+    if merchant:
+        parts.append(str(merchant))
+    if receipt_date:
+        parts.append(str(receipt_date)[:10])
+    if total is not None:
+        parts.append(f'${float(total):,.2f}')
+    return ' · '.join(parts)
+
+
+def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
+                  sort: str = 'date', direction: str = 'desc', q: str = '') -> Page:
+    sort_column = _RECEIPT_SORT_COLUMNS.get(sort, _RECEIPT_SORT_COLUMNS['date'])
+    sort_direction = 'ASC' if direction == 'asc' else 'DESC'
+    joins = """
           FROM ingest.receipts r
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
           LEFT JOIN LATERAL (
@@ -66,12 +77,42 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int) -> Pa
                LIMIT 1
           ) re ON TRUE
           LEFT JOIN budget.expenses e ON e.id = re.expense_pk
-         ORDER BY COALESCE(re.transaction_datetime, e.transaction_datetime,
-                           e.order_date::timestamp) DESC NULLS LAST,
+    """
+    conditions, params = [], []
+    # Each word can match a different field (e.g. "Sobeys 2026-02-14").
+    for word in q.split():
+        pattern = '%' + word.removeprefix('$').replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+        conditions.append("""(
+            concat_ws(' ', re.expense_pk::text, r.source_reference,
+                      COALESCE(re.merchant, e.store_name),
+                      COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp)::text,
+                      COALESCE(re.total, e.expense_total)::text,
+                      s.status, COALESCE(re.extraction_status, e.extraction_status)) ILIKE %s
+            OR EXISTS (SELECT 1 FROM budget.expense_items i
+                        WHERE i.expense_pk = re.expense_pk
+                          AND concat_ws(' ', i.item_name, i.product_description) ILIKE %s)
+        )""")
+        params.extend((pattern, pattern))
+    where = ' WHERE ' + ' AND '.join(conditions) if conditions else ''
+    count_rows = service._fetch('SELECT COUNT(*) AS total_count' + joins + where, tuple(params))
+    total_count = int(count_rows[0]["total_count"]) if count_rows else 0
+    rows = service._fetch(
+        f"""
+        SELECT r.source_sha256, r.source_reference,
+               s.status AS processing_status, s.attempts,
+               re.id AS evidence_id, re.expense_pk,
+               COALESCE(re.merchant, e.store_name) AS merchant,
+               COALESCE(re.transaction_datetime, e.transaction_datetime,
+                        e.order_date::timestamp) AS transaction_datetime,
+               COALESCE(re.total, e.expense_total) AS total,
+               COALESCE(re.extraction_status, e.extraction_status) AS extraction_status,
+               re.extraction_confidence
+         {joins} {where}
+         ORDER BY {sort_column} {sort_direction} NULLS LAST,
                   r.source_reference DESC
          LIMIT %s OFFSET %s
         """,
-        (limit, offset),
+        (*params, limit, offset),
     )
     return Page(rows, limit, offset, total_count)
 
@@ -276,19 +317,44 @@ def refresh_items(source_sha256: str, x_ledger_action: str | None = Header(defau
 def receipts_page(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    sort: str = 'date',
+    direction: str = 'desc',
+    q: str = '',
     service: LedgerQueryService = Depends(query_service),
     identity: dict[str, str] = Depends(authenticated_identity),
 ) -> str:
-    result = _receipt_list(service, limit=limit, offset=offset)
+    sort = sort if sort in _RECEIPT_SORT_COLUMNS else 'date'
+    direction = 'asc' if direction.lower() == 'asc' else 'desc'
+    q = q.strip()
+    result = _receipt_list(service, limit=limit, offset=offset, sort=sort, direction=direction, q=q)
+    headers = []
+    for key, label in [('expense_id', 'Expense ID'), ('receipt', 'Receipt'), ('merchant', 'Merchant'),
+                       ('date', 'Date/time'), ('total', 'Total'), ('processing', 'Processing'),
+                       ('extraction', 'Extraction')]:
+        next_direction = 'desc' if sort == key and direction == 'asc' else 'asc'
+        query = {'sort': key, 'direction': next_direction, 'limit': limit}
+        if q:
+            query['q'] = q
+        sort_url = f'{BASE_PATH}/receipts?' + urlencode(query)
+        indicator = (' ▲' if direction == 'asc' else ' ▼') if sort == key else ''
+        aria_sort = ('ascending' if direction == 'asc' else 'descending') if sort == key else 'none'
+        headers.append(f'<th aria-sort="{aria_sort}"><a href="{esc(sort_url)}">{label}{indicator}</a></th>')
     total = result.total_count or 0
     noun = "receipt" if total == 1 else "receipts"
     rows: list[str] = []
     for receipt in result.rows:
         source_sha256 = str(receipt.get("source_sha256") or "")
         source_reference = str(receipt.get("source_reference") or "")
-        label = Path(source_reference).name or source_reference or source_sha256[:12]
+        expense_pk = receipt.get('expense_pk')
+        label = receipt_label(expense_pk, receipt.get('merchant'),
+                              receipt.get('transaction_datetime'), receipt.get('total'))
+        expense_link = (
+            f'<a href="{BASE_PATH}/expenses/{esc(expense_pk)}">{esc(expense_pk)}</a>'
+            if expense_pk is not None else '<span class="muted">Pending</span>'
+        )
         rows.append(
             "<tr>"
+            f'<td>{expense_link}</td>'
             f'<td><a href="{receipt_url(source_sha256)}">{esc(label)}</a> · <a href="{receipt_graph_url(source_sha256)}">Processing graph</a><br><small class="muted">{esc(source_reference)}</small></td>'
             f"<td>{esc(receipt.get('merchant'))}</td>"
             f"<td>{esc(receipt.get('transaction_datetime'))}</td>"
@@ -298,11 +364,18 @@ def receipts_page(
             "</tr>"
         )
     body = (
-        f'<div class="toolbar"><span><strong>{total:,}</strong> {noun}</span>'
-        f'<span><a href="{BASE_PATH}/dashboard">Accounting &amp; review dashboard</a></span></div>'
-        "<table><thead><tr><th>Receipt</th><th>Merchant</th><th>Date/time</th>"
-        "<th>Total</th><th>Processing</th><th>Extraction</th></tr></thead><tbody>"
-        + "".join(rows)
+        f'<form class="toolbar" method="get" action="{BASE_PATH}/receipts">'
+        f'<input type="hidden" name="sort" value="{esc(sort)}">'
+        f'<input type="hidden" name="direction" value="{direction}">'
+        f'<label>Search receipts<input type="search" name="q" value="{esc(q)}" '
+        'placeholder="Merchant, date, total, filename, expense ID or item" size="48"></label>'
+        f'<label>Rows<input name="limit" type="number" min="1" max="500" value="{limit}"></label>'
+        '<button type="submit">Search</button>'
+        f'<a href="{BASE_PATH}/receipts">Clear</a>'
+        f'<span><strong>{total:,}</strong> {"matching " if q else ""}{noun}</span>'
+        f'<a href="{BASE_PATH}/dashboard">Accounting &amp; review dashboard</a></form>'
+        '<table><thead><tr>' + ''.join(headers) + '</tr></thead><tbody>'
+        + ("".join(rows) or '<tr><td colspan="7" class="muted">No receipts match your search.</td></tr>')
         + "</tbody></table>"
     )
     body += pager(
@@ -311,6 +384,7 @@ def receipts_page(
         offset=offset,
         row_count=len(result.rows),
         total_count=result.total_count,
+        query={'sort': sort, 'direction': direction, 'q': q},
     )
     return page("Receipts", body, base_path=BASE_PATH, identity=identity)
 
@@ -367,23 +441,33 @@ def _item_reading_html(item: dict[str, Any]) -> str:
         result += '<p class="muted">Row association unverified. These observations may include neighbouring or duplicate receipt items. OCR output line numbers are not Ledger item numbers.</p><ul>'
         for variant in variants:
             result += f'<li><details><summary><strong>{esc(variant["reading"])}</strong> · {len(variant["observations"])} observations</summary><ul>'
+            text_groups = {}
             for source in variant['observations']:
-                kind = source.get('kind')
-                if kind == 'ocr_consensus':
-                    provenance = 'Combined OCR text · OCR run UUID not recorded for this source'
-                elif kind == 'ocr_pass' or source.get('pass_id') is not None:
-                    provenance = 'OCR pass'
-                    if not source.get('ocr_run_uuid'):
-                        provenance += ' · OCR run UUID not recorded for this source'
-                else:
-                    provenance = 'OCR observation'
-                label = ' · '.join(f'{"OCR output line" if key == "line_number" else key.replace("_", " ")}: {source[key]}' for key in ('engine', 'pass_id', 'variant', 'ocr_run_uuid', 'page_number', 'line_number') if source.get(key) is not None)
-                result += f'<li><small>{esc(provenance)}</small><br><small>{esc(label)}</small><br><code>{esc(source.get("text"))}</code>'
-                if source.get('id'):
-                    result += f'<br><small>Observation ID: {esc(source["id"])}</small>'
-                if source.get('evidence_id') is not None:
-                    result += f'<br><small>Receipt evidence ID: {esc(source["evidence_id"])}</small>'
-                result += '</li>'
+                text_groups.setdefault(source.get('text') or '', []).append(source)
+            for text, sources in text_groups.items():
+                result += '<li>'
+                if text and text != variant['reading']:
+                    result += f'<code>{esc(text)}</code>'
+                count = len(sources)
+                result += f'<details><summary>Source records ({count})</summary><ul>'
+                for source in sources:
+                    kind = source.get('kind')
+                    if kind == 'ocr_consensus':
+                        provenance = 'Combined OCR text · OCR run UUID not recorded for this source'
+                    elif kind == 'ocr_pass' or source.get('pass_id') is not None:
+                        provenance = 'OCR pass'
+                        if not source.get('ocr_run_uuid'):
+                            provenance += ' · OCR run UUID not recorded for this source'
+                    else:
+                        provenance = 'OCR observation'
+                    label = ' · '.join(f'{"OCR output line" if key == "line_number" else key.replace("_", " ")}: {source[key]}' for key in ('engine', 'pass_id', 'variant', 'ocr_run_uuid', 'page_number', 'line_number') if source.get(key) is not None)
+                    result += f'<li><small>{esc(provenance)}</small><br><small>{esc(label)}</small>'
+                    if source.get('id'):
+                        result += f'<br><small>Observation ID: {esc(source["id"])}</small>'
+                    if source.get('evidence_id') is not None:
+                        result += f'<br><small>Receipt evidence ID: {esc(source["evidence_id"])}</small>'
+                    result += '</li>'
+                result += '</ul></details></li>'
             result += '</ul></details></li>'
         result += '</ul><p class="muted">An OCR run UUID is shared by the passes and lines from that run. Observation IDs distinguish the individual sources.</p></details>'
     return result
@@ -444,6 +528,12 @@ def receipt_page(
     filename = Path(source_reference).name or source_reference
     evidence_id = receipt.get("evidence_id")
     expense_pk = receipt.get("expense_pk") or expense.get("expense_pk")
+    merchant = evidence.get('merchant') or expense.get('store_name')
+    receipt_date = evidence.get('transaction_datetime') or expense.get('transaction_datetime') or expense.get('order_date')
+    total = evidence.get('total')
+    if total is None:
+        total = expense.get('expense_total')
+    title = receipt_label(expense_pk, merchant, receipt_date, total)
 
     canonical_expense = (
         f'<a href="{BASE_PATH}/api/expenses/{expense_pk}">Expense {esc(expense_pk)} (API)</a>'
@@ -452,9 +542,9 @@ def receipt_page(
     )
     header = f"""<div class="card"><div class="grid">
 <div><strong>Receipt</strong><br>{esc(filename)}</div>
-<div><strong>Merchant</strong><br>{esc(evidence.get('merchant') or expense.get('store_name'))}</div>
-<div><strong>Date/time</strong><br>{esc(evidence.get('transaction_datetime') or expense.get('transaction_datetime') or expense.get('order_date'))}</div>
-<div><strong>Total</strong><br>{money(evidence.get('total') or expense.get('expense_total'))}</div>
+<div><strong>Merchant</strong><br>{esc(merchant)}</div>
+<div><strong>Date/time</strong><br>{esc(receipt_date)}</div>
+<div><strong>Total</strong><br>{money(total)}</div>
 <div><strong>Processing</strong><br>{esc(receipt.get('processing_status'))}</div>
 <div><strong>Extraction</strong><br>{esc(evidence.get('extraction_status') or expense.get('extraction_status'))}</div>
 <div><strong>Source</strong><br>{esc(source_reference)}</div>
@@ -536,7 +626,7 @@ if(refresh){const key='receipt-refresh:'+refresh.dataset.receipt,saved=sessionSt
 }
 </script>"""
     )
-    return page(f"Receipt – {filename}", body, base_path=BASE_PATH, identity=identity)
+    return page(title, body, base_path=BASE_PATH, identity=identity)
 
 
 def main() -> None:

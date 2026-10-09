@@ -2,6 +2,9 @@ BEGIN;
 
 CREATE SCHEMA IF NOT EXISTS enrichment;
 
+ALTER TABLE budget.product_enrichment_results
+    ADD COLUMN IF NOT EXISTS ocr_evidence JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE TABLE IF NOT EXISTS enrichment.brave_query_cache (
     cache_key TEXT PRIMARY KEY,
     request JSONB NOT NULL,

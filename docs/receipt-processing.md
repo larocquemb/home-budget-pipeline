@@ -16,7 +16,9 @@ ledger receipts process /data/receipts/raw/scanned/inbox
 `DATABASE_URL`, `RECEIPT_SOURCE_ROOT`, and `HOME_BUDGET_OCR_CACHE`. Its summary
 reports discovered, skipped, exhausted, cache-missing, and published counts.
 Completion appears in consumer logs. Per-receipt PostgreSQL locks serialize
-work across consumers. Start a consumer with `ledger receipts consume`.
+work across consumers. Start a worker with `ledger receipts consume` and a result
+collector with `ledger receipts collect`; the collector commits OCR results and
+extracted expenses to PostgreSQL.
 The legacy `home-budget-process-receipts` and `home-budget-scan` entry points
 use the same `receipts process` arguments and queue dispatch; old synchronous
 report options such as `--json` and `--show-review` are no longer supported.
@@ -40,6 +42,16 @@ Keep the Mac cache on local disk, even when reading source receipts from the
 shared SMB folder. OCR creates cache files as needed. Switching the Mac cache
 location leaves existing PV cache files intact; only K3s continues using them.
 Already-running Mac processes retain their previous environment until restarted.
+
+For Mac development, native PostgreSQL on port 5432 and native RabbitMQ on port
+5672 stay running as Homebrew services. Enable the worker and collector as
+background services with `make dev-receipts-start`, then submit work with
+`ledger receipts process --verbose`. Check them with `make dev-receipts-status`
+and follow their output with `make dev-receipts-logs`. After changing `.env.dev`,
+run `make dev-receipts-restart`. Do not load the obsolete
+`.local-postgres/runtime.env`. Enable local log forwarding with `make dev-telemetry-start`; see the
+[local development guide](local-development.md#send-local-logs-and-opentelemetry-to-grafana).
+See [local macOS development](local-development.md) for setup and lifecycle commands.
 
 `make deploy-k3s` reads the K3s cache path from `.env.k3s` and writes it to the
 `receipt-runtime-config` ConfigMap before starting Argo CD sync. The receipt
@@ -242,6 +254,32 @@ one receipt. A numeric `--receipt` selector is the canonical
 `DATABASE_URL` and `BRAVE_SEARCH_API_KEY`; `OPENAI_API_KEY` enables the AI query
 expansion fallback.
 
+The base OCR pass supplies row order and layout. Ordinary product enrichment
+also evaluates distinct spellings from all retained successful passes in the
+latest run for each source. It associates rows through unique ordered text
+matches with price checks, rather than equating OCR output line numbers with
+Ledger item numbers. Missing duplicate purchases and ambiguous alignments are
+excluded. These associations are textual evidence, not verified physical image
+coordinates; very different readings that cannot be aligned remain excluded.
+
+All aligned spellings are searched before AI query expansion. Product scores
+use the spelling that supplied the search, and close competing products from
+different spellings require review. Saved results retain the readings, source
+run/pass/page/line IDs, evaluated product candidates, and selected spelling in
+`budget.product_enrichment_results.ocr_evidence`. Accepted spelling changes do
+not alter the original OCR evidence. Existing OCR caches can be reused.
+
+For an existing database, apply the additive schema update without resetting it:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/product_enrichment.sql
+```
+
+Then rerun receipt enrichment. Explicit receipt selection reevaluates accepted
+results that predate OCR alternative evidence once; newly accepted results
+continue to be skipped on subsequent runs. Each additional distinct spelling
+can add search requests, although repeated queries use the Brave cache.
+
 Run a dry run first:
 
 ```bash
@@ -260,15 +298,16 @@ ledger receipts enrich \
 
 The summary includes `considered`, `searched`, `db_hits`, `ai_queries`,
 `ai_expanded`, `accepted`, `review`, and `unsupported`. `review` is the number
-of matches below the automatic confidence threshold; it does not open an
+of matches below the automatic confidence threshold or with competing OCR
+product interpretations; it does not open an
 interactive prompt. Those items remain unenriched for manual review in Ledger.
 
 ## Kubernetes
 
 ### Review a collaborative product recommendation
 
-The receipt-scoped CLI above uses the original enrichment path. To pool retained
-OCR observations, receipt images, local Qwen proposals and Brave evidence instead,
+The receipt-scoped CLI above evaluates aligned OCR alternatives with retailer
+searches. To also pool receipt images, local Qwen proposals and Brave evidence,
 use the Kubernetes collaboration job:
 
 ```sh

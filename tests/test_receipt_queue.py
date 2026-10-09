@@ -278,3 +278,37 @@ def test_queue_cli_suppresses_pika_connection_chatter(monkeypatch):
         assert logger.level == queue.logging.WARNING
     finally:
         logger.setLevel(previous_level)
+
+
+@pytest.mark.parametrize('cache_hit', [False, True, None])
+def test_completion_log_carries_cache_outcome_after_publication(monkeypatch, channel, caplog, cache_hit):
+    import logging
+    from home_budget_pipeline import telemetry
+    from home_budget_pipeline.receipts import ocr_collector
+    caplog.set_level(logging.INFO, logger=queue.LOG.name)
+    monkeypatch.setattr(queue.receipt_lineage, 'record', lambda *a, **kw: None)
+    result = queue.WorkerResult('results_published', [SimpleNamespace(run_uuid='run-a')], cache_hit=cache_hit)
+    monkeypatch.setattr(queue, 'process_with_heartbeats', lambda *a: result)
+    monkeypatch.setattr(ocr_collector, 'publish_result', lambda *a: channel.events.append(('result', None)))
+    queue.handle_worker_delivery(None, channel, None, 1, MESSAGE.to_bytes(), None,
+                                 queue.Topology(), ocr_collector.ResultTopology())
+    assert [event[0] for event in channel.events] == ['result', 'ack']
+    record = next(record for record in caplog.records if 'result_events=' in record.getMessage())
+    assert record.cache_hit is cache_hit
+    assert json.loads(telemetry.JsonLogFormatter().format(record)).get('cache_hit') is cache_hit
+    assert f"cache_hit={str(cache_hit).lower() if cache_hit is not None else 'unknown'}" in record.getMessage()
+
+
+def test_failed_result_publication_does_not_log_fresh_completion(monkeypatch, channel, caplog):
+    import logging
+    from home_budget_pipeline.receipts import ocr_collector
+    caplog.set_level(logging.INFO, logger=queue.LOG.name)
+    monkeypatch.setattr(queue.receipt_lineage, 'record', lambda *a, **kw: None)
+    monkeypatch.setattr(queue, 'process_with_heartbeats', lambda *a:
+                        queue.WorkerResult('results_published', [object()], cache_hit=False))
+    monkeypatch.setattr(ocr_collector, 'publish_result', lambda *a:
+                        (_ for _ in ()).throw(RuntimeError('publication failed')))
+    queue.handle_worker_delivery(None, channel, None, 1, MESSAGE.to_bytes(), None,
+                                 queue.Topology(), ocr_collector.ResultTopology())
+    assert not any('result_events=' in record.getMessage() for record in caplog.records)
+    assert [event[0] for event in channel.events] == ['publish', 'ack']

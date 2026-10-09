@@ -241,6 +241,7 @@ CREATE TABLE budget.product_enrichment_results (
     candidate_url TEXT,
     confidence NUMERIC(5,4) NOT NULL DEFAULT 0,
     status TEXT NOT NULL CHECK (status IN ('accepted', 'review', 'rejected', 'error')),
+    ocr_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
     searched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -28,7 +28,7 @@ print(f"{unquote(url.path.removeprefix('/'))}|{url.hostname or ''}|{url.port or 
 PY
 )
 case "$client_target" in
-  home_budget\|127.0.0.1\|5433|home_budget\|localhost\|5433|home_budget\|::1\|5433) ;;
+  home_budget\|127.0.0.1\|5432|home_budget\|localhost\|5432|home_budget\|::1\|5432) ;;
   *)
     echo "Refusing to reset non-local database target: $client_target" >&2
     exit 2
@@ -51,6 +51,8 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
    DROP SCHEMA IF EXISTS ingest_green CASCADE;
    DROP SCHEMA IF EXISTS ingest CASCADE;
    DROP SCHEMA IF EXISTS ops CASCADE;
+   DROP SCHEMA IF EXISTS enrichment CASCADE;
+   DROP SCHEMA IF EXISTS lineage CASCADE;
    DROP SCHEMA IF EXISTS budget CASCADE;"
 
 for sql_file in "$stage_dir"/*.sql; do

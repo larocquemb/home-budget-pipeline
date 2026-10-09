@@ -105,11 +105,16 @@ def test_ocr_provenance_distinguishes_combined_text_and_lines_in_a_shared_run():
         {'id': 'pass:run-1:20:line:2', 'kind': 'ocr_pass', 'engine': 'tesseract',
          'pass_id': 20, 'ocr_run_uuid': 'run-1', 'line_number': 2, 'text': 'Cep Pic Med $6.49 C'},
         {'id': 'pass:run-1:20:line:3', 'kind': 'ocr_pass', 'engine': 'tesseract',
-         'pass_id': 20, 'ocr_run_uuid': 'run-1', 'line_number': 3, 'text': 'Cep Pic Med $6.49 C'}]}}
+         'pass_id': 20, 'ocr_run_uuid': 'run-1', 'line_number': 3, 'text': 'Cep Pic Med $6.49 C'}]},
+        'reading_hypotheses': [{'reading': 'Cep Pic Med', 'source_ids': [
+            'consensus:42:2', 'consensus:42:3', 'pass:run-1:20:line:2', 'pass:run-1:20:line:3']}]}
     text = _item_reading_html({'item_name': 'Cep Pic Med',
                               'recommendation': {'ocr_variants': ocr_variants(payload)}})
     assert text.count('Combined OCR text · OCR run UUID not recorded for this source') == 2
     assert text.count('ocr run uuid: run-1') == 2
+    assert text.count('<code>Cep Pic Med $6.49 C</code>') == 1
+    assert '<details><summary>Source records (4)</summary>' in text
+    assert '<details open' not in text
     assert 'Receipt evidence ID: 42' in text
     for source in payload['evidence_bundle']['sources']:
         assert f'Observation ID: {source["id"]}' in text

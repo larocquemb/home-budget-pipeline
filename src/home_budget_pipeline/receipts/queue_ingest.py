@@ -27,6 +27,15 @@ from .parallel_ingest import _cache_path, has_ocr_cache
 LOG = logging.getLogger(__name__)
 
 
+class WorkerResult(tuple):
+    """Status/events pair with the actual parser cache outcome attached."""
+
+    def __new__(cls, status, events, *, cache_hit):
+        result = super().__new__(cls, (status, events))
+        result.cache_hit = cache_hit
+        return result
+
+
 def _print_json(payload: object) -> None:
     """Emit one JSON object per stdout line for container log collectors."""
     print(json.dumps(payload, sort_keys=True), flush=True)
@@ -544,8 +553,10 @@ def produce_result_messages(message: ReceiptMessage, args):
             )
             if isinstance(parsed, tuple):
                 receipts, cache_hits = parsed
+                cache_hit = cache_hits > 0
             else:
                 receipts, cache_hits = parsed, 0
+                cache_hit = None
             telemetry.record_cache_lookup(cache_hits > 0)
             if len(receipts) != 1:
                 raise RuntimeError(f"expected one parsed receipt, got {len(receipts)}")
@@ -588,7 +599,7 @@ def produce_result_messages(message: ReceiptMessage, args):
                 else "results_published"
             )
             receipt_trace.finish(status)
-            return status, events
+            return WorkerResult(status, events, cache_hit=cache_hit)
 
 
 def handle_delivery(channel, delivery_tag: int, body: bytes, process, topology: Topology) -> None:
@@ -642,9 +653,10 @@ def handle_worker_delivery(
             _work_log_context(message),
             message.attempt,
         )
-        status, events = process_with_heartbeats(
+        result = process_with_heartbeats(
             connection, executor, process, message,
         )
+        status, events = result
         for event in events:
             publish_result(channel, result_topology.work, event)
     except Exception as exc:
@@ -676,11 +688,13 @@ def handle_worker_delivery(
         receipt_lineage.record(message, status, attempt_id=attempt_id, queue=topology.work,
                               result_runs=sorted({str(e.run_uuid) for e in events if hasattr(e, 'run_uuid')}))
         LOG.info(
-            "receipt=%s %s status=%s result_events=%s",
+            "receipt=%s %s status=%s result_events=%s cache_hit=%s",
             message.message_id,
             _work_log_context(message),
             status,
             len(events),
+            str(result.cache_hit).lower() if getattr(result, 'cache_hit', None) is not None else "unknown",
+            extra={"cache_hit": getattr(result, 'cache_hit', None), "status": status},
         )
     channel.basic_ack(delivery_tag=delivery_tag)
 

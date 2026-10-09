@@ -25,6 +25,7 @@ def page(title: str, body: str, *, base_path: str, identity: Mapping[str, str]) 
     who = esc(identity.get("email") or identity.get("user") or "")
     nav = (
         f'<a href="{base_path}">Home</a>'
+        f'<a href="{base_path}/receipts">Receipts</a>'
         f'<a href="{base_path}/expenses">Expenses</a>'
         f'<a href="{base_path}/category-spend">Category spend</a>'
         f'<a href="{base_path}/category-rules">Category rules</a>'
