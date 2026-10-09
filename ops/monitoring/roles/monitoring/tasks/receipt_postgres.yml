@@ -1,0 +1,146 @@
+---
+- name: Require Grafana administrator and CA inputs
+  ansible.builtin.assert:
+    that:
+      - monitoring_grafana_admin_password | length > 0
+      - monitoring_pki_dir | length > 0
+    quiet: true
+  no_log: true
+
+- name: Inspect private reader password file
+  ansible.builtin.stat:
+    path: "{{ monitoring_receipt_postgres_password_file }}"
+  delegate_to: localhost
+  become: false
+  register: monitoring_receipt_password_stat
+
+- name: Require protected reader password
+  ansible.builtin.assert:
+    that:
+      - monitoring_receipt_password_stat.stat.exists
+      - monitoring_receipt_password_stat.stat.isreg
+      - monitoring_receipt_password_stat.stat.mode in ['0400', '0600']
+    fail_msg: Run make dev-postgres-grafana-apply first; its private reader password file is required.
+
+- name: Define PostgreSQL datasource settings
+  ansible.builtin.set_fact:
+    monitoring_receipt_postgres_public:
+      uid: "{{ monitoring_receipt_postgres_uid }}"
+      name: "{{ monitoring_receipt_postgres_name | default('m4pro-receipts') }}"
+      type: grafana-postgresql-datasource
+      access: proxy
+      url: "{{ monitoring_receipt_postgres_host }}"
+      user: grafana_receipt_reader
+      isDefault: false
+      jsonData:
+        database: home_budget
+        sslmode: verify-full
+        tlsConfigurationMethod: file-content
+        tlsAuthWithCACert: true
+        postgresVersion: 1800
+        timescaledb: false
+        maxOpenConns: 2
+        maxIdleConns: 2
+        maxIdleConnsAuto: false
+        connMaxLifetime: 600
+        timeInterval: 15s
+    monitoring_receipt_postgres_secure:
+      password: "{{ lookup('ansible.builtin.file', monitoring_receipt_postgres_password_file) | trim }}"
+      tlsCACert: "{{ lookup('ansible.builtin.file', monitoring_root_ca_source) }}"
+  no_log: true
+
+- name: Calculate receipt datasource revision
+  ansible.builtin.set_fact:
+    monitoring_receipt_postgres_revision: "{{ monitoring_receipt_postgres_secure | to_json | hash('sha256') }}"
+  no_log: true
+
+- name: Inspect receipt datasource revision marker
+  ansible.builtin.stat:
+    path: "{{ monitoring_receipt_postgres_marker }}"
+  register: monitoring_receipt_postgres_marker_stat
+
+- name: Read receipt datasource revision marker
+  ansible.builtin.slurp:
+    src: "{{ monitoring_receipt_postgres_marker }}"
+  register: monitoring_receipt_postgres_marker_data
+  when: monitoring_receipt_postgres_marker_stat.stat.exists
+  no_log: true
+
+- name: Read existing receipt PostgreSQL datasource
+  ansible.builtin.uri:
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    url: "{{ monitoring_grafana_url }}/api/datasources/uid/{{ monitoring_receipt_postgres_uid }}"
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+    status_code: [200, 404]
+  register: monitoring_receipt_postgres_existing
+  until: monitoring_receipt_postgres_existing.status | default(0) in [200, 404]
+  retries: 15
+  delay: 2
+  check_mode: false
+  no_log: true
+
+- name: Decide whether receipt datasource needs reconciliation
+  ansible.builtin.set_fact:
+    monitoring_receipt_postgres_update: >-
+      {{ monitoring_receipt_postgres_existing.status == 404
+      or not monitoring_receipt_postgres_marker_stat.stat.exists
+      or (monitoring_receipt_postgres_marker_data.content | default('') | b64decode | trim) != monitoring_receipt_postgres_revision
+      or monitoring_receipt_postgres_existing.json.name | default('') != monitoring_receipt_postgres_public.name
+      or monitoring_receipt_postgres_existing.json.type | default('') != monitoring_receipt_postgres_public.type
+      or monitoring_receipt_postgres_existing.json.url | default('') != monitoring_receipt_postgres_public.url
+      or monitoring_receipt_postgres_existing.json.user | default('') != monitoring_receipt_postgres_public.user
+      or monitoring_receipt_postgres_existing.json.jsonData | default({}) != monitoring_receipt_postgres_public.jsonData }}
+  no_log: true
+
+- name: Create or update receipt PostgreSQL datasource
+  ansible.builtin.uri:
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    url: >-
+      {{ monitoring_grafana_url }}/api/datasources{{ '/uid/' + monitoring_receipt_postgres_uid if monitoring_receipt_postgres_existing.status == 200 else '' }}
+    method: "{{ 'PUT' if monitoring_receipt_postgres_existing.status == 200 else 'POST' }}"
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: "{{ monitoring_receipt_postgres_public | combine({'secureJsonData': monitoring_receipt_postgres_secure}) }}"
+    status_code: 200
+  when: monitoring_receipt_postgres_update and not ansible_check_mode
+  changed_when: true
+  no_log: true
+
+- name: Test receipt PostgreSQL datasource from Grafana
+  ansible.builtin.uri:
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    url: "{{ monitoring_grafana_url }}/api/datasources/uid/{{ monitoring_receipt_postgres_uid }}/health"
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+    status_code: [200, 400, 503]
+  register: monitoring_receipt_postgres_health
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Require successful Grafana PostgreSQL connection
+  ansible.builtin.assert:
+    that:
+      - monitoring_receipt_postgres_health.json.status | default('') == 'OK'
+    fail_msg: "{{ monitoring_receipt_postgres_health.json.message | default('Grafana PostgreSQL health check failed') }}"
+    success_msg: Grafana can connect to the receipt report database with verified TLS.
+  when: not ansible_check_mode
+
+- name: Retain successfully tested datasource revision
+  ansible.builtin.copy:
+    content: "{{ monitoring_receipt_postgres_revision }}\n"
+    dest: "{{ monitoring_receipt_postgres_marker }}"
+    owner: grafana
+    group: grafana
+    mode: "0600"
+  when: not ansible_check_mode
+  no_log: true

@@ -352,7 +352,7 @@ def test_monitoring_role_completes_receipt_metrics_observability():
     assert defaults["monitoring_grafana_home_budget_folder_uid"] == "home-budget"
     assert defaults["monitoring_grafana_home_budget_folder_title"] == "Home Budget"
     assert defaults["monitoring_grafana_brown_rook_folder_uid"] == "brown-rook"
-    assert defaults["monitoring_grafana_brown_rook_folder_title"] == "Brown Rook"
+    assert defaults["monitoring_grafana_brown_rook_folder_title"] == "Infrastructure"
     assert not (
         ROOT
         / "ops/monitoring/roles/monitoring/templates/grafana-dashboard-provider.yml.j2"
@@ -449,15 +449,26 @@ def test_monitoring_role_completes_receipt_metrics_observability():
         "home-budget"
     )
     assert dashboard_spec["title"] == "Home Budget Receipt Telemetry"
-    assert len(dashboard_panels) == 11
+    assert len(dashboard_panels) == 13
     assert {variable["spec"]["name"] for variable in dashboard_spec["variables"]} == {
         "environment", "service", "worker_host", "status", "queue",
     }
     assert all(
         query["query"]["datasource"]["name"] == "home-budget-prometheus"
         for panel in dashboard_panels
+        if panel['id'] not in (12, 13)
         for query in _v2_panel_query_models(panel)
     )
+    timeline = next(panel for panel in dashboard_panels if panel['id'] == 12)
+    assert timeline['vizConfig']['group'] == 'state-timeline'
+    timeline_query = _v2_panel_query_models(timeline)[0]['query']
+    assert timeline_query['group'] == 'loki'
+    assert 'last_over_time' in timeline_query['spec']['expr']
+    assert 'unwrap processing_state' in timeline_query['spec']['expr']
+    assert '[30s]' in timeline_query['spec']['expr']
+    logs = next(panel for panel in dashboard_panels if panel['id'] == 13)
+    assert logs['vizConfig']['group'] == 'logs'
+    assert 'receipt-worker|receipt-processor' in _v2_panel_query_models(logs)[0]['query']['spec']['expr']
     assert any(
         target.get("exemplar") is True
         for panel in dashboard_panels
@@ -615,8 +626,8 @@ def test_public_live_demo_is_sanitized_and_revocable():
         "{{ monitoring_grafana_prometheus_datasource_uid }}",
         "home-budget-prometheus",
     ).replace(
-        "{{ monitoring_grafana_brown_rook_folder_uid_effective }}",
-        "brown-rook",
+        "{{ monitoring_grafana_demos_folder_uid_effective }}",
+        "demos",
     ).replace(
         "{{ monitoring_grafana_public_demo_dashboard_uid }}",
         "brown-rook-live-telemetry",
@@ -651,7 +662,7 @@ def test_public_live_demo_is_sanitized_and_revocable():
     dashboard_panels = _v2_dashboard_panels(dashboard)
     assert dashboard["metadata"]["name"] == "brown-rook-live-telemetry"
     assert dashboard["metadata"]["annotations"]["grafana.app/folder"] == (
-        "brown-rook"
+        "demos"
     )
     assert dashboard_spec["title"] == "Brown Rook Live Receipt Processing"
     assert len(dashboard_panels) == 8

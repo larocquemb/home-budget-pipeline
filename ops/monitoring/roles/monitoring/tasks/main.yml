@@ -1,4 +1,32 @@
 ---
+- name: Audit Grafana dashboards and datasource references
+  ansible.builtin.import_tasks: grafana_audit.yml
+  tags: [never, monitoring_grafana_audit]
+
+- name: Reconcile LAN multicast name resolution
+  ansible.builtin.import_tasks: mdns.yml
+  when: monitoring_mdns_enabled | bool
+  tags: [monitoring_mdns]
+
+- name: Reconcile receipt PostgreSQL datasource
+  ansible.builtin.import_tasks: receipt_postgres.yml
+  when: monitoring_receipt_postgres_enabled | bool
+  tags: [monitoring_receipt_postgres]
+
+- name: Reconcile K3s receipt PostgreSQL datasource
+  ansible.builtin.include_tasks: receipt_postgres.yml
+  vars:
+    monitoring_receipt_postgres_name: k3s-receipts
+    monitoring_receipt_postgres_host: "{{ monitoring_k3s_receipt_postgres_host }}"
+    monitoring_receipt_postgres_uid: home-budget-k3s-receipts
+    monitoring_receipt_postgres_password_file: "{{ monitoring_k3s_receipt_postgres_password_file }}"
+    monitoring_receipt_postgres_marker: /var/lib/grafana/.receipt-postgres-k3s.sha256
+  when: monitoring_k3s_receipt_postgres_enabled | bool
+  tags: [monitoring_receipt_postgres]
+  args:
+    apply:
+      tags: [monitoring_receipt_postgres]
+
 - name: Validate controller inputs
   ansible.builtin.assert:
     that:
@@ -1446,6 +1474,7 @@
            != 'prometheus'
         or monitoring_grafana_prometheus_datasource.json.url | default('')
            != 'http://127.0.0.1:9090'
+        or not monitoring_grafana_prometheus_datasource.json.isDefault | default(false)
         or monitoring_grafana_tempo_datasource_uid not in
            (monitoring_grafana_prometheus_datasource.json.jsonData.exemplarTraceIdDestinations
             | default([])
@@ -1515,9 +1544,16 @@
     monitoring_grafana_brown_rook_folder_uid_effective: >-
       {{
         (monitoring_grafana_folder_list.json['items'] | default([])
-         | selectattr('spec.title', 'equalto', monitoring_grafana_brown_rook_folder_title)
+         | selectattr('spec.title', 'in', [monitoring_grafana_brown_rook_folder_title, 'Brown Rook'])
          | map(attribute='metadata.name') | list | first)
         | default(monitoring_grafana_brown_rook_folder_uid, true)
+      }}
+    monitoring_grafana_demos_folder_uid_effective: >-
+      {{
+        (monitoring_grafana_folder_list.json['items'] | default([])
+         | selectattr('spec.title', 'equalto', monitoring_grafana_demos_folder_title)
+         | map(attribute='metadata.name') | list | first)
+        | default(monitoring_grafana_demos_folder_uid, true)
       }}
   no_log: true
 
@@ -1605,7 +1641,7 @@
             name: "{{ monitoring_grafana_home_budget_folder_uid_effective }}"
           spec:
             title: "{{ monitoring_grafana_home_budget_folder_title }}"
-      - label: Brown Rook
+      - label: Infrastructure
         resource:
           apiVersion: folder.grafana.app/v1
           kind: Folder
@@ -1613,6 +1649,14 @@
             name: "{{ monitoring_grafana_brown_rook_folder_uid_effective }}"
           spec:
             title: "{{ monitoring_grafana_brown_rook_folder_title }}"
+      - label: Demos
+        resource:
+          apiVersion: folder.grafana.app/v1
+          kind: Folder
+          metadata:
+            name: "{{ monitoring_grafana_demos_folder_uid_effective }}"
+          spec:
+            title: "{{ monitoring_grafana_demos_folder_title }}"
 
 - name: Read reconciled native Grafana folders
   ansible.builtin.uri:
@@ -2159,3 +2203,8 @@
     quiet: true
   when: not ansible_check_mode
   no_log: true
+
+- name: Keep the audited Grafana dashboard inventory consolidated
+  ansible.builtin.import_tasks: grafana_cleanup.yml
+  when: monitoring_grafana_cleanup_enabled | bool
+  tags: [monitoring_grafana_cleanup]

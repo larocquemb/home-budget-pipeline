@@ -36,6 +36,22 @@ class WorkerResult(tuple):
         return result
 
 
+def log_receipt_activity(message, active, attempt_id=None):
+    """Emit a short-lived processing signal; receipt identities stay in logs."""
+    LOG.info("receipt_processing_state receipt=%s active=%s", message.source_reference, active,
+             extra={"event": "receipt_processing_state", "processing_state": active,
+                    "receipt_name": message.source_reference,
+                    "attempt_id": attempt_id,
+                    "worker_id": f"{socket.gethostname()}:{os.getpid()}",
+                    "worker_host": socket.gethostname()})
+
+
+def record_receipt_heartbeat(message, attempt_id, queue):
+    """Keep the same attempt identity in durable evidence and live logs."""
+    receipt_lineage.record(message, 'heartbeat', attempt_id=attempt_id, queue=queue)
+    log_receipt_activity(message, 1, attempt_id)
+
+
 def _print_json(payload: object) -> None:
     """Emit one JSON object per stdout line for container log collectors."""
     print(json.dumps(payload, sort_keys=True), flush=True)
@@ -653,8 +669,10 @@ def handle_worker_delivery(
             _work_log_context(message),
             message.attempt,
         )
+        log_receipt_activity(message, 1, attempt_id)
         result = process_with_heartbeats(
             connection, executor, process, message,
+            lambda: record_receipt_heartbeat(message, attempt_id, topology.work),
         )
         status, events = result
         for event in events:
@@ -686,7 +704,8 @@ def handle_worker_delivery(
                               error_type=type(exc).__name__, queue=target)
     else:
         receipt_lineage.record(message, status, attempt_id=attempt_id, queue=topology.work,
-                              result_runs=sorted({str(e.run_uuid) for e in events if hasattr(e, 'run_uuid')}))
+                              result_runs=sorted({str(e.run_uuid) for e in events if hasattr(e, 'run_uuid')}),
+                              cache_hit=getattr(result, 'cache_hit', None))
         LOG.info(
             "receipt=%s %s status=%s result_events=%s cache_hit=%s",
             message.message_id,
@@ -696,14 +715,20 @@ def handle_worker_delivery(
             str(result.cache_hit).lower() if getattr(result, 'cache_hit', None) is not None else "unknown",
             extra={"cache_hit": getattr(result, 'cache_hit', None), "status": status},
         )
+    if message is not None:
+        log_receipt_activity(message, 0, attempt_id)
     channel.basic_ack(delivery_tag=delivery_tag)
 
 
-def process_with_heartbeats(connection, executor, process, message):
+def process_with_heartbeats(connection, executor, process, message, progress=None):
     """Keep AMQP I/O on its owning thread while OCR/DB work runs elsewhere."""
     future = executor.submit(process, message)
+    next_progress = time.monotonic() + 15
     while not future.done():
         connection.process_data_events(time_limit=1)
+        if progress is not None and time.monotonic() >= next_progress:
+            progress()
+            next_progress = time.monotonic() + 15
     return future.result()
 
 

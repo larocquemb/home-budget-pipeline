@@ -84,6 +84,9 @@ for dashboard_path in dashboard_paths:
         if element["kind"] != "Panel":
             continue
         for query in element["spec"]["data"]["spec"]["queries"]:
+            # Loki timeline/log expressions must not be passed to promtool.
+            if query["spec"]["query"].get("group") != "prometheus":
+                continue
             target = query["spec"]["query"]["spec"]
             expression = target.get("expr")
             if not expression:

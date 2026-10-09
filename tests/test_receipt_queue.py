@@ -312,3 +312,48 @@ def test_failed_result_publication_does_not_log_fresh_completion(monkeypatch, ch
                                  queue.Topology(), ocr_collector.ResultTopology())
     assert not any('result_events=' in record.getMessage() for record in caplog.records)
     assert [event[0] for event in channel.events] == ['publish', 'ack']
+
+
+def test_activity_logs_distinguish_parallel_workers(monkeypatch, caplog):
+    import logging
+    from home_budget_pipeline import telemetry
+    caplog.set_level(logging.INFO, logger=queue.LOG.name)
+    monkeypatch.setattr(queue.socket, 'gethostname', lambda: 'm4pro')
+    monkeypatch.setattr(queue.os, 'getpid', lambda: 100)
+    queue.log_receipt_activity(MESSAGE, 1)
+    monkeypatch.setattr(queue.os, 'getpid', lambda: 200)
+    second = replace(MESSAGE, source_reference='2026/second.pdf')
+    queue.log_receipt_activity(second, 1)
+    queue.log_receipt_activity(second, 0)
+    signals = [json.loads(telemetry.JsonLogFormatter().format(record)) for record in caplog.records]
+    assert [(s['worker_id'],s['receipt_name'],s['processing_state']) for s in signals] == [
+        ('m4pro:100','2026/receipt.pdf',1), ('m4pro:200','2026/second.pdf',1),
+        ('m4pro:200','2026/second.pdf',0)]
+
+
+def test_activity_heartbeat_refreshes_during_long_processing_without_blocking_amqp(monkeypatch):
+    now = [0]
+    calls = []
+    checks = iter([False, False, False, True])
+    future = SimpleNamespace(done=lambda: next(checks), result=lambda: 'finished')
+    executor = SimpleNamespace(submit=lambda *a: future)
+    def io(**kwargs):
+        now[0] += 16
+        calls.append('io')
+    monkeypatch.setattr(queue.time, 'monotonic', lambda: now[0])
+    result = queue.process_with_heartbeats(SimpleNamespace(process_data_events=io),
+        executor, None, MESSAGE, lambda: calls.append('signal'))
+    assert result == 'finished'
+    assert calls == ['io','signal','io','signal','io','signal']
+
+
+def test_heartbeat_uses_same_attempt_in_database_and_logs(monkeypatch, caplog):
+    import logging
+    calls = []
+    caplog.set_level(logging.INFO, logger=queue.LOG.name)
+    monkeypatch.setattr(queue.receipt_lineage, 'record', lambda message,status,**kwargs:
+                        calls.append((status,kwargs)))
+    queue.record_receipt_heartbeat(MESSAGE, 'attempt-123', 'receipts.v1.work')
+    assert calls == [('heartbeat', {'attempt_id':'attempt-123', 'queue':'receipts.v1.work'})]
+    assert caplog.records[-1].attempt_id == 'attempt-123'
+    assert caplog.records[-1].processing_state == 1

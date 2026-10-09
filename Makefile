@@ -31,6 +31,8 @@ ARGO_SERVER ?= argocd.brownrook.net
 export ARGO_APP ARGO_SERVER
 ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 MONITORING_GITOPS ?= ./scripts/monitoring_gitops.sh
+POSTGRES_LAN_IP ?=
+POSTGRES_HOST ?= $(if $(POSTGRES_LAN_IP),$(POSTGRES_LAN_IP),m4pro.local)
 LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
 
 .PHONY: help docs-build docs-serve test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
@@ -38,6 +40,32 @@ LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
 .PHONY: receipts-publish receipts-worker-test
 .PHONY: check-local build-local
 .PHONY: ollama-gitops-syntax ollama-gitops-check ollama-gitops-apply
+.PHONY: dev-postgres-tls-prepare
+.PHONY: dev-postgres-grafana-check dev-postgres-grafana-apply
+.PHONY: monitoring-receipt-postgres-apply
+.PHONY: monitoring-grafana-audit
+.PHONY: monitoring-grafana-cleanup-check monitoring-grafana-cleanup-apply
+
+monitoring-grafana-cleanup-check:
+	@bash scripts/monitoring_gitops.sh check --tags monitoring_grafana_cleanup -e monitoring_grafana_cleanup_enabled=true
+
+monitoring-grafana-cleanup-apply:
+	@bash scripts/monitoring_gitops.sh apply --tags monitoring_grafana_cleanup -e monitoring_grafana_cleanup_enabled=true
+
+monitoring-grafana-audit:
+	@bash scripts/monitoring_gitops.sh apply --tags monitoring_grafana_audit
+
+monitoring-receipt-postgres-apply:
+	@bash scripts/monitoring_gitops.sh apply --tags monitoring_mdns,monitoring_receipt_postgres -e monitoring_receipt_postgres_enabled=true
+
+dev-postgres-grafana-check:
+	@$(PYTHON) scripts/configure_receipt_postgres.py
+
+dev-postgres-grafana-apply:
+	@$(PYTHON) scripts/configure_receipt_postgres.py --apply
+
+dev-postgres-tls-prepare:
+	@bash scripts/prepare_receipt_postgres_tls.sh "$(POSTGRES_HOST)"
 
 help:
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
@@ -252,3 +280,17 @@ test-receipts: test-db-setup
 	@echo "Running receipt backlog against local PostgreSQL test database..."
 	@DATABASE_URL=$(TEST_DATABASE_URL) HOME_BUDGET_OCR_CACHE="$(RECEIPT_TEST_ROOT)/ocr-cache" \
 		$(LEDGER) receipts process "$(RECEIPT_TEST_ROOT)/inbox"
+
+.PHONY: k3s-postgres-tls-prepare monitoring-receipt-postgres-both-apply
+k3s-postgres-tls-prepare:
+	@bash scripts/prepare_receipt_postgres_tls.sh postgres.brownrook.net "$(HOME)/brownrook-ca/leafs/k3s-postgres"
+
+monitoring-receipt-postgres-both-apply:
+	@bash scripts/monitoring_gitops.sh apply --tags monitoring_mdns,monitoring_receipt_postgres -e monitoring_receipt_postgres_enabled=true -e monitoring_k3s_receipt_postgres_enabled=true
+
+.PHONY: k3s-postgres-grafana-check k3s-postgres-grafana-apply
+k3s-postgres-grafana-check:
+	@$(PYTHON) scripts/configure_k3s_receipt_postgres.py
+
+k3s-postgres-grafana-apply:
+	@$(PYTHON) scripts/configure_k3s_receipt_postgres.py --apply

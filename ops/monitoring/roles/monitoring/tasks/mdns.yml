@@ -1,0 +1,60 @@
+---
+- name: Install Avahi and system mDNS resolver
+  ansible.builtin.apt:
+    name: [avahi-daemon, avahi-utils, libnss-mdns]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    policy_rc_d: 101
+
+- name: Configure Avahi for IPv4 LAN resolution
+  ansible.builtin.template:
+    src: avahi-daemon.conf.j2
+    dest: /etc/avahi/avahi-daemon.conf
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: restart Avahi
+
+# Preserve other resolver modules and their ordering. The package generally
+# adds this itself, but reconcile hosts entries that still have only files/dns.
+- name: Resolve local multicast names before unicast DNS
+  ansible.builtin.replace:
+    path: /etc/nsswitch.conf
+    regexp: '^hosts:(?![^\n]*\bmdns4_minimal\b)([^\n]*?)(\bdns\b)([^\n]*)$'
+    replace: 'hosts:\1mdns4_minimal [NOTFOUND=return] \2\3'
+    backup: true
+
+- name: Read reconciled name-service configuration
+  ansible.builtin.slurp:
+    src: /etc/nsswitch.conf
+  register: monitoring_mdns_nsswitch
+
+- name: Require multicast lookup before DNS
+  vars:
+    monitoring_mdns_hosts_modules: >-
+      {{ (((monitoring_mdns_nsswitch.content | b64decode).splitlines()
+      | select('match', '^hosts:') | first | default('')).split())[1:] }}
+  ansible.builtin.assert:
+    that:
+      - "'mdns4_minimal' in monitoring_mdns_hosts_modules"
+      - "'dns' in monitoring_mdns_hosts_modules"
+      - monitoring_mdns_hosts_modules.index('mdns4_minimal') < monitoring_mdns_hosts_modules.index('dns')
+    fail_msg: >-
+      The hosts entry in /etc/nsswitch.conf must place mdns4_minimal before dns.
+      Review the existing resolver modules rather than replacing the whole line.
+  when: not ansible_check_mode
+
+- name: Keep Avahi running across reboots
+  ansible.builtin.systemd_service:
+    name: avahi-daemon
+    enabled: true
+    state: started
+
+- name: Configure DNS transport for Grafana's static Go resolver
+  ansible.builtin.import_tasks: mdns_dns_stub.yml
+  when: monitoring_mdns_grafana_dns_stub | bool
+
+- name: Activate multicast resolver changes before testing datasources
+  ansible.builtin.meta: flush_handlers

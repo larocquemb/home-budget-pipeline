@@ -1,0 +1,7 @@
+# Managed by ops/monitoring/site.yml.
+[Resolve]
+DNS={{ monitoring_mdns_upstream_dns | join(' ') }}
+Domains={{ monitoring_mdns_search_domains | join(' ') }}
+MulticastDNS=resolve
+LLMNR=no
+DNSStubListener=yes
