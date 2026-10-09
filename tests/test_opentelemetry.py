@@ -474,7 +474,6 @@ class Session:
         posts.append((url,kwargs['data']))
         return MagicMock(status_code=200,ok=True)
     def close(self): pass
-requests.Session=Session
 os.environ.update(HOME_BUDGET_TELEMETRY_ENABLED='true',
     OTEL_EXPORTER_OTLP_PROTOCOL='http/protobuf',
     OTEL_EXPORTER_OTLP_ENDPOINT='http://127.0.0.1:4318',
@@ -484,6 +483,13 @@ for signal in ('TRACES','METRICS'):
         os.environ.pop(f'OTEL_EXPORTER_OTLP_{signal}_{key}',None)
 from home_budget_pipeline import telemetry
 from opentelemetry import metrics
+# Inject the public session argument: newer exporters may choose a different
+# default HTTP transport, so patching requests.Session does not intercept it.
+exporter_class = telemetry._otlp_exporter_class
+def exporter_with_session(signal):
+    exporter = exporter_class(signal)
+    return lambda **kwargs: exporter(session=Session(), **kwargs)
+telemetry._otlp_exporter_class = exporter_with_session
 assert telemetry.configure_telemetry()
 with telemetry.span('receipt.test'):
     subprocess.run([sys.executable,'-c','pass'],check=True)
@@ -493,7 +499,8 @@ assert {url for url,payload in posts} == {'http://127.0.0.1:4318/v1/traces','htt
 assert all(isinstance(payload,bytes) and payload for url,payload in posts)
 assert 'grpc' not in sys.modules
 '''
-    result = subprocess.run([sys.executable, '-c', script], check=True, capture_output=True, text=True)
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
     assert 'FD from fork parent' not in result.stderr
 
 
