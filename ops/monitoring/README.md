@@ -133,6 +133,104 @@ Secret-bearing tasks use Ansible's `no_log` protection.
 Running `make monitoring-gitops-check` and then
 `make monitoring-gitops-apply` again should report no configuration drift.
 
+### Resolve Mac hostnames on the LAN
+
+For duplicate-dashboard review, run `make monitoring-grafana-audit`. It exports
+dashboard definitions and public datasource metadata to the ignored, protected
+`.local-services/grafana-cleanup/inventory.json` on the controller. It does not
+modify Grafana and excludes datasource credentials. Compare dashboard content
+and all datasource references before choosing a retained dashboard or deleting
+an old datasource; matching names alone are insufficient.
+
+The audited consolidation is available as:
+
+```sh
+make monitoring-grafana-cleanup-check
+make monitoring-grafana-cleanup-apply
+```
+
+The production role also reconciles it during full applies. It retains the
+six-panel `brownrook-k3s-node` overview and repairs its provisioned datasource
+reference; makes `home-budget-prometheus` the default; retains `rYdddlPWk`
+(Node Exporter Full) in Infrastructure; and deletes `k3s-node` only while its query
+panels match the detailed dashboard. It moves the one-panel `pacq65g` receipt
+processor logs into Home Budget Receipt Telemetry before deleting that old
+dashboard. The public receipt dashboard remains separate. If an audited copy
+gains unique queries, the cleanup stops before deleting it. The audit export is
+retained locally for recovery. If the retired Prometheus UID returns, cleanup
+requires a new dependency audit rather than deleting it blindly.
+
+Dashboard folders reflect their purpose: **Infrastructure** contains the node
+overview and Node Exporter Full; **Home Budget** contains receipt telemetry,
+OCR performance and model comparison; **Demos** contains the public receipt
+overview. The former Brown Rook folder is renamed in place, preserving its UID
+and permissions. Its provisioner is updated as well so it cannot recreate the
+old name. Public demo dashboard UIDs and external-share tokens are retained.
+
+Private application dashboards default the **Execution host** selector to
+`m4pro`, and offer direct `m4pro — local` and `Arsene — K3s` links. Other hosts
+remain selectable. Selecting All explicitly compares hosts; receipt throughput
+and OCR time-series retain `worker_host` in their series labels. Loki queries
+filter the physical `node` label, because Kubernetes worker hostnames can be pod
+names. Shared K3s RabbitMQ panels are labelled as such and do not switch to the
+Mac's native broker when selecting m4pro. The `m4pro-receipts` PostgreSQL source
+contains the Mac's processing history, not Arsene's database. Mac CPU/memory
+node-exporter dashboards are not created by this organization change.
+
+To create or update the read-only native PostgreSQL datasource from the command
+line after preparing PostgreSQL TLS and the reader role on m4pro:
+
+```sh
+make monitoring-receipt-postgres-apply
+```
+
+The wrapper reads `.env.monitoring` and prompts for the Grafana administrator
+password and configured SSH/sudo credentials. The tagged tasks read the private
+reader password file on m4pro and the Brown Rook root CA, then call Grafana's
+local API on monitoring. Secret tasks suppress logs. A connection health check
+runs from Grafana itself, verifying that its resolver and TLS connection work.
+The datasource is named `m4pro-receipts`. Repeated runs reconcile configuration
+drift and avoid rewriting unchanged credentials. Set
+`MONITORING_RECEIPT_POSTGRES_ENABLED=1` in `.env.monitoring` to include this
+datasource in subsequent full playbook applies.
+
+The production inventory enables `monitoring_mdns_enabled`. The role installs
+Avahi and `libnss-mdns`, places multicast resolution before unicast DNS in the
+existing NSS hosts entry, and enables Avahi across reboots. Avahi resolves IPv4
+LAN names such as `m4pro.local`; service publishing and multicast reflection are
+disabled. NSS resolution uses the existing Avahi resolver. Grafana's static Go
+build cannot use NSS, so production also enables a `systemd-resolved` DNS stub
+with multicast lookup. A service mount supplies its stub `resolv.conf` to Grafana
+only. The host's Proxmox-managed `/etc/resolv.conf` is preserved, including after
+package installation; upstream DNS remains `192.168.2.252`. The inventory records
+that upstream and the `brownrook.net` search domain. Grafana is restarted when
+its resolver override changes. The datasource command applies these resolver
+tasks before testing the connection.
+The managed firewall already permits UDP multicast traffic. Both hosts must be
+on a network that permits mDNS multicast.
+
+Apply only these tasks from the repository root, without certificate inputs or
+Grafana credentials:
+
+```sh
+ANSIBLE_CONFIG=ops/monitoring/ansible.cfg ansible-playbook \
+  -i ops/monitoring/inventory/production.yml ops/monitoring/site.yml \
+  --tags monitoring_mdns --ask-become-pass
+```
+
+On monitoring, verify resolution:
+
+```sh
+avahi-resolve-host-name -4 m4pro.local
+getent ahostsv4 m4pro.local
+```
+
+This configures host resolution; it does not configure the PostgreSQL datasource.
+When using `m4pro.local` as the datasource hostname, the PostgreSQL server
+certificate needs `DNS:m4pro.local` and the datasource connection must also pass
+Grafana's connection health check. An application with its own DNS resolver may
+not use NSS; successful `getent` alone does not validate Grafana's connection.
+
 For a firewall-only update, use the `monitoring_firewall` tag. This reads the
 committed allowlists, validates `/etc/nftables.conf` with `nft --check`, and
 restarts nftables when the policy changes. It does not require Grafana credentials
@@ -224,3 +322,71 @@ path from `deploy/rabbitmq-private-telemetry` back to
 `deploy/rabbitmq-private-logging`. Keep Tempo and its Kubernetes Secrets in
 place until any queued Collector telemetry is drained; their presence does not
 enable application telemetry by itself.
+
+### Receipt reports from both databases
+
+`m4pro-receipts` reads the native Mac development database. `k3s-receipts`
+reads the production database at `postgres.brownrook.net:5432`, shared by
+Arsene, Longbow and other K3s workers. PostgreSQL currently runs on `k3s1`;
+the datasource name describes the deployment rather than one worker host.
+Select the appropriate PostgreSQL datasource in Explore, then query
+`lineage.receipt_processing_attempts` with Table format. The Execution host
+selector on the telemetry dashboards filters logs and metrics; it does not
+switch PostgreSQL databases.
+
+Prepare production TLS without changing the running database:
+
+```bash
+make k3s-postgres-tls-prepare
+```
+
+Sign `~/brownrook-ca/leafs/k3s-postgres/server.csr` with the Brown Rook
+intermediate CA using `server.tmpl` in that directory. Write the signed leaf
+as `server.crt`. The helper creates the full chain when installing the Secret.
+For the existing YubiKey signing setup, run from the repository root:
+
+```bash
+gnutls-certtool --ask-pass --hash=SHA384 --generate-certificate \
+  --template="$HOME/brownrook-ca/leafs/k3s-postgres/server.tmpl" \
+  --load-request="$HOME/brownrook-ca/leafs/k3s-postgres/server.csr" \
+  --load-ca-certificate="$HOME/brownrook-ca/intermediate/intermediate_ca.crt" \
+  --load-ca-privkey="$INTERMEDIATE_CA_KEY_URI" \
+  --provider=/opt/homebrew/lib/libykcs11.dylib \
+  --outfile="$HOME/brownrook-ca/leafs/k3s-postgres/server.crt"
+make k3s-postgres-grafana-check
+make k3s-postgres-grafana-apply
+```
+
+Apply validates the server purpose, hostname, chain, expiry and key match;
+creates a separate private reader password; installs the same report view
+and SELECT-only reader; and installs `postgres-reporting-tls`. It prepends
+persistent HBA rules requiring TLS and SCRAM for that reader. Existing
+application authentication rules remain in place. Traefik proxies the LAN
+connection, so the database sees proxy addresses rather than the monitoring
+host; the reader is protected by TLS, its independent password and view-only
+grants. No PostgreSQL restart is requested by this command.
+
+The TLS patch is enabled in `k8s/kustomization.yaml`:
+
+
+```yaml
+patches:
+  - path: patches/postgres-reporting-tls.yaml
+```
+
+Install the TLS Secret before merging or deploying this GitOps change.
+Review and deploy it during a suitable PostgreSQL restart window.
+The patch enables TLS while retaining OAuth validator settings and existing
+application connections. Do not enable it before the Secret has been installed.
+After the new PostgreSQL pod is ready:
+
+```bash
+make monitoring-receipt-postgres-both-apply
+```
+
+Grafana checks both connections using `verify-full`. Set
+`MONITORING_RECEIPT_POSTGRES_ENABLED=1` and
+`MONITORING_K3S_RECEIPT_POSTGRES_ENABLED=1` in the private `.env.monitoring`
+to retain both sources during full monitoring applies. An empty report can
+mean no attempt start events in the last 24 hours; it does not mean the
+connection failed. Heartbeat freshness requires the updated worker code.

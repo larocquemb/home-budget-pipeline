@@ -629,6 +629,7 @@ class JsonLogFormatter(logging.Formatter):
     _extra_fields = (
         "status", "error_type", "engine", "dpi", "psm", "variant",
         "selected_base", "consensus_coverage_ratio", "receipt", "cache_hit",
+        "event", "processing_state", "receipt_name", "worker_id", "worker_host", "attempt_id",
     )
 
     def format(self, record: logging.LogRecord) -> str:

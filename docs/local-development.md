@@ -328,3 +328,143 @@ ledger receipts enrich \
 Already accepted items in that selection may be skipped; later receipt items
 are not substituted. This limits product enrichment, while OCR still processes
 the whole receipt. Omit `--write-db` to preview enrichment results.
+
+## See receipts processing in parallel
+
+The receipts/min chart counts completion events. Use the **Receipt processing
+ overlap by worker** state timeline in **Home Budget Receipt Telemetry** to
+see actual processing activity instead. Each worker/receipt has its own row;
+coloured intervals that overlap indicate parallel processing. Workers emit
+activity at start, every 15 seconds while processing, and at completion or
+handled failure. The signal expires after 30 seconds if a worker stops abruptly.
+The visualization is sampled, so short cached jobs can be missed and interval
+edges can differ from exact start/end timestamps. Restart receipt services to
+load the signals. Apply the monitoring playbook to update the provisioned panel:
+
+```bash
+make dev-receipts-restart
+ANSIBLE_CONFIG=ops/monitoring/ansible.cfg ansible-playbook \
+  -i ops/monitoring/inventory/production.yml ops/monitoring/site.yml \
+  --ask-become-pass
+```
+
+For exact recorded attempt times, PostgreSQL already retains independent start
+and terminal events in `lineage.receipt_events`. No worker restart is needed
+for this report:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f sql/reports/receipt_processing_timeline.sql
+```
+
+If this tries port `5433`, your shell still has another database URL loaded.
+Run the report against native development PostgreSQL explicitly:
+
+```bash
+psql 'postgresql://paul@127.0.0.1:5432/home_budget' -v ON_ERROR_STOP=1 \
+  -f sql/reports/receipt_processing_timeline.sql
+```
+
+The report covers attempts started within the past 24 hours and lists receipt
+filename, worker host/PID, start, finish, elapsed minutes, status, and attempt ID.
+Retries remain separate attempts even for the same filename. Overlapping
+start/finish intervals on different workers show concurrency. A null finish
+means no terminal event was recorded, not proof that the worker is still alive.
+Heartbeats are also retained in PostgreSQL under the same attempt ID as the
+start/end events and live logs. The report adds `last_seen_at`, `live_state`,
+and `cache_hit`: an unfinished attempt with activity in the last 45 seconds is
+`processing`; older activity is `heartbeat_stale`. Heartbeats do not replace the
+recorded outcome. Cache use is nullable for older completion events. Restart
+receipt services to enable heartbeat persistence; existing recorded intervals
+remain available without a restart.
+Elapsed time for unfinished attempts is measured to the report time. The
+terminal event measures worker result publication or failure, not the collector's
+later database commit. Missing lineage events cannot be reconstructed by this
+report. No PostgreSQL datasource is added to Grafana by this change; the
+provisioned activity timeline uses Loki.
+
+### Prepare PostgreSQL TLS for a Grafana connection
+
+Grafana is suitable for operational reports such as worker overlap, throughput,
+and failures. The Ledger UI should expose individual receipt status and history
+with links to the associated expenses. The recorded processing attempts can
+support both views. A Grafana PostgreSQL connection needs a dedicated read-only
+role and a verified TLS server certificate before enabling LAN access.
+
+Prepare a separate server key and CSR on m4pro, using its LAN hostname:
+
+```bash
+make dev-postgres-tls-prepare POSTGRES_HOST=m4pro.local
+```
+
+The helper creates an ignored, private `.local-services/postgres/tls/` directory
+and refuses to overwrite an existing key or request. Keep `server.key` on m4pro.
+It prepares `DNS:m4pro.local` in the CSR and a GnuTLS signing template; it does
+not sign a certificate or change PostgreSQL. The hostname is independent of
+the Mac's DHCP address. Monitoring must resolve it through mDNS; see the
+"Resolve Mac hostnames on the LAN" section in `ops/monitoring/README.md`.
+Grafana's datasource must use `m4pro.local:5432` and pass its connection health
+check. A successful `getent` lookup alone does not verify Grafana's resolver.
+
+The default `POSTGRES_HOST` is `m4pro.local`. An explicit IPv4 address is also
+supported and produces an IP SAN instead; the older `POSTGRES_LAN_IP` option
+continues to work. An IP certificate requires a stable address. If you already
+prepared an IP-only CSR, the helper will refuse to overwrite it. Prepare the
+hostname identity in a separate directory:
+
+```bash
+bash scripts/prepare_receipt_postgres_tls.sh m4pro.local \
+  .local-services/postgres/tls-hostname
+```
+
+Use that directory for the signing and verification steps below when applicable.
+
+Sign `server.csr` using the Brown Rook Intermediate CA ceremony described in
+[the certificate instructions](opentelemetry.md#issue-or-rotate-telemetry-certificates),
+substituting the prepared `server.tmpl` and `server.csr` for the telemetry leaf
+inputs. Save the issued leaf as `server.crt` in the same directory, then build
+the server chain:
+
+```bash
+cat .local-services/postgres/tls/server.crt \
+  "$HOME/brownrook-ca/intermediate/intermediate_ca.crt" \
+  > .local-services/postgres/tls/server.fullchain.crt
+openssl verify -purpose sslserver -verify_hostname m4pro.local \
+  -CAfile "$HOME/brownrook-ca/root/root_ca.crt" \
+  -untrusted "$HOME/brownrook-ca/intermediate/intermediate_ca.crt" \
+  .local-services/postgres/tls/server.crt
+```
+
+These are preparation steps. PostgreSQL LAN access and the Grafana PostgreSQL
+datasource still need to be configured after the signed certificate is ready.
+
+When the signed identity is in `~/brownrook-ca/leafs/m4pro-postgres/`, with
+`m4pro-postgres.crt`, `m4pro-postgres.fullchain.crt`, and its matching `server.key`,
+check and configure the native PostgreSQL service:
+
+```bash
+make dev-postgres-grafana-check
+make dev-postgres-grafana-apply
+brew services restart postgresql@18
+```
+
+The restart briefly disconnects existing database clients, so choose an
+appropriate time during receipt processing. The check command reads `.env.dev`
+directly and requires the local `home_budget` database on port 5432. It verifies
+the CA chain, server purpose, hostname, lifetime, matching key, and full chain.
+Apply creates `grafana_receipt_reader` with SELECT access to a projected
+`lineage.receipt_processing_attempts` view covering the last 24 hours. It rejects
+existing elevated reader privileges and checks that other application tables
+are inaccessible. A private generated password is retained in
+`.local-services/postgres/grafana-reader.password`; it is never printed.
+
+Apply enables TLS and the IPv4 listener. The managed HBA block allows the reader
+only from monitoring (`192.168.2.202/32`) with TLS and SCRAM authentication, and
+rejects that account from other network addresses. Existing native authentication
+rules are preserved. The helper does not restart PostgreSQL or receipt workers.
+
+The Grafana datasource remains a separate configuration step: use
+`m4pro.local:5432`, database `home_budget`, user `grafana_receipt_reader`, the
+private reader password, and TLS `verify-full` with the Brown Rook root CA.
+Query the projected view rather than raw receipt or expense tables. Test the
+connection from Grafana after the PostgreSQL restart.

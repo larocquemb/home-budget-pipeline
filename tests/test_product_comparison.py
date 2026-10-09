@@ -191,7 +191,8 @@ def test_dashboard_preserves_raw_json_and_unwraps_message_json():
     template = (root / "ops/monitoring/roles/monitoring/templates/grafana-product-comparison-dashboard.json.j2").read_text()
     rendered = Environment(undefined=StrictUndefined).from_string(template).render(
         monitoring_grafana_home_budget_folder_uid_effective="home-budget",
-        monitoring_grafana_datasource_uid="loki")
+        monitoring_grafana_datasource_uid="loki",
+        monitoring_grafana_prometheus_datasource_uid="home-budget-prometheus")
     dashboard = json.loads(rendered)
     assert dashboard["metadata"]["annotations"]["grafana.app/folder"] == "home-budget"
     panels = dashboard["spec"]["elements"]
