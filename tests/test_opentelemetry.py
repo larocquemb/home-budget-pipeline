@@ -468,12 +468,14 @@ import os,sys,subprocess
 from unittest.mock import MagicMock
 import requests
 posts=[]
-class Session:
-    def __init__(self): self.headers={}
-    def post(self,url,**kwargs):
+class Session(requests.Session):
+    def request(self,method,url,**kwargs):
+        assert method.upper() == 'POST'
         posts.append((url,kwargs['data']))
-        return MagicMock(status_code=200,ok=True)
-    def close(self): pass
+        response=requests.Response()
+        response.status_code=200
+        response._content=b''
+        return response
 os.environ.update(HOME_BUDGET_TELEMETRY_ENABLED='true',
     OTEL_EXPORTER_OTLP_PROTOCOL='http/protobuf',
     OTEL_EXPORTER_OTLP_ENDPOINT='http://127.0.0.1:4318',
