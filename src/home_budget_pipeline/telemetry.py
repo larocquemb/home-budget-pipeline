@@ -13,12 +13,14 @@ import json
 import logging
 import os
 import socket
+import sys
+from pathlib import Path
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from importlib import metadata
+from importlib import metadata, import_module
 from threading import Lock
 from typing import Any, Iterator, Mapping
 from uuid import uuid4
@@ -109,8 +111,24 @@ def resource_attributes() -> dict[str, str]:
     return attributes
 
 
+def _otlp_exporter_class(signal: str):
+    protocol = os.getenv(
+        f"OTEL_EXPORTER_OTLP_{signal.upper()}_PROTOCOL",
+        os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+    ).strip().lower()
+    transports = {"grpc": "grpc", "http/protobuf": "http"}
+    if protocol not in transports:
+        raise ValueError(f"Unsupported OTLP protocol: {protocol}")
+    module_name, class_name = {
+        "traces": ("trace_exporter", "OTLPSpanExporter"),
+        "metrics": ("metric_exporter", "OTLPMetricExporter"),
+    }[signal]
+    module = import_module(f"opentelemetry.exporter.otlp.proto.{transports[protocol]}.{module_name}")
+    return getattr(module, class_name)
+
+
 def configure_telemetry() -> bool:
-    """Configure OTLP/gRPC tracing and metrics once for the current process.
+    """Configure OTLP tracing and metrics once for the current process.
 
     OTLP exporters and BatchSpanProcessor read the standard OTEL_* endpoint,
     TLS, timeout, sampler, and queue variables.  Any initialization error is
@@ -135,12 +153,8 @@ def configure_telemetry() -> bool:
             return True
         try:
             from opentelemetry import metrics, trace
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-                OTLPMetricExporter,
-            )
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-                OTLPSpanExporter,
-            )
+            OTLPMetricExporter = _otlp_exporter_class("metrics")
+            OTLPSpanExporter = _otlp_exporter_class("traces")
             from opentelemetry.sdk.metrics import MeterProvider
             from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
             from opentelemetry.sdk.resources import Resource
@@ -614,7 +628,7 @@ class JsonLogFormatter(logging.Formatter):
 
     _extra_fields = (
         "status", "error_type", "engine", "dpi", "psm", "variant",
-        "selected_base", "consensus_coverage_ratio", "receipt",
+        "selected_base", "consensus_coverage_ratio", "receipt", "cache_hit",
     )
 
     def format(self, record: logging.LogRecord) -> str:
@@ -650,3 +664,66 @@ def configure_logging(level: int = logging.INFO) -> None:
         logging.basicConfig(level=level, handlers=[handler], force=True)
     else:
         logging.basicConfig(level=level)
+
+
+class _LocalLogTee:
+    """Keep terminal output while appending complete lines to a private log."""
+
+    def __init__(self, terminal, file, lock):
+        self.terminal, self.file, self.lock = terminal, file, lock
+        self.pending = ""
+
+    def write(self, value):
+        self.terminal.write(value)
+        with self.lock:
+            self.pending += value
+            while "\n" in self.pending:
+                line, self.pending = self.pending.split("\n", 1)
+                self.file.write(line + "\n")
+            self.file.flush()
+        return len(value)
+
+    def flush(self):
+        self.terminal.flush()
+        with self.lock:
+            if self.pending:
+                self.file.write(self.pending)
+                self.pending = ""
+            self.file.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.terminal, name)
+
+
+@contextmanager
+def local_command_logging(service: str):
+    """Capture foreground command output when local forwarding is configured."""
+    directory = os.getenv("HOME_BUDGET_LOCAL_LOG_DIR", "").strip()
+    if not directory:
+        yield
+        return
+    if service not in {"enrichment", "publisher", "cli"}:
+        raise ValueError("Unknown local command log service")
+    root = Path(directory).expanduser()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = root / f"{service}.log"
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
+    logger = logging.getLogger()
+    old_handlers, old_level = logger.handlers[:], logger.level
+    with path.open("a", encoding="utf-8") as file:
+        lock = Lock()
+        stdout, stderr = _LocalLogTee(sys.stdout, file, lock), _LocalLogTee(sys.stderr, file, lock)
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            # Preserve existing handlers, e.g. test capture and embedded callers.
+            handler = logging.StreamHandler(stderr)
+            handler.setFormatter(JsonLogFormatter())
+            logger.handlers = [handler]
+            logger.setLevel(logging.INFO)
+            try:
+                yield
+            finally:
+                stdout.flush()
+                stderr.flush()
+                logger.handlers = old_handlers
+                logger.setLevel(old_level)

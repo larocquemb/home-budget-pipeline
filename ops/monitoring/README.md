@@ -147,6 +147,12 @@ ANSIBLE_CONFIG=ops/monitoring/ansible.cfg ansible-playbook \
   --tags monitoring_firewall --ask-become-pass
 ```
 
+The Loki and OTLP source allowlists permit the trusted LAN (`192.168.2.0/24`),
+including native local development telemetry. Client certificates remain
+required. Local Alloy
+connects directly over the LAN using mTLS; see the
+[local development guide](../../docs/local-development.md#send-local-logs-and-opentelemetry-to-grafana).
+
 The Grafana reverse-proxy allowlist includes Arsene (`192.168.2.201/32`) for
 TCP port 3000.
 

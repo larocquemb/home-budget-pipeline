@@ -11,6 +11,7 @@ import urllib.request
 from typing import Optional
 
 from home_budget_pipeline import product_enrichment as core
+from home_budget_pipeline import telemetry
 
 _core_ai_product_queries = core.ai_product_queries
 
@@ -97,7 +98,7 @@ def ai_product_queries(item_name: str, merchant: str) -> tuple[str, ...]:
     return queries
 
 
-def main() -> int:
+def _main() -> int:
     if "--compare-models" in sys.argv or "--collaborate-models" in sys.argv:
         # Comparison must distinguish search failures from legitimate no matches.
         return core.main()
@@ -110,3 +111,15 @@ def main() -> int:
         f"ai_max_queries={os.getenv('AI_PRODUCT_MAX_QUERIES', '2')}"
     )
     return core.main()
+
+
+def main() -> int:
+    with telemetry.local_command_logging("enrichment"):
+        telemetry.LOG.info("enrichment_started")
+        try:
+            result = _main()
+        except Exception:
+            telemetry.LOG.exception("enrichment_failed")
+            raise
+        telemetry.LOG.info("enrichment_completed exit_code=%s", result)
+        return result

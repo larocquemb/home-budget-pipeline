@@ -4,7 +4,6 @@ PYTHON ?= .venv/bin/python
 LEDGER ?= .venv/bin/ledger
 MKDOCS ?= .venv/bin/mkdocs
 RECEIPT_TEST_ROOT ?= .receipt-test
-RECEIPT_TEST_WORKERS ?= 6
 RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 KUBE_NAMESPACE ?= home-budget
 KUBE_CONTEXT ?= brownrook-k3s1
@@ -115,16 +114,10 @@ dev-down:
 
 dev-web:
 	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
-	@test -f .local-postgres/runtime.env || (echo "Run make dev-up to initialize local PostgreSQL 18"; exit 2)
-	@set -a; . ./.env.dev; . ./.local-postgres/runtime.env; set +a; \
-		test -n "$$LEDGER_PROXY_SECRET" || { echo "Set LEDGER_PROXY_SECRET in .env.dev"; exit 2; }; \
-		LEDGER_BASE_PATH=/ledger HOST=0.0.0.0 PORT=8080 \
-		.venv/bin/uvicorn home_budget_pipeline.web.app:app \
-			--host 0.0.0.0 --port 8080 --reload
+	@bash scripts/run_local_web.sh
 
 dev-db-reset:
-	@test -f .local-postgres/runtime.env || (echo "Run make dev-up to initialize local PostgreSQL 18"; exit 2)
-	@./scripts/rebuild_local_database.sh .local-postgres/runtime.env
+	@./scripts/rebuild_local_database.sh .env.dev
 
 dev-cert-install:
 	@mkdir -p .dev-certs
@@ -153,6 +146,30 @@ dev-logging-down:
 
 receipts-publish:
 	@RECEIPT_JOB_DRY_RUN="$(DRY_RUN)" bash scripts/receipt_job.sh publish "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)" "$(NODE)"
+
+.PHONY: dev-receipts-start dev-receipts-stop dev-receipts-restart dev-receipts-status dev-receipts-logs
+dev-receipts-start:
+	@$(PYTHON) scripts/receipt_services.py start $(if $(WORKERS),--workers "$(WORKERS)",) $(if $(OCR_THREADS),--ocr-threads "$(OCR_THREADS)",)
+dev-receipts-stop:
+	@$(PYTHON) scripts/receipt_services.py stop
+dev-receipts-restart:
+	@$(PYTHON) scripts/receipt_services.py restart $(if $(WORKERS),--workers "$(WORKERS)",) $(if $(OCR_THREADS),--ocr-threads "$(OCR_THREADS)",)
+dev-receipts-status:
+	@$(PYTHON) scripts/receipt_services.py status
+dev-receipts-logs:
+	@$(PYTHON) scripts/receipt_services.py logs
+
+.PHONY: dev-telemetry-start dev-telemetry-stop dev-telemetry-restart dev-telemetry-status dev-telemetry-logs
+dev-telemetry-start:
+	@$(PYTHON) scripts/local_telemetry.py start
+dev-telemetry-stop:
+	@$(PYTHON) scripts/local_telemetry.py stop
+dev-telemetry-restart:
+	@$(PYTHON) scripts/local_telemetry.py restart
+dev-telemetry-status:
+	@$(PYTHON) scripts/local_telemetry.py status
+dev-telemetry-logs:
+	@$(PYTHON) scripts/local_telemetry.py logs
 
 receipts-worker-test:
 	@RECEIPT_JOB_DRY_RUN="$(DRY_RUN)" bash scripts/receipt_job.sh worker-test "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)" "$(NODE)"
@@ -234,4 +251,4 @@ test-receipts: test-db-setup
 	@rsync -a "$(RECEIPT_SOURCE_ROOT)/" "$(RECEIPT_TEST_ROOT)/inbox/"
 	@echo "Running receipt backlog against local PostgreSQL test database..."
 	@DATABASE_URL=$(TEST_DATABASE_URL) HOME_BUDGET_OCR_CACHE="$(RECEIPT_TEST_ROOT)/ocr-cache" \
-		$(LEDGER) receipts process "$(RECEIPT_TEST_ROOT)/inbox" --workers $(RECEIPT_TEST_WORKERS)
+		$(LEDGER) receipts process "$(RECEIPT_TEST_ROOT)/inbox"

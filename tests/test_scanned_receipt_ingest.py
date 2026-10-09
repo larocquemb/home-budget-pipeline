@@ -200,7 +200,8 @@ CRCT IO PUFF 12x1 93573447143 1 @ .01-"""
         self.assertEqual(metric["quality"]["summary_score"], metric["summary_score"])
         self.assertEqual(metric["engine_options"]["recognition_model"], "PP-OCRv6_medium_rec")
         self.assertEqual(metric["usage"], {})
-        self.assertEqual(metric["provenance"], {})
+        self.assertEqual(metric["provenance"]["lines"][0]["text"], "TOTAL $12.34")
+        self.assertEqual(metric["provenance"]["lines"][0]["confidence"], 98.0)
 
     def test_failed_ocr_pass_records_failure_status(self):
         candidate = scan.OCRCandidate(

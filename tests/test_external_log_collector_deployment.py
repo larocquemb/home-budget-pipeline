@@ -255,11 +255,8 @@ def test_monitoring_role_reconciles_mtls_telemetry_backend():
     assert defaults["monitoring_alloy_metrics_target"] == "127.0.0.1:12345"
 
     assert inventory["monitoring_otel_port"] == 4317
-    assert inventory["monitoring_otel_allowed_ipv4_sources"] == [
-        "192.168.2.230/32",
-        "192.168.2.201/32",
-        "192.168.2.175/32",
-    ]
+    assert inventory["monitoring_otel_allowed_ipv4_sources"] == ["192.168.2.0/24"]
+    assert inventory["monitoring_loki_allowed_ipv4_sources"] == ["192.168.2.0/24"]
     assert inventory["monitoring_grafana_tempo_datasource_uid"]
 
     assert 'otelcol.receiver.otlp "home_budget"' in alloy

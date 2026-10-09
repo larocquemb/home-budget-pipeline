@@ -11,7 +11,21 @@ accounting and review dashboard.
 
 **Receipts** is the default landing page. It lists each discovered source file
 with its merchant, transaction time, total, processing state, and extraction
-state. Open a receipt to review the source document beside extracted text,
+state. The **Expense ID** column links to the associated accounting record;
+unprocessed receipts show **Pending**. Use **Search receipts** to search across
+all pages by expense ID, filename, merchant, date, total, or item description.
+Multiple words can match different fields, for example `Sobeys 2026-02-14`.
+Click any column heading to toggle ascending **▲** and descending **▼** sorting.
+The current search and sort are preserved when navigating pages; **Clear** resets
+them. Expense IDs and totals sort numerically, and missing values remain last.
+
+Receipt links and page titles lead with the expense number, merchant, date, and
+total when available. The source filename remains visible. Expense IDs are local
+to each database, so identify the same purchase across environments by filename,
+merchant, date, and total rather than expecting matching IDs. The receipt URL
+uses its stable source-file hash; `/expenses/ID` redirects to the associated receipt.
+
+Open a receipt to review the source document beside extracted text,
 canonical line items, and accepted product-enrichment evidence. Use the link to
 the accounting and review dashboard for cross-receipt reports and corrections.
 
@@ -29,9 +43,13 @@ it does not mean every OCR pass read `Cep`. The interpretation comes from the
 recorded product evidence and acceptance, rather than changing an OCR observation.
 
 Expand **Related OCR observations** to compare readings such as `Cep` and `Oep`.
-Each reading retains its observations with engine, pass ID, variant, OCR run UUID,
-page and OCR output line when available. Several passes can share one run UUID,
-and one pass can contain several different lines.
+Identical observed text is displayed once per reading. Expand **Source records (N)**
+to inspect the retained observations with engine, pass ID, variant, OCR run UUID,
+page and OCR output line when available, plus observation and receipt evidence IDs.
+**Combined OCR text** comes from the stored consensus and may have no recorded run
+UUID. **OCR pass** identifies a specific engine pass. Several passes can share one
+run UUID, and one pass can contain several different lines; the observation ID
+distinguishes the individual source records.
 
 **Row association unverified** means a related observation may describe a
 neighbouring or duplicate receipt item. An OCR output line number is a position
@@ -62,6 +80,14 @@ changes in the audit history. It does not accept a new model recommendation.
 **Awaiting product identification** means there is no accepted description for that
 item yet. A one-item collaboration does not enrich the whole receipt. Ask the
 operator to process the remaining items; unmatched products stay unresolved.
+**Not enriched** means no enrichment result has been saved. Neither label reports
+OCR progress: product enrichment is a separate command after receipt import.
+
+Check **Processing** in the receipt list or detail page and refresh to see changes.
+**Active** means work is in progress; **Succeeded** means the result was persisted.
+**Review required** indicates processing completed with a review concern. Ledger
+does not yet show live logs or a progress bar. For local background processing,
+use `make dev-receipts-logs`; see the [local development guide](local-development.md).
 
 #### Follow the processing story
 

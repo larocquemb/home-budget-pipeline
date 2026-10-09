@@ -150,6 +150,7 @@ sobeys_receipt_items_categorized.xlsx
 .dev-certs/
 .local-logging/
 .local-postgres/
+.local-services/
 .monitoring/
 .observability-validation.*/
 .ocr_cache/

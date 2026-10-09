@@ -5,6 +5,9 @@ and receipt-processing verification workflow.
 
 ## Local setup and tests
 
+See [local macOS development](local-development.md) for native PostgreSQL and
+RabbitMQ, authentication proxies, and background receipt services.
+
 Activate the project environment:
 
 ```bash
@@ -104,11 +107,16 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make test-rabbit` | Rebuild the disposable test schemas, then run the five RabbitMQ integration tests with their names displayed. |
 | `make test-all` | Run unit tests followed by PostgreSQL and available RabbitMQ integration tests; the integration summary displays their names. |
 | `make test-receipts` | Copy real receipt inputs into an isolated workspace and process them against the disposable test database. |
-| `make dev-up` | Stage the K3s database bootstrap and start local PostgreSQL 18, Caddy, and OAuth2 Proxy in Colima. |
-| `make dev-down` | Stop the local supporting services. |
+| `make dev-up` | Verify native PostgreSQL from `.env.dev` and start Caddy and OAuth2 Proxy in Colima. |
+| `make dev-down` | Stop the authentication proxy containers; native PostgreSQL and RabbitMQ stay running. |
 | `make dev-web` | Run the Ledger web application against the local services. |
 | `make dev-cert-install` | Install the local Caddy certificate authority in the macOS system keychain. |
 | `make dev-db-reset` | Rebuild the local development database configured in `.env.dev`. |
+| `make dev-receipts-start` | Enable and start the Mac background OCR worker and result collector. |
+| `make dev-receipts-status` | Check background service state and process IDs. |
+| `make dev-receipts-logs` | Follow local worker and collector log files. |
+| `make dev-receipts-restart` | Restart both services to reload code and `.env.dev`. |
+| `make dev-receipts-stop` | Stop both services and disable startup at login. |
 | `make status` | Report deployment and recent workflow status. |
 | `make enrich-products` | Start and follow a one-off Kubernetes product-enrichment job. |
 | `make ollama-gitops-check` / `make ollama-gitops-apply` | Review/reconcile Arsene's Ollama LAN listener and source-restricted firewalld access. |

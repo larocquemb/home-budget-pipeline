@@ -21,6 +21,8 @@ path.
 
 ## Operate Ledger
 
+- Use the [local macOS guide](local-development.md) for native services,
+  background OCR processing, local logs, and the development loop.
 - Use the [operations runbook](operations-runbook.md) for local development,
   tests, deployment, and rollout verification.
 - Use the [troubleshooting guide](troubleshooting.md) for Kubernetes, Argo CD,

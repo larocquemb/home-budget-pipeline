@@ -865,26 +865,46 @@ from budget categories.
 
 ## 15. Local Entra-authenticated Ledger
 
-The development stack runs PostgreSQL 18, Caddy, and OAuth2 Proxy in Colima
-while Ledger runs directly from the working tree. PostgreSQL uses the same
-OAuth-capable image and schema bootstrap sequence as K3s. This avoids the K3s
-deployment loop for application changes without sacrificing database parity.
+Follow the [local macOS development guide](docs/local-development.md) for daily
+startup, receipt processing, logs, product enrichment, and the build/test workflow.
+
+PostgreSQL 18 runs natively through Homebrew on port 5432. Caddy and OAuth2
+Proxy run in Colima while Ledger runs directly from the working tree.
+Local commands use `DATABASE_URL` from `.env.dev` directly and use the same
+schema bootstrap sequence as K3s. Native PostgreSQL does not use the K3s OAuth validator.
 
 1. Copy `.env.dev.example` to `.env.dev`, fill in the Entra values and local
    database identity,
    and generate the separate `LEDGER_PROXY_SECRET` described in that file.
 2. Add `127.0.0.1 ledger-dev.brownrook.net` to `/etc/hosts`.
 3. Add `https://ledger-dev.brownrook.net/ledger/oauth2/callback` as a redirect URI in Entra.
-4. Stop any old `kubectl port-forward` using local port 5433.
-5. Run `make dev-up`; it creates the dedicated `home-budget-postgres18-data`
-   volume, generates a local-only password under `.local-postgres/`, and
-   initializes the database on first start.
+4. Start native PostgreSQL with `brew services start postgresql@18`, create
+   `home_budget` if needed, and set its local URL in `.env.dev`.
+5. For an empty development database, run `make dev-db-reset` to initialize it
+   (this deletes existing application data). Run `make dev-up` to start the proxies.
 6. Run `make dev-cert-install` once to trust Caddy's local CA.
 7. Run `make dev-web` and open `https://ledger-dev.brownrook.net/ledger`.
 
-Stop the containers with `make dev-down`. The PostgreSQL 18 volume is retained
-and is deliberately distinct from every PostgreSQL 17 or K3s volume. The local
-Ledger process is intentionally
+Run the local OCR worker and result collector in the background with
+`make dev-receipts-start`. This installs per-user macOS LaunchAgents that start
+at login and restart on exit. They load `.env.dev` on each start and use the
+native PostgreSQL and RabbitMQ services. Queue receipt imports with
+`ledger receipts process --verbose` from a terminal with `.env.dev` exported.
+Use `make dev-receipts-status` to check the processes and
+`make dev-receipts-logs` to follow their logs (Ctrl+C stops only the log viewer).
+After editing `.env.dev`, use `make dev-receipts-restart` to reload it.
+`make dev-receipts-stop` stops all worker and collector processes and disables automatic startup;
+`make dev-receipts-start` enables it again. Logs are stored in the ignored
+`.local-services/` directory. Configure local Grafana forwarding with
+`make dev-telemetry-start` as described in the [local development guide](docs/local-development.md).
+
+Choose concurrency with `make dev-receipts-restart WORKERS=2 OCR_THREADS=4`.
+This starts two receipt consumers and one collector, with four OCR threads per
+worker. Settings persist across subsequent starts. Reduce the worker count with
+`make dev-receipts-restart WORKERS=1`; extra worker agents are stopped and removed.
+
+Stop the proxy containers with `make dev-down`; native PostgreSQL stays running.
+The local Ledger process is intentionally
 outside Docker so source changes only require restarting that process.
 Caddy publishes ports 80 and 443 only on `127.0.0.1`. Ledger listens on port
 8080 for the Docker proxy, and verifies `LEDGER_PROXY_SECRET` before trusting

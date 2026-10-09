@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from . import db_setup, receipt_enrichment
+from . import db_setup, receipt_enrichment, telemetry
 from .receipts import backlog_ingest
 from .receipts.evidence import record_ocr_feedback
 from .receipts import ingest as scan
@@ -250,4 +250,19 @@ def _setup_database(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser(_program_name()).parse_args(argv)
-    return args.handler(args)
+    receipt_command = getattr(args, "receipt_command", "")
+    if receipt_command in {"consume", "collect"}:
+        return args.handler(args)  # LaunchAgents already capture their output.
+    service = "enrichment" if receipt_command == "enrich" else (
+        "publisher" if receipt_command in {"process", "publish", "reprocess"} or args.command == "ocr-cache" else "cli"
+    )
+    operation = f"{args.command} {receipt_command}".strip()
+    with telemetry.local_command_logging(service):
+        telemetry.LOG.info("command_started operation=%s", operation)
+        try:
+            result = args.handler(args)
+        except Exception:
+            telemetry.LOG.exception("command_failed operation=%s", operation)
+            raise
+        telemetry.LOG.info("command_completed operation=%s exit_code=%s", operation, result)
+        return result
