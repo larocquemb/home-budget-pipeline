@@ -1,0 +1,167 @@
+{
+  "source_sha256": "a1f10ab75aff3ec82550cc297856f71c59b93acb869f387624510fe59a505bd1",
+  "verification": "Transcribed from both source PDF pages; merchant and transaction date are not visible. Purchase labels remain partial.",
+  "expected": {
+    "payment_method": "Mastercard",
+    "subtotal": 355.86,
+    "tax": 8.09,
+    "total": 363.95,
+    "items": [
+      {
+        "item_name": "Cep Pic Med",
+        "line_total": 6.49
+      },
+      {
+        "item_name": "Cep Pic Med",
+        "line_total": 6.49
+      },
+      {
+        "item_name": "Pretzel Cracker Ranc",
+        "line_total": 5.49
+      },
+      {
+        "aliases": [
+          "Pie Filling S/Berry"
+        ],
+        "line_total": 6.49
+      },
+      {
+        "item_name": "Pretzels HoneyMustar",
+        "line_total": 5.49
+      },
+      {
+        "item_name": "Chips Rstrnt Sty Lm",
+        "line_total": 5.29
+      },
+      {
+        "item_name": "Dil Pkls Xt Grlc Snd",
+        "line_total": 4.99
+      },
+      {
+        "aliases": [
+          "Comp Quick Oats 1KG"
+        ],
+        "line_total": 4.79
+      },
+      {
+        "aliases": [
+          "Candy GMS Org"
+        ],
+        "line_total": 3.49
+      },
+      {
+        "aliases": [
+          "Cake Mx CarrotSprmst"
+        ],
+        "line_total": 2.49
+      },
+      {
+        "aliases": [
+          "Licorice S/Berry",
+          "Licorice $/Berry"
+        ],
+        "line_total": 1.79
+      },
+      {
+        "aliases": [
+          "Gloves Cmfrt Med 1EA",
+          "Cloves Cmfrt Med 1EA"
+        ],
+        "line_total": 4.29
+      },
+      {
+        "aliases": [
+          "Scourer Refill 1EA"
+        ],
+        "line_total": 3.69
+      },
+      {
+        "item_name": "Butter Sticks Unsltd",
+        "line_total": 8.49
+      },
+      {
+        "aliases": [
+          "Cottage Cheese 1%MF",
+          "Cottage Cheese 1&MF",
+          "Cottage Cheese 14MF"
+        ],
+        "line_total": 6.49
+      },
+      {
+        "aliases": [
+          "Cottage Cheese 1%MF",
+          "Cottage Cheese 1&MF",
+          "Cottage Cheese 14MF"
+        ],
+        "line_total": 4.79
+      },
+      {
+        "aliases": [
+          "Topping Dessert 1L"
+        ],
+        "line_total": 5.99
+      },
+      {
+        "aliases": [
+          "Basil Freeze Drd 8G",
+          "Basi] Freeze Drd 8G"
+        ],
+        "line_total": 6.99
+      },
+      {
+        "item_name": "Dill Freeze Drd 10G",
+        "line_total": 6.99
+      },
+      {
+        "aliases": [
+          "Org Straws"
+        ],
+        "line_total": 6.49
+      },
+      {
+        "aliases": [
+          "Little Yellows"
+        ],
+        "line_total": 4.99
+      },
+      {
+        "aliases": [
+          "Cheese Slice Med Chd"
+        ],
+        "line_total": 15.49
+      },
+      {
+        "item_name": "Chckn Brst Roast Ckd",
+        "line_total": 5.46
+      }
+    ]
+  },
+  "tax_components": {
+    "GST": 3.37,
+    "PST": 4.72
+  },
+  "unscored_fields": {
+    "merchant": "Not visible in the supplied images; Sobeys comes from the filename.",
+    "transaction_date": "Not visible in the supplied images; date comes from the filename.",
+    "categories": "No verified category labels."
+  },
+  "financial_rules": {
+    "reconcile_items_to_subtotal": true,
+    "required_fees": [
+      {
+        "item_name": "+EHC",
+        "line_total": 0.12
+      },
+      {
+        "item_name": "+EHC",
+        "line_total": 0.12
+      }
+    ],
+    "non_monetary_patterns": [
+      "^POINTS EARNED\\b",
+      "^YOU SAVED\\b",
+      "^FEED THE DREAM CONTEST",
+      "^Meat Department Offer"
+    ]
+  }
+}

@@ -58,12 +58,16 @@ nav:
       - OCR Results Collector: ocr-results-collector.md
       - Receipt knowledge graph: receipt-knowledge-graph.md
   - Operations:
+      - Ollama host monitoring: ollama-monitoring.md
+      - Local macOS development: local-development.md
       - Build and deployment: operations-runbook.md
       - Kubernetes log design: log-forwarding-design.md
       - Kubernetes log comparison: log-collection-comparison.md
       - Kubernetes log runbook: log-forwarding.md
       - Receipt OpenTelemetry: opentelemetry.md
       - Product model comparison: product-model-comparison.md
+      - Informational enrichment evaluation: enrichment-evaluation.md
+      - Receipt model evaluation: model-evaluation.md
       - Public telemetry demo: live-telemetry-demo.md
       - Grafana Entra SSO: grafana-entra-sso.md
       - Troubleshooting: troubleshooting.md

@@ -25,3 +25,14 @@ def test_evidence_records_delivery_and_worker_without_graph_dependency(monkeypat
     assert payload['attempt_id'] == 'attempt'
     assert payload['worker_node'] == 'longbow'
     assert payload['status'] == 'active'
+
+
+def test_completion_retains_actual_cache_use(monkeypatch):
+    import psycopg
+    connect = MagicMock()
+    monkeypatch.setattr(psycopg, 'connect', connect)
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://test/')
+    receipt_lineage.record(ReceiptMessage('b'*64, 'receipt.pdf'), 'results_published',
+                           attempt_id='attempt', cache_hit=False)
+    payload = connect.return_value.__enter__.return_value.execute.call_args_list[-1].args[1][-1].obj
+    assert payload['cache_hit'] is False

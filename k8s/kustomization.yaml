@@ -15,6 +15,9 @@ resources:
   - receipt-model-profiles.yaml
   - external-log-reader-rbac.yaml
 
+patches:
+  - path: patches/postgres-reporting-tls.yaml
+
 images:
   - name: ghcr.io/larocquemb/home-budget-pipeline
-    newTag: 662f5d1045d66959d428f687c47812ad84685ed2
+    newTag: 5ac56d06cd1f830eab7a91147579b39b1e8f5779

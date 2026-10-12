@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS budget.product_enrichment_results (
     provider TEXT NOT NULL, search_query TEXT NOT NULL, candidate_title TEXT,
     candidate_url TEXT, confidence NUMERIC(5,4) NOT NULL DEFAULT 0,
     status TEXT NOT NULL CHECK (status IN ('accepted', 'review', 'rejected', 'error')),
+    ocr_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
     searched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 COMMIT;

@@ -1,0 +1,18 @@
+{
+  "reference_note": "Expected identity comes from the existing Sobeys regression fixture; a match to this retailer page does not independently establish purchase identity or package size. The canonical item is selected from the local receipt database; all real OCR alternatives are retained.",
+  "cases": [
+    {
+      "id": "sobeys-salsa-1",
+      "merchant": "Sobeys",
+      "receipt_item": "Cep Pic Med",
+      "expected_product_url": "https://www.sobeys.com/products/old-el-paso-salsa-picante-style-restaurant-medium-650-ml",
+      "expected_product_name": "Old El Paso Salsa Picante Style Restaurant Medium 650 mL",
+      "expected_category": "Groceries",
+      "receipt_filename": "20260214_sobeys_363_95.pdf",
+      "item_names": [
+        "Cep Pic Med",
+        "Oep Pic Med"
+      ]
+    }
+  ]
+}

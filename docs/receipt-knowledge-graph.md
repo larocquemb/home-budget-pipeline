@@ -2,8 +2,17 @@
 
 The authenticated Ledger page `/ledger/graph` shows how receipt workers, OCR
 methods, model proposals, Brave searches and reviews contribute to a result.
-Three perspectives share the same evidence: receipt lineage and collaboration,
-operational topology, and merchant/item/category relationships. Select a node
+The default **Processing story** follows one item and collaboration run from OCR
+and receipt evidence through model expansion, Brave results and model verification
+to the final recommendation. Green borders highlight recorded supporting citations;
+expand alternatives to inspect other attempts. Item and run selectors keep older
+attempts separate. Completion timestamps select the latest run, including failures;
+older projections without timestamps explicitly report unknown completion order.
+The summary shows recorded token evidence, arithmetic checks, item duration and
+whether the canonical record changed. Model explanations remain reported claims.
+
+Three additional perspectives share the same evidence: receipt lineage and
+collaboration, operational topology, and merchant/item/category relationships. Select a node
 for its evidence, usage, timing, citations and links; use **Explore related
 receipts** to investigate a worker, method, model, merchant or category.
 
@@ -12,7 +21,25 @@ receipts** to investigate a worker, method, model, merchant or category.
 Blue nodes describe processing or infrastructure, purple nodes describe methods
 and models, amber nodes describe observations/proposals/search results, and green
 nodes describe canonical records. Red indicates failures or decisions requiring
-review. A recommendation never creates an accepted product or changes PostgreSQL.
+review. A model recommendation never creates an accepted product or changes PostgreSQL.
+The receipt page displays the latest saved collaboration per line item, even when
+no accepted enrichment exists. **Accept recommendation for this item** applies the
+clean product name and URL after checking the receipt, current item fields and
+latest collaboration. It preserves the OCR item name, amounts and established
+categories; supported category rules resolve uncategorized items. The
+transaction records the user and old/new values in the description audit, marks
+the product enrichment accepted, updates the accepted search cache and appends a
+`product_recommendation_accepted` lineage event. Repeated clicks are idempotent;
+stale or ineligible recommendations cannot overwrite newer item descriptions.
+
+The receipt-wide **Apply accepted matches and category rules** action repairs
+older uncategorized rows and fills empty products from accepted exact retailer/text
+cache matches after rechecking product-page evidence. Per-item collaboration reviews
+and existing descriptions are preserved. Each change records a `receipt_item_refreshed`
+lineage event, projected as an **ItemRefresh** with its audit record.
+After projection, an explicit `ProductAcceptance` connects the decision to the
+canonical item and its audit through `ACCEPTED_AS`, `UPDATED` and `PERSISTED_AS`.
+The original model payload remains unchanged.
 The graph connects each review to the proposals it considered, the observations
 it cites, and its guardrail/reconciliation decision. The decision properties
 explain disagreements, missing evidence, insufficient independent providers,
@@ -214,3 +241,35 @@ outage/catch-up and fresh-database replay are recorded. This implementation does
 not claim that current status overlays include every metric, that unavailable
 historical queue identities are reconstructed, or that a model recommendation is
 the accepted best product. The deployment commands are for the operator to run.
+
+## Product labels and OCR variants
+
+For the receipt-page review and acceptance workflow, see
+[Understand item readings and product recommendations](user-guide.md#understand-item-readings-and-product-recommendations).
+
+Product names omit leading shopping prompts (Buy, Shop, Purchase, Order) and
+a matching retailer suffix such as `| Sobeys Inc.`. The original webpage title
+stays in the saved candidate and recommendation evidence. New acceptance saves
+the clean name; existing accepted raw titles display cleanly without silently
+rewriting canonical data or manual descriptions.
+
+Receipt rows lead with the **accepted interpretation** when a product-based
+initialism correction has been accepted. The text selected during import stays
+in collapsed **Import history**. Before acceptance, the imported text remains the
+main label and any correction is labelled **Proposed interpretation**.
+**Related OCR observations** lists actual
+observations retained in that item's collaboration, grouped by reading with
+engine, pass, variant, run and original line text. Canonical text and model
+hypotheses are excluded from this list; a correction is never presented as a
+new OCR observation. Repeated observations remain inspectable without treating
+their count as independent agreement.
+
+OCR text retrieval identifies related lines, not an exact canonical item row.
+The retained canonical items have no per-pass bounding box or source-line link;
+OCR output line numbers must not be interpreted as Ledger item numbers. This is
+especially ambiguous for duplicate descriptions and amounts. The receipt page
+and graph label these observations **row association unverified**, including old
+collaborations. New retrieval metadata and model prompts retain this uncertainty.
+Product-based corrections remain separate from observed OCR. Exact row attribution
+requires an explicitly retained item-to-source-position mapping; text similarity,
+matching amounts or pass line order alone do not establish it.

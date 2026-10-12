@@ -550,3 +550,17 @@ explicitly reviewed cleanup after confirming no recovery is required.
 Application-only emergency rollback is also possible by setting
 `HOME_BUDGET_TELEMETRY_ENABLED=false` and restarting the worker. Prefer the
 GitOps path so the change is durable.
+
+## Native macOS workers
+
+Local background workers use `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` and
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318`. The local Alloy agent forwards
+traces and metrics over mTLS to the LAN monitoring endpoint. Keeping gRPC out
+of the Python OCR worker avoids inherited gRPC polling state during subprocess
+creation. The application's default transport remains gRPC; per-signal
+`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` and `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL`
+override the common protocol when needed.
+
+Use `make dev-telemetry-restart` after updating the exporter dependencies and
+Alloy configuration. This reloads local telemetry settings and restarts all
+configured receipt workers and the collector. See [local development](local-development.md).

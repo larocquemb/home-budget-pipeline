@@ -1,0 +1,44 @@
+// Managed by ops/ollama. Collect only the managed host service, not terminal instances.
+loki.source.journal "ollama" {
+  matches = "_SYSTEMD_UNIT=ollama.service"
+  max_age = "1h"
+  labels = {
+    host = "{{ inventory_hostname }}",
+    node = "{{ inventory_hostname }}",
+    service = "ollama",
+    environment = "production",
+    collection = "host-journal",
+  }
+  forward_to = [loki.process.ollama.receiver]
+}
+
+loki.process "ollama" {
+  stage.decolorize {}
+  // Startup environment dumps can include proxy credentials; omit the whole line.
+  stage.drop {
+    expression = `.*msg="server config".*`
+  }
+  stage.replace {
+    expression = `(?i)(api[_-]?key|token|password)\s*[=:]\s*[^\s,;]+`
+    replace = "[REDACTED_CREDENTIAL]"
+  }
+  stage.replace {
+    expression = `(?i)bearer\s+[^\s,;]+`
+    replace = "Bearer [REDACTED]"
+  }
+  forward_to = [loki.write.monitoring.receiver]
+}
+
+loki.write "monitoring" {
+  endpoint {
+    url = "https://{{ ollama_monitoring_host }}:3100/loki/api/v1/push"
+    tls_config {
+      ca_file = "/etc/alloy/tls/ca.crt"
+      cert_file = "/etc/alloy/tls/client.crt"
+      key_file = "/etc/alloy/tls/client.key"
+      server_name = "{{ ollama_monitoring_host }}"
+      min_version = "TLS12"
+    }
+  }
+  wal { enabled = true }
+}

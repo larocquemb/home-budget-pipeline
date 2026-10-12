@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from .product_enrichment import run
+from . import telemetry
 
 
 def receipt_patterns(receipt: str) -> tuple[str, ...]:
@@ -76,9 +77,17 @@ def resolve_item_ids(dsn: str, receipt: str) -> tuple[int, ...]:
     return tuple(int(row[0]) for row in rows)
 
 
+def positive_limit(value: str) -> int:
+    limit = int(value)
+    if limit < 1:
+        raise argparse.ArgumentTypeError("limit must be at least 1")
+    return limit
+
+
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--receipt", required=True)
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--limit", type=positive_limit, default=100,
+                        help="Select the first N receipt items ordered by item ID (default: 100)")
     parser.add_argument("--threshold", type=float, default=0.85)
     parser.add_argument("--write-db", action="store_true")
 
@@ -94,10 +103,13 @@ def run_command(args: argparse.Namespace) -> int:
     if not item_ids:
         raise RuntimeError(f"No line items found for receipt {args.receipt!r}")
 
+    item_ids = item_ids[:args.limit]
+    telemetry.LOG.info("enrichment_receipt_selected receipt=%s items=%s item_ids=%s",
+                       args.receipt, len(item_ids), list(item_ids))
     result = run(
         dsn=dsn,
         api_key=api_key,
-        limit=max(args.limit, len(item_ids)),
+        limit=args.limit,
         threshold=args.threshold,
         write_db=args.write_db,
         item_ids=item_ids,

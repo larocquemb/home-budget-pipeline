@@ -12,10 +12,49 @@ from home_budget_pipeline.product_enrichment import (
 )
 
 
+def test_discovery_learns_expansions_from_accepted_prior_matches():
+    prior = {'id': 7, 'merchant_key': 'sobeys.com', 'status': 'accepted', 'confidence': .95,
+             'receipt_text_norm': 'oep pic med',
+             'product_description': 'Old El Paso Salsa Picante Medium',
+             'product_url': 'https://sobeys.com/products/old-el-paso-salsa-picante-medium'}
+    assert product_enrichment.discovery_queries('Cep Pic Med', 'Sobeys') == (
+        'site:sobeys.com Cep Pic Med', 'site:sobeys.com Oep Pic Med')
+    assert product_enrichment.discovery_queries('Cep Pic Med', 'Sobeys', [prior]) == (
+        'site:sobeys.com Cep Pic Med', 'site:sobeys.com Oep Pic Med',
+        'site:sobeys.com old el paso picante medium')
+    learned = product_enrichment.learned_discovery('Cep Pic Med', 'Sobeys', [prior])
+    assert learned[0]['prior_matches'][0]['cache_id'] == 7
+    assert learned[0]['prior_matches'][0]['product_url'] == prior['product_url']
+    assert product_enrichment.discovery_queries('058300854014', 'Sobeys', [prior]) == (
+        'site:sobeys.com "058300854014"',)
+    assert product_enrichment.discovery_queries('Carrots', 'Sobeys') == ('site:sobeys.com Carrots',)
+    assert not product_enrichment.discovery_queries('Cep Pic Med', 'Unknown merchant', [prior])
+    for change in ({'status':'review'}, {'confidence':.8}, {'merchant_key':'walmart.ca'},
+                   {'product_url':'https://sobeys.com/recipes/salsa'}):
+        assert not product_enrichment.learned_discovery('Cep Pic Med', 'Sobeys', [{**prior, **change}])
+
+
+def test_learned_tokens_transfer_to_other_items_and_refresh_without_code_change():
+    prior = {'id': 8, 'merchant_key': 'sobeys.com', 'status': 'accepted', 'confidence': .95,
+             'receipt_text_norm': 'org med beans', 'product_description': 'Organic Medium Beans',
+             'product_url': 'https://sobeys.com/products/organic-medium-beans'}
+    assert product_enrichment.discovery_queries('Org Med Salsa', 'Sobeys') == (
+        'site:sobeys.com Org Med Salsa', 'site:sobeys.com Crg Med Salsa')
+    learned = product_enrichment.learned_discovery('Org Med Salsa', 'Sobeys', [prior])
+    assert learned[0]['query'] == 'site:sobeys.com organic medium salsa'
+    assert learned[0]['prior_matches'][0]['cache_id'] == 8
+    assert not product_enrichment.learned_discovery('Org Med Salsa', 'Sobeys', [])
+
+
+def test_model_search_scope_is_not_duplicated_or_redirected():
+    query = product_enrichment.scoped_search_query('site:other.com site:sobeys.com/products Old El Paso Medium', 'Sobeys')
+    assert query == 'site:sobeys.com Old El Paso Medium'
+
+
 def test_pending_query_does_not_reprocess_existing_review_results():
     source = inspect.getsource(product_enrichment.run)
-    assert 'missing_filter = "TRUE" if item_ids else' in source
-    assert 'result_filter = "" if item_ids else' in source
+    assert 'missing_filter = "TRUE" if item_ids or refresh else' in source
+    assert 'result_filter = "" if item_ids or refresh else' in source
 
 
 def test_ai_product_queries_returns_bounded_structured_expansions():
@@ -133,7 +172,7 @@ def test_unmatched_variant_cannot_reach_default_acceptance_threshold():
                            'https://sobeys.com/products/salsa') < .85
 
 
-def test_normal_enrichment_rechecks_stale_cache_and_scores_original_text(monkeypatch):
+def test_normal_enrichment_rechecks_stale_cache_and_scores_original_text(monkeypatch, mock_brave_query_cache):
     import psycopg
     class Connection:
         def __enter__(self): return self

@@ -4,7 +4,6 @@ PYTHON ?= .venv/bin/python
 LEDGER ?= .venv/bin/ledger
 MKDOCS ?= .venv/bin/mkdocs
 RECEIPT_TEST_ROOT ?= .receipt-test
-RECEIPT_TEST_WORKERS ?= 6
 RECEIPT_SOURCE_ROOT ?= $(HOME_BUDGET_DATA_ROOT)/receipts/raw/scanned/inbox
 KUBE_NAMESPACE ?= home-budget
 KUBE_CONTEXT ?= brownrook-k3s1
@@ -13,25 +12,76 @@ DRY_RUN ?= 0
 RECEIPT ?=
 COMPARE ?= 0
 COLLABORATE ?= 0
+REFRESH ?= 0
+BRAVE_CACHE_DAYS ?= 90
+PAID_FALLBACK ?= 0
 CONTEXT_TOKENS ?=
 OUTPUT_TOKENS ?=
+QWEN_CONTEXT_TOKENS ?=
+QWEN_OUTPUT_TOKENS ?=
 QWEN_MODELS ?=
 LIMIT ?=
 export RECEIPT COMPARE COLLABORATE LIMIT DRY_RUN CONTEXT_TOKENS OUTPUT_TOKENS QWEN_MODELS
+export QWEN_CONTEXT_TOKENS QWEN_OUTPUT_TOKENS
+export PAID_FALLBACK
+export REFRESH
+export BRAVE_CACHE_DAYS
 ARGO_APP ?= ledger
 ARGO_SERVER ?= argocd.brownrook.net
 export ARGO_APP ARGO_SERVER
 ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 MONITORING_GITOPS ?= ./scripts/monitoring_gitops.sh
+POSTGRES_LAN_IP ?=
+POSTGRES_HOST ?= $(if $(POSTGRES_LAN_IP),$(POSTGRES_LAN_IP),m4pro.local)
 LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
+BASELINE ?= qwen3-vl-receipts:30b-instruct
+CANDIDATE ?= qwen3.8:27b
+EVAL_CASES ?= evals/receipts/cases.json
+RECEIPT_ROOT ?= $(RECEIPT_TEST_ROOT)/inbox
+EVAL_REPEATS ?= 3
+EVAL_OUTPUT ?= .model-evals
+EVAL_CONTEXT_TOKENS ?= 32768
+EVAL_OUTPUT_TOKENS ?= 8192
+
+.PHONY: eval-models
+.PHONY: eval-rescore
 
 .PHONY: help docs-build docs-serve test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
 
 .PHONY: receipts-publish receipts-worker-test
+.PHONY: check-local build-local
 .PHONY: ollama-gitops-syntax ollama-gitops-check ollama-gitops-apply
+.PHONY: dev-postgres-tls-prepare
+.PHONY: dev-postgres-grafana-check dev-postgres-grafana-apply
+.PHONY: monitoring-receipt-postgres-apply
+.PHONY: monitoring-grafana-audit
+.PHONY: monitoring-grafana-cleanup-check monitoring-grafana-cleanup-apply
+
+monitoring-grafana-cleanup-check:
+	@bash scripts/monitoring_gitops.sh check --tags monitoring_grafana_cleanup -e monitoring_grafana_cleanup_enabled=true
+
+monitoring-grafana-cleanup-apply:
+	@bash scripts/monitoring_gitops.sh apply --tags monitoring_grafana_cleanup -e monitoring_grafana_cleanup_enabled=true
+
+monitoring-grafana-audit:
+	@bash scripts/monitoring_gitops.sh apply --tags monitoring_grafana_audit
+
+monitoring-receipt-postgres-apply:
+	@bash scripts/monitoring_gitops.sh apply --tags monitoring_mdns,monitoring_receipt_postgres -e monitoring_receipt_postgres_enabled=true
+
+dev-postgres-grafana-check:
+	@$(PYTHON) scripts/configure_receipt_postgres.py
+
+dev-postgres-grafana-apply:
+	@$(PYTHON) scripts/configure_receipt_postgres.py --apply
+
+dev-postgres-tls-prepare:
+	@bash scripts/prepare_receipt_postgres_tls.sh "$(POSTGRES_HOST)"
 
 help:
+	@echo "Model evaluation: make eval-models BASELINE=MODEL CANDIDATE=MODEL [EVAL_REPEATS=3]"
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
+	@echo "Local checks: check-local (unit tests, Python wheel, strict docs); build-local"
 	@echo "Local logs:  dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down"
 	@echo "Documentation: docs-build docs-serve"
 	@echo "Tests:       test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
@@ -104,16 +154,10 @@ dev-down:
 
 dev-web:
 	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
-	@test -f .local-postgres/runtime.env || (echo "Run make dev-up to initialize local PostgreSQL 18"; exit 2)
-	@set -a; . ./.env.dev; . ./.local-postgres/runtime.env; set +a; \
-		test -n "$$LEDGER_PROXY_SECRET" || { echo "Set LEDGER_PROXY_SECRET in .env.dev"; exit 2; }; \
-		LEDGER_BASE_PATH=/ledger HOST=0.0.0.0 PORT=8080 \
-		.venv/bin/uvicorn home_budget_pipeline.web.app:app \
-			--host 0.0.0.0 --port 8080 --reload
+	@bash scripts/run_local_web.sh
 
 dev-db-reset:
-	@test -f .local-postgres/runtime.env || (echo "Run make dev-up to initialize local PostgreSQL 18"; exit 2)
-	@./scripts/rebuild_local_database.sh .local-postgres/runtime.env
+	@./scripts/rebuild_local_database.sh .env.dev
 
 dev-cert-install:
 	@mkdir -p .dev-certs
@@ -143,6 +187,30 @@ dev-logging-down:
 receipts-publish:
 	@RECEIPT_JOB_DRY_RUN="$(DRY_RUN)" bash scripts/receipt_job.sh publish "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)" "$(NODE)"
 
+.PHONY: dev-receipts-start dev-receipts-stop dev-receipts-restart dev-receipts-status dev-receipts-logs
+dev-receipts-start:
+	@$(PYTHON) scripts/receipt_services.py start $(if $(WORKERS),--workers "$(WORKERS)",) $(if $(OCR_THREADS),--ocr-threads "$(OCR_THREADS)",)
+dev-receipts-stop:
+	@$(PYTHON) scripts/receipt_services.py stop
+dev-receipts-restart:
+	@$(PYTHON) scripts/receipt_services.py restart $(if $(WORKERS),--workers "$(WORKERS)",) $(if $(OCR_THREADS),--ocr-threads "$(OCR_THREADS)",)
+dev-receipts-status:
+	@$(PYTHON) scripts/receipt_services.py status
+dev-receipts-logs:
+	@$(PYTHON) scripts/receipt_services.py logs
+
+.PHONY: dev-telemetry-start dev-telemetry-stop dev-telemetry-restart dev-telemetry-status dev-telemetry-logs
+dev-telemetry-start:
+	@$(PYTHON) scripts/local_telemetry.py start
+dev-telemetry-stop:
+	@$(PYTHON) scripts/local_telemetry.py stop
+dev-telemetry-restart:
+	@$(PYTHON) scripts/local_telemetry.py restart
+dev-telemetry-status:
+	@$(PYTHON) scripts/local_telemetry.py status
+dev-telemetry-logs:
+	@$(PYTHON) scripts/local_telemetry.py logs
+
 receipts-worker-test:
 	@RECEIPT_JOB_DRY_RUN="$(DRY_RUN)" bash scripts/receipt_job.sh worker-test "$(KUBE_CONTEXT)" "$(KUBE_NAMESPACE)" "$(NODE)"
 
@@ -158,6 +226,11 @@ receipts-graph:
 
 test:
 	$(PYTHON) -m pytest -q -m "not integration"
+
+build-local:
+	$(PYTHON) -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+
+check-local: test build-local docs-build
 
 test-observability:
 	@bash ./scripts/validate_observability_configs.sh
@@ -218,4 +291,31 @@ test-receipts: test-db-setup
 	@rsync -a "$(RECEIPT_SOURCE_ROOT)/" "$(RECEIPT_TEST_ROOT)/inbox/"
 	@echo "Running receipt backlog against local PostgreSQL test database..."
 	@DATABASE_URL=$(TEST_DATABASE_URL) HOME_BUDGET_OCR_CACHE="$(RECEIPT_TEST_ROOT)/ocr-cache" \
-		$(LEDGER) receipts process "$(RECEIPT_TEST_ROOT)/inbox" --workers $(RECEIPT_TEST_WORKERS)
+		$(LEDGER) receipts process "$(RECEIPT_TEST_ROOT)/inbox"
+
+.PHONY: k3s-postgres-tls-prepare monitoring-receipt-postgres-both-apply
+k3s-postgres-tls-prepare:
+	@bash scripts/prepare_receipt_postgres_tls.sh postgres.brownrook.net "$(HOME)/brownrook-ca/leafs/k3s-postgres"
+
+monitoring-receipt-postgres-both-apply:
+	@bash scripts/monitoring_gitops.sh apply --tags monitoring_mdns,monitoring_receipt_postgres -e monitoring_receipt_postgres_enabled=true -e monitoring_k3s_receipt_postgres_enabled=true
+
+.PHONY: k3s-postgres-grafana-check k3s-postgres-grafana-apply
+k3s-postgres-grafana-check:
+	@$(PYTHON) scripts/configure_k3s_receipt_postgres.py
+
+k3s-postgres-grafana-apply:
+	@$(PYTHON) scripts/configure_k3s_receipt_postgres.py --apply
+
+eval-models:
+	@PYTHONPATH=src $(PYTHON) -m home_budget_pipeline.model_evaluation --baseline "$(BASELINE)" --candidate "$(CANDIDATE)" --cases "$(EVAL_CASES)" --receipt-root "$(RECEIPT_ROOT)" --repeats "$(EVAL_REPEATS)" --output "$(EVAL_OUTPUT)" --context-tokens "$(EVAL_CONTEXT_TOKENS)" --output-tokens "$(EVAL_OUTPUT_TOKENS)"
+
+ENRICHMENT_EVAL_CASES ?= evals/enrichment/cases.json
+EVAL_ENV_FILE ?= .env.dev
+.PHONY: eval-enrichment
+eval-enrichment:
+	@PYTHONPATH=src $(PYTHON) scripts/eval_enrichment.py --env-file "$(EVAL_ENV_FILE)" --receipt-root "$(RECEIPT_ROOT)" --baseline "$(BASELINE)" --candidate "$(CANDIDATE)" --cases "$(ENRICHMENT_EVAL_CASES)" --output "$(EVAL_OUTPUT)"
+
+eval-rescore:
+	@test -n "$(REPORT)" || (echo "Usage: make eval-rescore REPORT=path/to/report.json" >&2; exit 2)
+	@PYTHONPATH=src $(PYTHON) -m home_budget_pipeline.model_evaluation --rescore "$(REPORT)" --cases "$(EVAL_CASES)" --output "$(EVAL_OUTPUT)"

@@ -51,12 +51,12 @@ def parse_queries(text: str) -> list[str]:
     return list(dict.fromkeys(q.strip() for q in queries))
 
 
-def _generate_once(provider: str, text: str) -> dict:
+def _generate_once(provider: str, text: str, *, model: str | None = None) -> dict:
     """One provider request; empty responses are handled by the shared retry policy."""
     if provider == "openai":
         from openai import OpenAI
 
-        model = os.getenv("AI_PRODUCT_MODEL", "gpt-5.6-terra")
+        model = model or os.getenv("AI_PRODUCT_MODEL", "gpt-5.6-terra")
         client = OpenAI(timeout=float(os.getenv("COMPARISON_TIMEOUT_SECONDS", "180")),
                         max_retries=0)
         response = client.responses.create(
@@ -68,7 +68,7 @@ def _generate_once(provider: str, text: str) -> dict:
         return {"queries": parse_queries(response.output_text), "model": model,
                 "input_tokens": getattr(usage, "input_tokens", None),
                 "output_tokens": getattr(usage, "output_tokens", None)}
-    model = os.getenv("OLLAMA_PRODUCT_MODEL", "qwen3:30b")
+    model = model or os.getenv("OLLAMA_PRODUCT_MODEL", "qwen3:30b")
     base = os.getenv("OLLAMA_BASE_URL", "http://192.168.2.201:11434").rstrip("/")
     request = urllib.request.Request(
         base + "/api/chat",
@@ -83,6 +83,8 @@ def _generate_once(provider: str, text: str) -> dict:
         os.getenv("COMPARISON_TIMEOUT_SECONDS", "180")
     )) as response:
         data = json.load(response)
+    if data.get('done') is False or data.get('done_reason') not in (None, 'stop'):
+        raise ValueError('Incomplete model output')
     result = {"queries": parse_queries(data["message"]["content"]), "model": model,
               "input_tokens": data.get("prompt_eval_count"),
               "output_tokens": data.get("eval_count")}
@@ -107,7 +109,7 @@ class NoProductQueriesError(ValueError):
         self.details = details
 
 
-def generate(provider: str, text: str) -> dict:
+def generate(provider: str, text: str, *, model: str | None = None) -> dict:
     """Require a proposal from either provider; retry only an empty response once."""
     totals = {"input_tokens": 0, "output_tokens": 0,
               "ollama_total_seconds": 0, "ollama_load_seconds": 0,
@@ -119,7 +121,8 @@ def generate(provider: str, text: str) -> dict:
             "plausible expanded product search query now. These are hypotheses for "
             "retailer search verification, not a claim that a product is correct."
         )
-        result = _generate_once(provider, request_text)
+        result = (_generate_once(provider, request_text, model=model) if model is not None
+                  else _generate_once(provider, request_text))
         for key in totals:
             value = result.get(key)
             if isinstance(value, (int, float)):
@@ -134,9 +137,9 @@ def generate(provider: str, text: str) -> dict:
 
 
 def evaluate(provider: str, item: str, merchant: str, api_key: str,
-             threshold: float, search_cache: dict, baseline=(), context=None) -> dict:
+             threshold: float, search_cache: dict, baseline=(), context=None, *, model: str | None = None) -> dict:
     started = time.monotonic()
-    result = {"provider": provider, "model": os.getenv(
+    result = {"provider": provider, "model": model or os.getenv(
         "AI_PRODUCT_MODEL" if provider == "openai" else "OLLAMA_PRODUCT_MODEL",
         "gpt-5.6-terra" if provider == "openai" else "qwen3:30b"),
         "status": "error", "confidence": None, "accepted": False}
@@ -149,13 +152,16 @@ def evaluate(provider: str, item: str, merchant: str, api_key: str,
         with sampler if sampler else nullcontext():
             model_started = time.monotonic()
             try:
-                result.update(generate(provider, prompt(item, merchant, evidence)))
+                text = prompt(item, merchant, evidence)
+                result.update(generate(provider, text, model=model) if model is not None else generate(provider, text))
             finally:
                 result["model_seconds"] = round(time.monotonic() - model_started, 3)
         domain = core.retailer_domain(merchant)
         pool = list(baseline)
         for expansion in result["queries"]:
-            query = f"site:{domain} {expansion}"
+            query = core.scoped_search_query(expansion, merchant)
+            if not query:
+                continue
             if query not in search_cache:
                 # Score evidence against the ORIGINAL item for both models, never
                 # against words the model invented. Share identical search results.
@@ -187,16 +193,13 @@ def evaluate(provider: str, item: str, merchant: str, api_key: str,
     return result
 
 
-def baseline_search(item: str, merchant: str, api_key: str, cache: dict) -> list:
-    queries = [core.product_query(item, merchant)]
-    first = item.split(maxsplit=1)
-    if first and first[0][:1].lower() in {"c", "o"}:
-        alternative = ("O" if first[0][0].lower() == "c" else "C") + first[0][1:]
-        queries.append(core.product_query(" ".join([alternative, *first[1:]]), merchant))
+def baseline_search(item: str, merchant: str, api_key: str, cache: dict, prior_matches=()) -> list:
+    queries = core.discovery_queries(item, merchant, prior_matches)
     results = []
     for query in dict.fromkeys(queries):
         if query:
-            cache[query] = core.brave_candidates(api_key, query, item, core.retailer_domain(merchant))
+            if query not in cache:
+                cache[query] = core.brave_candidates(api_key, query, item, core.retailer_domain(merchant))
             results.extend((query, r) for r in cache[query])
     return results
 
@@ -231,7 +234,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
     if not os.getenv("OPENAI_API_KEY", "").strip():
         raise RuntimeError("OPENAI_API_KEY is required to compare both providers")
     run_id = str(uuid.uuid4())
-    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+    from .brave_query_cache import BraveQueryCache, refresh_requested
+    with psycopg.connect(dsn, row_factory=dict_row) as conn, BraveQueryCache(dsn, refresh=refresh_requested()) as query_cache:
         rows = conn.execute("""
             SELECT i.id, i.item_name, e.id AS receipt_id, e.store_name, e.receipt_filename, e.source_reference,
                    (SELECT count(*) FROM budget.expense_items ri WHERE ri.expense_pk=e.id) AS receipt_item_count
@@ -253,16 +257,21 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                        "receipt_id": row["receipt_id"],
                        "threshold": threshold, "scoring_version": "receipt-evidence-v2"}
             search_cache = {}
+            query_cache.context = context
+            query_cache.observations.clear()
+            priors = core.accepted_search_priors(conn, row['store_name'])
+            learned = core.learned_discovery(row['item_name'], row['store_name'], priors)
+            conn.commit()
             brave_started = time.monotonic()
             try:
-                baseline = baseline_search(row["item_name"], row["store_name"], api_key, search_cache)
+                baseline = baseline_search(row["item_name"], row["store_name"], api_key, search_cache, priors)
                 baseline_error = None
             except Exception as exc:
                 baseline = [(query, result) for query, candidates in search_cache.items() for result in candidates]
                 baseline_error = type(exc).__name__
             brave_seconds = round(time.monotonic() - brave_started, 3)
             emit("enrichment_brave_baseline", {**context, "seconds": brave_seconds,
-                 "queries": list(search_cache), "candidates": len(baseline), "error_type": baseline_error,
+                 "queries": list(search_cache), "learned_searches": learned, "candidates": len(baseline), "error_type": baseline_error,
                  "evidence": [{"query": q, "title": r.title, "url": r.url,
                                "snippet": r.snippet[:300], "confidence": r.score} for q, r in baseline]})
             results = []
@@ -277,7 +286,9 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                     "qwen_confidence": results[1]["confidence"],
                     "prompt_version": "product-queries-v3",
                     "shared_brave_seconds": brave_seconds, "baseline_error_type": baseline_error,
-                    "item_seconds": round(time.monotonic() - item_started, 3)}
+                    "learned_searches": learned,
+                    "item_seconds": round(time.monotonic() - item_started, 3),
+                    "brave_cache": list(query_cache.observations)}
             if write_db:
                 conn.execute("""INSERT INTO enrichment.product_comparisons
                     (run_uuid, expense_item_id, payload) VALUES (%s, %s, %s)""",
@@ -300,6 +311,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
             timing["complete_receipt"] = timing["selected_items"] == timing["receipt_item_count"]
             emit("enrichment_receipt_timing", timing)
         stats["receipts"] = list(receipts.values())
+        stats['brave_api_requests'] = query_cache.requests
+        stats['brave_cache_hits'] = query_cache.hits
         if write_db:
             conn.execute("INSERT INTO enrichment.product_comparison_runs (run_uuid, summary) VALUES (%s, %s)",
                          (run_id, Jsonb(stats)))

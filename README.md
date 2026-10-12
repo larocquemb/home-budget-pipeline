@@ -21,6 +21,8 @@ Operational documentation:
 - [Receipt backlog processing](docs/receipt-processing.md)
 - [RabbitMQ receipt processing design](docs/rabbitmq-receipt-design.md)
 - [RabbitMQ receipt processing runbook](docs/rabbitmq-receipts.md)
+- [Product comparison and collaborative evidence](docs/product-model-comparison.md)
+- [Receipt knowledge graph](docs/receipt-knowledge-graph.md)
 
 ---
 
@@ -248,6 +250,57 @@ and progress monitoring in worker logs and the RabbitMQ GUI.
 
 ### AI-grounded product enrichment
 
+#### Collaborative review and acceptance
+
+For a review using retained OCR readings, receipt images, Qwen and Brave search,
+run a bounded collaboration job:
+
+```sh
+make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf' DRY_RUN=1
+make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf'
+```
+
+Here `DRY_RUN=1` validates the Kubernetes Job without creating it or calling
+providers. The real collaboration saves proposals, search evidence and a
+recommendation for review; it does not accept a product automatically. Production
+collaboration uses local Qwen first and leaves paid model fallback disabled unless
+`PAID_FALLBACK=1` is supplied. `COMPARE=1` is a separate mode that calls OpenAI
+and Qwen for paired comparison; choose one mode per run.
+
+Brave results are cached in PostgreSQL across items and jobs, and rescored for
+each item. Positive results expire after 90 days; empty results after one hour.
+Normal enrichment and collaboration skip accepted items before applying `LIMIT`.
+Use `REFRESH=1` only to deliberately include accepted items and fetch fresh search
+evidence. Comparison still includes accepted items. Run summaries expose API
+request attempts and cache hits; Qwen calls for pending items still run.
+
+Open the receipt in Ledger and review **Recommendation evidence** before choosing
+**Accept recommendation for this item**. Acceptance saves the selected item's
+description and product link with an audit record. A supported reading correction
+then leads the row as **Accepted interpretation**, while the imported text stays
+under **Import history**. For example, `Oep Pic Med` can lead an accepted Old El
+Paso item while `Cep Pic Med` remains in history. The original item text, amount
+and recorded OCR observations remain intact. Supported category rules resolve
+uncategorized accepted products. **Apply accepted matches and category rules**
+repairs older rows and fills empty products from accepted exact retailer/text cache
+matches after rechecking evidence; other duplicate rows need separate review.
+
+**Related OCR observations** preserves different readings and their pass/run
+citations. Text retrieval can include neighbouring rows, so **row association
+unverified** is explicit. OCR output line numbers are not Ledger item numbers.
+Product labels omit shopping prompts such as “Buy”; full webpage titles remain
+in the evidence.
+
+Use **Processing graph** in the receipt list or **View receipt knowledge graph**
+on a receipt to follow OCR evidence, model expansion, Brave search, verification,
+and the recommendation/acceptance. Refresh its saved projection with
+`make receipts-graph` after a new run or acceptance. See the
+[user guide](docs/user-guide.md#understand-item-readings-and-product-recommendations)
+for review and the [collaboration manual](docs/product-model-comparison.md)
+for model budgets, GPU telemetry and diagnostics.
+
+#### Original automatic enrichment path
+
 Product enrichment is a separate post-import stage. It does not alter the raw
 receipt evidence. The enrichment command first searches Brave using the literal
 OCR item name and the known retailer domain. If that result is weak, the AI
@@ -265,7 +318,9 @@ example, a Sobeys page titled `Old El Paso ...` establishes the initialism
 `OEP`; an OCR item named `Cep Pic Med` may therefore be normalized to
 `Oep Pic Med` only when the retailer match confidence is at least `0.95`.
 The rule is based on the verified product title rather than a receipt-specific
-override.
+override. This `0.95` automatic-normalization threshold belongs to the original
+enrichment path; collaborative review separately records scored evidence and
+requires explicit acceptance in Ledger.
 
 Run enrichment for the pending backlog:
 
@@ -761,6 +816,8 @@ Use the Make targets so unit and integration tests receive the repository's
 standard configuration:
 
 ```bash
+make check-local # unit tests, local Python wheel, strict documentation build
+make build-local # local Python wheel only
 make test       # unit tests
 make test-db    # integration tests; resets the disposable test schemas
 make test-rabbit # named RabbitMQ integration tests
@@ -808,26 +865,46 @@ from budget categories.
 
 ## 15. Local Entra-authenticated Ledger
 
-The development stack runs PostgreSQL 18, Caddy, and OAuth2 Proxy in Colima
-while Ledger runs directly from the working tree. PostgreSQL uses the same
-OAuth-capable image and schema bootstrap sequence as K3s. This avoids the K3s
-deployment loop for application changes without sacrificing database parity.
+Follow the [local macOS development guide](docs/local-development.md) for daily
+startup, receipt processing, logs, product enrichment, and the build/test workflow.
+
+PostgreSQL 18 runs natively through Homebrew on port 5432. Caddy and OAuth2
+Proxy run in Colima while Ledger runs directly from the working tree.
+Local commands use `DATABASE_URL` from `.env.dev` directly and use the same
+schema bootstrap sequence as K3s. Native PostgreSQL does not use the K3s OAuth validator.
 
 1. Copy `.env.dev.example` to `.env.dev`, fill in the Entra values and local
    database identity,
    and generate the separate `LEDGER_PROXY_SECRET` described in that file.
 2. Add `127.0.0.1 ledger-dev.brownrook.net` to `/etc/hosts`.
 3. Add `https://ledger-dev.brownrook.net/ledger/oauth2/callback` as a redirect URI in Entra.
-4. Stop any old `kubectl port-forward` using local port 5433.
-5. Run `make dev-up`; it creates the dedicated `home-budget-postgres18-data`
-   volume, generates a local-only password under `.local-postgres/`, and
-   initializes the database on first start.
+4. Start native PostgreSQL with `brew services start postgresql@18`, create
+   `home_budget` if needed, and set its local URL in `.env.dev`.
+5. For an empty development database, run `make dev-db-reset` to initialize it
+   (this deletes existing application data). Run `make dev-up` to start the proxies.
 6. Run `make dev-cert-install` once to trust Caddy's local CA.
 7. Run `make dev-web` and open `https://ledger-dev.brownrook.net/ledger`.
 
-Stop the containers with `make dev-down`. The PostgreSQL 18 volume is retained
-and is deliberately distinct from every PostgreSQL 17 or K3s volume. The local
-Ledger process is intentionally
+Run the local OCR worker and result collector in the background with
+`make dev-receipts-start`. This installs per-user macOS LaunchAgents that start
+at login and restart on exit. They load `.env.dev` on each start and use the
+native PostgreSQL and RabbitMQ services. Queue receipt imports with
+`ledger receipts process --verbose` from a terminal with `.env.dev` exported.
+Use `make dev-receipts-status` to check the processes and
+`make dev-receipts-logs` to follow their logs (Ctrl+C stops only the log viewer).
+After editing `.env.dev`, use `make dev-receipts-restart` to reload it.
+`make dev-receipts-stop` stops all worker and collector processes and disables automatic startup;
+`make dev-receipts-start` enables it again. Logs are stored in the ignored
+`.local-services/` directory. Configure local Grafana forwarding with
+`make dev-telemetry-start` as described in the [local development guide](docs/local-development.md).
+
+Choose concurrency with `make dev-receipts-restart WORKERS=2 OCR_THREADS=4`.
+This starts two receipt consumers and one collector, with four OCR threads per
+worker. Settings persist across subsequent starts. Reduce the worker count with
+`make dev-receipts-restart WORKERS=1`; extra worker agents are stopped and removed.
+
+Stop the proxy containers with `make dev-down`; native PostgreSQL stays running.
+The local Ledger process is intentionally
 outside Docker so source changes only require restarting that process.
 Caddy publishes ports 80 and 443 only on `127.0.0.1`. Ledger listens on port
 8080 for the Docker proxy, and verifies `LEDGER_PROXY_SECRET` before trusting

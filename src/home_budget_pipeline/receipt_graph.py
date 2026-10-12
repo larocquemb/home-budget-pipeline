@@ -11,7 +11,7 @@ import os
 import re
 from urllib.parse import urlencode
 
-VERSION = 1
+VERSION = 5
 
 
 def encoded(value):
@@ -64,11 +64,12 @@ def worker(graph, parent, identity):
             graph.edge(w, 'RUNS_ON', n)
 
 
-def collaboration(graph, receipt, item, payload, skipped=()):
+def collaboration(graph, receipt, item, payload, skipped=(), completed_at=None, sequence=None):
     scope = (payload['run_uuid'], payload['item_id'])
-    run = graph.node('Collaboration', scope, 'Shared evidence', run_uuid=payload['run_uuid'],
+    run = graph.node('Collaboration', scope, 'Shared evidence', run_uuid=payload['run_uuid'], completed_at=completed_at, sequence=sequence,
                      item_seconds=payload.get('item_seconds'), prompt_version=payload.get('prompt_version'),
-                     scoring_version=payload.get('scoring_version'), prompt_coverage=payload.get('prompt_coverage'))
+                     scoring_version=payload.get('scoring_version'), prompt_coverage=payload.get('prompt_coverage'),
+                     discovery=payload.get('discovery'))
     graph.edge(receipt, 'HAS_COLLABORATION', run)
     graph.edge(run, 'ANALYZES', item)
     worker(graph, run, payload.get('worker_identity', {}))
@@ -96,16 +97,35 @@ def collaboration(graph, receipt, item, payload, skipped=()):
             if source_id in citations:
                 graph.edge(citations[source_id], 'SUPPORTS', c)
     for query in payload.get('search_queries', []):
-        q = graph.node('SearchQuery', (*scope, query['query']), query['query'])
+        query = dict(query)
+        cached = next((entry for entry in payload.get('brave_cache', []) if entry['query'] == query['query']), None)
+        if cached:
+            query.update(cache_status=cached['cache_status'], fetched_at=cached['fetched_at'], cache_key=cached['cache_key'])
+        q = graph.node('SearchQuery', (*scope, query['query']), query['query'],
+                       **{key: query[key] for key in ('cache_status', 'fetched_at', 'cache_key') if key in query})
         graph.edge(run, 'SEARCHED', q)
         for c in query.get('candidate_ids', []):
             if c in citations:
                 graph.edge(q, 'RETURNED', citations[c])
+    searched = {entry['query'] for entry in payload.get('search_queries', [])}
+    for learned in payload.get('learned_searches', []):
+        if learned['query'] not in searched:
+            continue
+        query = graph.node('SearchQuery', (*scope, learned['query']), learned['query'])
+        for prior in learned.get('prior_matches', []):
+            match = graph.node('PriorProductMatch', (*scope, prior['cache_id']),
+                               prior['product_title'], **prior)
+            graph.edge(query, 'LEARNED_FROM', match)
+            page = graph.node('ProductPage', prior['product_url'], prior['product_url'], url=prior['product_url'])
+            graph.edge(match, 'REFERENCES', page)
     proposals = []
-    for invocation in payload.get('proposals', []) + payload.get('reviews', []):
+    for invocation in payload.get('descriptor_expansions', []) + payload.get('expansions', []) + payload.get('proposals', []) + payload.get('reviews', []):
         phase = invocation['stage']
         profile = invocation['profile']
-        i = graph.node('ModelInvocation', (*scope, profile, phase), f"{profile}: {phase}", **{**invocation, 'run_uuid': payload['run_uuid']})
+        invocation_scope = (*scope, profile, phase, invocation['target_reading']) if phase == 'expansion' else (*scope, profile, phase)
+        if phase == 'descriptive_expansion':
+            invocation_scope = (*scope, profile, phase, *invocation['descriptive_tokens'])
+        i = graph.node('ModelInvocation', invocation_scope, f"{profile}: {phase}", **{**invocation, 'run_uuid': payload['run_uuid']})
         model = graph.node('Model', (invocation['provider'], invocation['model'], invocation.get('model_digest')), invocation['model'],
                            provider=invocation['provider'], model=invocation['model'], digest=invocation.get('model_digest'))
         family = graph.node('Provider', invocation['provider'], invocation['provider'])
@@ -121,28 +141,40 @@ def collaboration(graph, receipt, item, payload, skipped=()):
                 graph.edge(gpu, 'LOCATED_ON', host)
         output = invocation.get('output') or invocation.get('invalid_output') or {}
         valid = invocation.get('status') == 'success'
-        outcome = graph.node('Proposal' if phase == 'proposal' else 'ModelReview', (*scope, profile, phase),
-                             output.get('reading') or output.get('reason') or invocation['status'],
+        outcome = graph.node('Proposal' if phase in {'proposal', 'expansion', 'descriptive_expansion'} else 'ModelReview', invocation_scope,
+                             (output.get('candidate_title') if valid else None) or output.get('reading') or output.get('reason') or
+                             next(iter(output.get('queries', [])), invocation['status']),
                              status=invocation['status'], valid=valid, output=output)
         graph.edge(i, 'PRODUCED', outcome)
-        for source_id in output.get('source_ids', []):
+        for source_id in invocation.get('derived_source_ids', []):
+            if source_id in citations:
+                graph.edge(outcome, 'DERIVED_FROM', citations[source_id])
+        for query in invocation.get('searched_queries', []):
+            if query in searched:
+                q = graph.node('SearchQuery', (*scope, query), query)
+                graph.edge(outcome, 'PROPOSED_SEARCH', q)
+        cited_ids = list(output.get('source_ids', []))
+        if output.get('product_source_id') and output['product_source_id'] not in cited_ids:
+            cited_ids.append(output['product_source_id'])
+        for source_id in cited_ids:
             target = citations.get(source_id)
             if target:
                 graph.edge(outcome, 'CITES' if valid else 'REJECTED_CITATION', target)
             else:
-                unknown = graph.node('UnresolvedCitation', (*scope, profile, phase, source_id), source_id)
+                unknown = graph.node('UnresolvedCitation', (*invocation_scope, source_id), source_id)
                 graph.edge(outcome, 'INVALID_CITATION', unknown)
         selected = output.get('candidate_id')
         if valid and selected in citations:
             graph.edge(outcome, 'SELECTS', citations[selected])
-        if phase == 'proposal':
+        if phase in {'proposal', 'expansion', 'descriptive_expansion'}:
             proposals.append(outcome)
         else:
             for peer in proposals:
                 graph.edge(i, 'CONSIDERED_PROPOSAL', peer)
         for source in bundle.get('sources', []):
             # Prompt inclusion is bounded; do not claim every stored observation was seen.
-            if source['id'] in payload.get('prompt_source_ids', []):
+            received = [] if phase == 'descriptive_expansion' else invocation.get('input_source_ids', []) if phase == 'expansion' else payload.get('prompt_source_ids', [])
+            if source['id'] in received:
                 graph.edge(i, 'RECEIVED', citations[source['id']])
         if invocation.get('image_count', 0) > 0:
             for image in payload.get('images', [])[:invocation['image_count']]:
@@ -206,6 +238,8 @@ def build(data):
     previous_retry = {}
     for event in data.get('events', []):
         e = event['payload']
+        if e.get('event') in {'product_recommendation_accepted', 'receipt_item_refreshed'}:
+            continue
         message = graph.node('Message', e['message_id'], e['operation'], message_id=e['message_id'], request_id=e.get('request_id'), operation=e['operation'], batch_id=e.get('batch_id'))
         graph.edge(receipt, 'QUEUED_AS', message)
         if e.get('queue'):
@@ -237,7 +271,30 @@ def build(data):
     for row in data.get('collaborations', []):
         p = row['payload']
         if p['item_id'] in items:
-            collaboration(graph, receipt, items[p['item_id']], p, row.get('summary', {}).get('skipped_profiles', []))
+            collaboration(graph, receipt, items[p['item_id']], p, row.get('summary', {}).get('skipped_profiles', []), row.get('completed_at'), row.get('id'))
+    for event in data.get('events', []):
+        e = event['payload']
+        if e.get('event') == 'receipt_item_refreshed':
+            if e.get('item_id') in items:
+                refresh = graph.node('ItemRefresh', str(event['id']), 'Accepted matches and category rules applied',
+                                     occurred_at=event['occurred_at'], **e)
+                graph.edge(refresh, 'UPDATED', items[e['item_id']])
+                record = graph.node('PostgreSQLRecord', ('lineage.receipt_events', str(event['id'])),
+                                    'Audited item refresh', table='lineage.receipt_events', key=str(event['id']))
+                graph.edge(refresh, 'PERSISTED_AS', record)
+            continue
+        if e.get('event') != 'product_recommendation_accepted' or e.get('item_id') not in items:
+            continue
+        decision = identifier('Decision', (e['run_uuid'], e['item_id']))
+        if decision not in graph.nodes:
+            continue
+        acceptance = graph.node('ProductAcceptance', str(event['id']), 'Accepted recommendation',
+                                accepted_at=event['occurred_at'], **e)
+        graph.edge(decision, 'ACCEPTED_AS', acceptance)
+        graph.edge(acceptance, 'UPDATED', items[e['item_id']])
+        audit = graph.node('PostgreSQLRecord', ('budget.expense_item_description_audit', e['audit_id']),
+                           'Audited product acceptance', table='budget.expense_item_description_audit', key=e['audit_id'])
+        graph.edge(acceptance, 'PERSISTED_AS', audit)
     return graph.export()
 
 
@@ -252,7 +309,7 @@ def load(conn, sha):
     events = conn.execute('SELECT * FROM lineage.receipt_events WHERE source_sha256=%s ORDER BY occurred_at,id', (sha,)).fetchall()
     result_events = conn.execute('SELECT * FROM budget.ocr_result_events WHERE source_sha256=%s ORDER BY persisted_at,message_id', (sha,)).fetchall()
     items = conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=%s ORDER BY id', (expense['id'],)).fetchall() if expense else []
-    collaborations = conn.execute('SELECT c.payload,COALESCE(r.summary,\'{}\'::jsonb) AS summary FROM enrichment.receipt_collaborations c LEFT JOIN enrichment.receipt_collaboration_runs r USING(run_uuid) JOIN budget.expense_items i ON i.id=c.expense_item_id WHERE i.expense_pk=%s ORDER BY c.completed_at,c.id', (expense['id'],)).fetchall() if expense else []
+    collaborations = conn.execute('SELECT c.payload,c.completed_at,c.id,COALESCE(r.summary,\'{}\'::jsonb) AS summary FROM enrichment.receipt_collaborations c LEFT JOIN enrichment.receipt_collaboration_runs r USING(run_uuid) JOIN budget.expense_items i ON i.id=c.expense_item_id WHERE i.expense_pk=%s ORDER BY c.completed_at,c.id', (expense['id'],)).fetchall() if expense else []
     return {'receipt': receipt, 'expense': expense, 'items': items, 'ocr_runs': runs, 'ocr_passes': passes, 'events': events,
             'result_events': result_events, 'collaborations': collaborations}
 

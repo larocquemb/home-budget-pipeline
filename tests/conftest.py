@@ -4,6 +4,33 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
+
+@pytest.fixture
+def offline_gpu_sampling(monkeypatch):
+    """Model unit tests exercise summaries without polling production telemetry.
+
+    Dedicated GPU sampler tests cover polling, timing and errors with fake HTTP
+    responses. Mocking model requests alone does not isolate their sampler thread.
+    """
+    from home_budget_pipeline.gpu_sampling import GpuSampler
+
+    monkeypatch.setattr(GpuSampler, 'poll', lambda self: None)
+
+
+@pytest.fixture
+def mock_brave_query_cache(monkeypatch):
+    """Runner orchestration mocks use no real cache database; cache tests use PostgreSQL."""
+    from home_budget_pipeline import brave_query_cache
+    class Cache:
+        def __init__(self, *args, **kwargs):
+            self.observations, self.context = [], {}
+            self.hits = self.requests = 0
+        def __enter__(self): return self
+        def __exit__(self, *exc): pass
+    monkeypatch.setattr(brave_query_cache, 'BraveQueryCache', Cache)
+
 
 _LOCAL_TEST_DSN = "host=localhost port=5432 dbname=home_budget_test user=paul"
 _USING_LOCAL_DEFAULT = "TEST_DATABASE_URL" not in os.environ

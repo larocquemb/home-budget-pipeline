@@ -5,6 +5,9 @@ and receipt-processing verification workflow.
 
 ## Local setup and tests
 
+See [local macOS development](local-development.md) for native PostgreSQL and
+RabbitMQ, authentication proxies, and background receipt services.
+
 Activate the project environment:
 
 ```bash
@@ -28,6 +31,21 @@ Run unit tests:
 ```bash
 make test
 ```
+
+For quick feedback before pushing, install the documentation extra once with
+`python -m pip install -e '.[docs]'`, then run:
+
+```bash
+make check-local
+```
+
+This runs unit tests, builds a Python wheel in `dist/` using the installed build
+backend, and builds the documentation with strict validation. Model unit tests
+use mocked GPU polling; dedicated telemetry tests use fake HTTP responses.
+`make build-local` builds just the wheel. These checks do not run live models or
+deploy to Kubernetes. The wheel does not replace the production Linux container:
+CI still runs integration and configuration checks, builds and pushes the
+immutable image, and updates the GitOps image reference before Argo CD can sync it.
 
 With Colima running, validate the exact Prometheus, OpenTelemetry Collector,
 Alloy, and Fluent Bit configurations used by CI:
@@ -80,6 +98,8 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make docs-build` | Build the online manual locally and fail on documentation warnings. |
 | `make docs-serve` | Serve the online manual locally with live reload. |
 | `make test` | Run unit tests without external-service integration tests. |
+| `make check-local` | Run unit tests, build a local Python wheel, and build strict documentation. |
+| `make build-local` | Build a Python wheel in `dist/` with the installed build backend. |
 | `make test-observability` | Validate Prometheus, OpenTelemetry Collector, Alloy, and Fluent Bit configurations with containers provided by Colima or Docker. |
 | `make test-db-setup` | Create the disposable test database if needed, then rebuild its schemas. |
 | `make test-db` | Rebuild the disposable test schemas and run integration tests, including RabbitMQ when a broker URL is exported. |
@@ -87,15 +107,24 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make test-rabbit` | Rebuild the disposable test schemas, then run the five RabbitMQ integration tests with their names displayed. |
 | `make test-all` | Run unit tests followed by PostgreSQL and available RabbitMQ integration tests; the integration summary displays their names. |
 | `make test-receipts` | Copy real receipt inputs into an isolated workspace and process them against the disposable test database. |
-| `make dev-up` | Stage the K3s database bootstrap and start local PostgreSQL 18, Caddy, and OAuth2 Proxy in Colima. |
-| `make dev-down` | Stop the local supporting services. |
+| `make dev-up` | Verify native PostgreSQL from `.env.dev` and start Caddy and OAuth2 Proxy in Colima. |
+| `make dev-down` | Stop the authentication proxy containers; native PostgreSQL and RabbitMQ stay running. |
 | `make dev-web` | Run the Ledger web application against the local services. |
 | `make dev-cert-install` | Install the local Caddy certificate authority in the macOS system keychain. |
 | `make dev-db-reset` | Rebuild the local development database configured in `.env.dev`. |
+| `make dev-receipts-start` | Enable and start the Mac background OCR worker and result collector. |
+| `make dev-receipts-status` | Check background service state and process IDs. |
+| `make dev-receipts-logs` | Follow local worker and collector log files. |
+| `make dev-receipts-restart` | Restart both services to reload code and `.env.dev`. |
+| `make dev-receipts-stop` | Stop both services and disable startup at login. |
 | `make status` | Report deployment and recent workflow status. |
 | `make enrich-products` | Start and follow a one-off Kubernetes product-enrichment job. |
 | `make ollama-gitops-check` / `make ollama-gitops-apply` | Review/reconcile Arsene's Ollama LAN listener and source-restricted firewalld access. |
 | `make enrich-products COMPARE=1 LIMIT=10 RECEIPT='receipt.pdf'` | Compare OpenAI and Qwen matches without changing accepted products; see [model comparison](product-model-comparison.md). |
+| `make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf'` | Save a Qwen-first collaborative recommendation for review in Ledger. Paid fallback is opt-in with `PAID_FALLBACK=1`. |
+| `make enrich-products COLLABORATE=1 LIMIT=1 DRY_RUN=1` | Validate the Kubernetes Job without creating it or calling providers. |
+| `make enrich-products COLLABORATE=1 LIMIT=1 REFRESH=1` | Deliberately include accepted items and refresh Brave search evidence. Default runs skip accepted items and reuse persistent search results. |
+| `make receipts-graph` | Refresh the Neo4j projection from retained PostgreSQL evidence, including recommendations and acceptance events. |
 | `make receipts-publish NODE=longbow` | Start and follow a receipt publisher Job on Longbow using the live `receipt-processor` CronJob. Omit `NODE` to let Kubernetes select a node. |
 | `make receipts-worker-test NODE=longbow` | Run a temporary OCR consumer on Longbow using the live `receipt-worker` Deployment configuration. Ctrl+C deletes the Job and initiates graceful worker shutdown. |
 | `make deploy-k3s` | Apply PostgreSQL credentials and the OCR cache path from `.env.k3s`, then sync the Argo CD application. Matching settings are reused. |
@@ -104,6 +133,22 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make postgres-config-check` | Validate PostgreSQL deployment settings in `.env.k3s` without cluster access. |
 | `make postgres-config-apply` | Provision `postgres-secret` from `.env.k3s` for a new deployment. |
 | `make postgres-password-rotate` | Rotate an existing database password and Secret, verify authentication, and restart database clients. |
+
+Neo4j runs on Arsene as the `neo4j` StatefulSet. Its GitOps manifest reserves
+4 GiB of memory and permits up to 6 GiB, with a 2 GiB Java heap, 1 GiB page cache,
+and a 1 GiB aggregate transaction-memory budget. Transaction state shares the heap;
+the remaining container allowance covers native memory and runtime overhead.
+The projector commits each receipt separately, so more receipts increase total
+work and storage rather than combining all receipts into one transaction.
+This budget raises the previous 358.4 MiB transaction ceiling; it does not
+guarantee that arbitrarily large evidence histories fit in one receipt transaction.
+After syncing a memory-budget change, wait for Neo4j before rerunning projection:
+
+```sh
+make deploy-k3s
+kubectl --context brownrook-k3s1 -n home-budget rollout status statefulset/neo4j --timeout=300s
+make receipts-graph
+```
 
 Both manual receipt targets default to context `brownrook-k3s1` and namespace
 `home-budget`; override with `KUBE_CONTEXT` and `KUBE_NAMESPACE`. Add `DRY_RUN=1`

@@ -4,7 +4,7 @@ After=network-online.target ollama.service
 
 [Service]
 User={{ ollama_service_user.stdout | default('root', true) }}
-ExecStart=/usr/bin/python3 /usr/local/libexec/ollama-gpu-telemetry.py --host {{ ollama_listen_address }} --port {{ ollama_gpu_telemetry_port }}
+ExecStart=/usr/bin/python3 /usr/local/libexec/ollama-gpu-telemetry.py --host {{ ollama_listen_address }} --port {{ ollama_gpu_telemetry_port }} --cgroup {{ ollama_cgroup_path }} --ollama-url http://{{ ollama_listen_address }}:{{ ollama_port }}
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true

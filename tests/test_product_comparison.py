@@ -8,6 +8,8 @@ from jinja2 import Environment, StrictUndefined
 from home_budget_pipeline import product_comparison as comparison
 from home_budget_pipeline import product_enrichment as core
 
+pytestmark = pytest.mark.usefixtures('offline_gpu_sampling')
+
 
 def test_queries_are_bounded_and_deduplicated():
     assert comparison.parse_queries('{"queries":["Yard bags","Yard bags"]}') == ["Yard bags"]
@@ -147,7 +149,7 @@ def test_openai_uses_same_schema_and_reports_usage(monkeypatch):
 
 
 @pytest.mark.parametrize('receipt_item_count', [1, 3])
-def test_run_persists_comparisons_only_and_emits_paired_events(monkeypatch, capsys, receipt_item_count):
+def test_run_persists_comparisons_only_and_emits_paired_events(monkeypatch, capsys, receipt_item_count, mock_brave_query_cache):
     import psycopg
     calls = []
     class Connection:
@@ -189,7 +191,8 @@ def test_dashboard_preserves_raw_json_and_unwraps_message_json():
     template = (root / "ops/monitoring/roles/monitoring/templates/grafana-product-comparison-dashboard.json.j2").read_text()
     rendered = Environment(undefined=StrictUndefined).from_string(template).render(
         monitoring_grafana_home_budget_folder_uid_effective="home-budget",
-        monitoring_grafana_datasource_uid="loki")
+        monitoring_grafana_datasource_uid="loki",
+        monitoring_grafana_prometheus_datasource_uid="home-budget-prometheus")
     dashboard = json.loads(rendered)
     assert dashboard["metadata"]["annotations"]["grafana.app/folder"] == "home-budget"
     panels = dashboard["spec"]["elements"]
@@ -226,8 +229,27 @@ def test_brave_precedes_models_and_both_receive_same_baseline(monkeypatch):
                for p in ('openai', 'qwen')]
     assert prompts[0] == prompts[1] and title in prompts[0]
     assert all(r['accepted'] and r['confidence'] == .9167 for r in results)
-    # Two baseline searches plus one identical proposed query, shared within the item.
+    # Two baseline hypotheses plus one identical proposed query shared by models.
     assert sum(kind == 'brave' for kind, _ in order) == 3
+
+
+def test_full_expansion_finds_candidate_without_scoring_expansion_as_receipt(monkeypatch):
+    title = 'Old El Paso Salsa Picante Style Restaurant Medium 650 ml'
+    url = 'https://sobeys.com/products/old-el-paso-salsa-picante-style-restaurant-medium-650-ml'
+    calls = []
+    def search(key, query, original, domain):
+        calls.append((query, original))
+        if query != 'site:sobeys.com old el paso picante medium':
+            return []
+        return [core.SearchResult(title, url, '', core.candidate_score(original, domain, title, url))]
+    monkeypatch.setattr(core, 'brave_candidates', search)
+    cache = {}
+    prior = {'id':7, 'merchant_key':'sobeys.com', 'status':'accepted', 'confidence':.95,
+             'receipt_text_norm':'oep pic med', 'product_description':title, 'product_url':url}
+    baseline = comparison.baseline_search('Cep Pic Med', 'Sobeys', 'key', cache, [prior])
+    assert len(baseline) == 1 and baseline[0][1].score == .9167
+    assert all(original == 'Cep Pic Med' for _, original in calls)
+    assert baseline[0][0] == 'site:sobeys.com old el paso picante medium'
 
 
 def test_provider_does_not_borrow_other_models_expanded_search_results(monkeypatch):
@@ -243,3 +265,14 @@ def test_provider_does_not_borrow_other_models_expanded_search_results(monkeypat
     left = comparison.evaluate('openai', 'Cep Pic Med', 'Sobeys', 'key', .85, cache, [('initial', baseline)])
     right = comparison.evaluate('qwen', 'Cep Pic Med', 'Sobeys', 'key', .85, cache, [('initial', baseline)])
     assert left['accepted'] and right['confidence'] == 0
+
+
+def test_explicit_ollama_model_does_not_mutate_environment(monkeypatch):
+    calls = []
+    monkeypatch.setenv('OLLAMA_PRODUCT_MODEL', 'production:tag')
+    monkeypatch.setattr(comparison, '_generate_once', lambda provider, text, **kw:
+                        calls.append(kw['model']) or {'queries': ['Salsa'], 'model': kw['model']})
+    assert comparison.generate('qwen', 'prompt', model='candidate:tag')['model'] == 'candidate:tag'
+    assert calls == ['candidate:tag']
+    import os
+    assert os.getenv('OLLAMA_PRODUCT_MODEL') == 'production:tag'

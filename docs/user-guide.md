@@ -11,9 +11,103 @@ accounting and review dashboard.
 
 **Receipts** is the default landing page. It lists each discovered source file
 with its merchant, transaction time, total, processing state, and extraction
-state. Open a receipt to review the source document beside extracted text,
+state. The **Expense ID** column links to the associated accounting record;
+unprocessed receipts show **Pending**. Use **Search receipts** to search across
+all pages by expense ID, filename, merchant, date, total, or item description.
+Multiple words can match different fields, for example `Sobeys 2026-02-14`.
+Click any column heading to toggle ascending **▲** and descending **▼** sorting.
+The current search and sort are preserved when navigating pages; **Clear** resets
+them. Expense IDs and totals sort numerically, and missing values remain last.
+
+Receipt links and page titles lead with the expense number, merchant, date, and
+total when available. The source filename remains visible. Expense IDs are local
+to each database, so identify the same purchase across environments by filename,
+merchant, date, and total rather than expecting matching IDs. The receipt URL
+uses its stable source-file hash; `/expenses/ID` redirects to the associated receipt.
+
+Open a receipt to review the source document beside extracted text,
 canonical line items, and accepted product-enrichment evidence. Use the link to
 the accounting and review dashboard for cross-receipt reports and corrections.
+
+#### Understand item readings and product recommendations
+
+The **Receipt item** column shows the imported item text until a correction is
+accepted. When an accepted recommendation includes a supported reading correction,
+the row leads with the **Accepted interpretation**. Expand **Import history** to
+see the text selected during import.
+
+For example, an item imported as `Cep Pic Med` can display the accepted
+interpretation `Oep Pic Med`, with **Old El Paso Salsa Picante Style Restaurant
+Medium 650 ml** in the Description column. `Cep` remains in import history;
+it does not mean every OCR pass read `Cep`. The interpretation comes from the
+recorded product evidence and acceptance, rather than changing an OCR observation.
+
+Expand **Related OCR observations** to compare readings such as `Cep` and `Oep`.
+Identical observed text is displayed once per reading. Expand **Source records (N)**
+to inspect the retained observations with engine, pass ID, variant, OCR run UUID,
+page and OCR output line when available, plus observation and receipt evidence IDs.
+**Combined OCR text** comes from the stored consensus and may have no recorded run
+UUID. **OCR pass** identifies a specific engine pass. Several passes can share one
+run UUID, and one pass can contain several different lines; the observation ID
+distinguishes the individual source records.
+
+**Row association unverified** means a related observation may describe a
+neighbouring or duplicate receipt item. An OCR output line number is a position
+in that pass's text, not a Ledger item number. Repeated readings are useful
+evidence, but their count alone does not establish the correct reading or row.
+
+The **Enrichment** column separates a saved recommendation from an accepted one.
+Review the product link, **Recommendation evidence**, and **Source webpage title**
+before choosing **Accept recommendation for this item**. Product labels omit
+shopping prompts such as “Buy”; the original search-result title stays in the
+evidence. An evidence score is a matching score, not a guarantee of correctness.
+
+Acceptance saves the description and product link for the selected item and
+records an audit event. It also applies supported category rules to an unresolved
+category, so an accepted salsa product can become **Groceries**. Existing categories
+and human overrides are preserved. The imported item text and amount remain intact.
+If the item or saved
+recommendation changes during review, reload the receipt before accepting again.
+
+Use **Apply accepted matches and category rules** above the receipt's line items
+to repair older accepted rows and fill empty product fields from previously
+accepted matches for the same retailer and normalized item text. Cached matches
+are rechecked against product-page and token evidence. This explicit receipt-wide
+action can fill an identical second row without another model call; it preserves
+existing descriptions, categories and per-item collaboration reviews, and records
+changes in the audit history. It does not accept a new model recommendation.
+
+**Awaiting product identification** means there is no accepted description for that
+item yet. A one-item collaboration does not enrich the whole receipt. Ask the
+operator to process the remaining items; unmatched products stay unresolved.
+**Not enriched** means no enrichment result has been saved. Neither label reports
+OCR progress: product enrichment is a separate command after receipt import.
+
+Check **Processing** in the receipt list or detail page and refresh to see changes.
+**Active** means work is in progress; **Succeeded** means the result was persisted.
+**Review required** indicates processing completed with a review concern. Ledger
+does not yet show live logs or a progress bar. For local background processing,
+use `make dev-receipts-logs`; see the [local development guide](local-development.md).
+
+#### Follow the processing story
+
+Use **Processing graph** beside a receipt in the list or **View receipt knowledge
+graph** on its detail page. The **Receipt graph** navigation link opens the general
+graph browser.
+
+The processing story follows a selected item and collaboration run through:
+
+1. OCR and receipt evidence;
+2. model expansion of abbreviated or ambiguous text;
+3. Brave search results;
+4. model verification against the recorded evidence;
+5. the final recommendation and any acceptance record.
+
+Select a card to inspect its evidence and links. Compare other attempts and runs
+to understand how the result changed. A model recommendation and human acceptance
+are separate steps; the graph shows recorded evidence and decisions, not every
+possible search or interpretation. See the [receipt knowledge graph guide](receipt-knowledge-graph.md)
+for projection, provenance, and operational details.
 
 ### 2. Extraction audit
 
@@ -104,6 +198,7 @@ financial transactions.
   once the underlying problem is fixed.
 
 Write controls are limited to category overrides, category-rule management, and
-item description/product-link corrections. Read queries use read-only database
+item description/product-link corrections, including explicit recommendation
+acceptance. Read queries use read-only database
 transactions; supported changes use explicit transactions and retain the
 authenticated actor in audit records.

@@ -33,7 +33,7 @@
       }
     ],
     "cursorSync": "Crosshair",
-    "description": "KAN-88/KAN-89 receipt, OCR collector, queue, and telemetry-pipeline overview with Prometheus exemplars linked to Tempo.",
+    "description": "KAN-88/KAN-89 receipt, OCR collector, queue, and telemetry-pipeline overview with Prometheus exemplars linked to Tempo. Execution host selects the processing machine: m4pro for local development, arsene for K3s. Other hosts remain available. Select All deliberately to compare hosts.",
     "editable": false,
     "elements": {
       "panel-1": {
@@ -104,7 +104,7 @@
         "kind": "Panel",
         "spec": {
           "id": 10,
-          "title": "Telemetry delivery failures, retries and buffers",
+          "title": "Shared Telemetry delivery failures, retries and buffers",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -379,7 +379,9 @@
                       "kind": "DataQuery",
                       "group": "prometheus",
                       "version": "v0",
-                      "datasource": {"name": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
                       "spec": {
                         "editorMode": "code",
                         "expr": "sum by (event_type, outcome) (rate(brownrook_ocr_collector_events_total[$__rate_interval])) or vector(0)",
@@ -397,7 +399,9 @@
                       "kind": "DataQuery",
                       "group": "prometheus",
                       "version": "v0",
-                      "datasource": {"name": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
                       "spec": {
                         "editorMode": "code",
                         "expr": "histogram_quantile(0.95, sum by (event_type, le) (rate(brownrook_ocr_collector_persistence_duration_seconds_bucket[$__rate_interval]))) or vector(0)",
@@ -415,7 +419,9 @@
                       "kind": "DataQuery",
                       "group": "prometheus",
                       "version": "v0",
-                      "datasource": {"name": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
                       "spec": {
                         "editorMode": "code",
                         "expr": "sum by (destination) (rate(brownrook_ocr_collector_routed_total[$__rate_interval])) or vector(0)",
@@ -433,7 +439,9 @@
                       "kind": "DataQuery",
                       "group": "prometheus",
                       "version": "v0",
-                      "datasource": {"name": "{{ monitoring_grafana_prometheus_datasource_uid }}"},
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
                       "spec": {
                         "editorMode": "code",
                         "expr": "rabbitmq_detailed_queue_messages{vhost=\"receipts\",queue=\"ocr.results.v1.dead\"} or vector(0)",
@@ -455,10 +463,22 @@
             "version": "13.2.1",
             "spec": {
               "options": {
-                "legend": {"displayMode": "table", "placement": "bottom", "showLegend": true},
-                "tooltip": {"mode": "multi", "sort": "desc"}
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
               },
-              "fieldConfig": {"defaults": {"min": 0}, "overrides": []}
+              "fieldConfig": {
+                "defaults": {
+                  "min": 0
+                },
+                "overrides": []
+              }
             }
           }
         }
@@ -715,7 +735,7 @@
                       "spec": {
                         "editorMode": "code",
                         "exemplar": true,
-                        "expr": "sum by (status) (rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval])) * 60",
+                        "expr": "sum by (worker_host, status) (rate(brownrook_receipt_processed_total{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval])) * 60",
                         "instant": false,
                         "legendFormat": "",
                         "range": true
@@ -783,9 +803,9 @@
                       "spec": {
                         "editorMode": "code",
                         "exemplar": true,
-                        "expr": "histogram_quantile(0.50, sum by (le) (rate(brownrook_receipt_processing_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.50, sum by (worker_host, le) (rate(brownrook_receipt_processing_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))",
                         "instant": false,
-                        "legendFormat": "p50",
+                        "legendFormat": "",
                         "range": true
                       }
                     },
@@ -806,9 +826,9 @@
                       "spec": {
                         "editorMode": "code",
                         "exemplar": true,
-                        "expr": "histogram_quantile(0.95, sum by (le) (rate(brownrook_receipt_processing_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))",
+                        "expr": "histogram_quantile(0.95, sum by (worker_host, le) (rate(brownrook_receipt_processing_duration_seconds_bucket{environment=~\"${environment:regex}\",service=~\"${service:regex}\",worker_host=~\"${worker_host:regex}\",status=~\"${status:regex}\"}[$__rate_interval])))",
                         "instant": false,
-                        "legendFormat": "p95",
+                        "legendFormat": "",
                         "range": true
                       }
                     },
@@ -855,7 +875,7 @@
         "kind": "Panel",
         "spec": {
           "id": 7,
-          "title": "RabbitMQ queue depth",
+          "title": "K3s RabbitMQ queue depth",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -930,14 +950,15 @@
                 "overrides": []
               }
             }
-          }
+          },
+          "description": " Shared K3s broker (receipts vhost); execution-host selection does not switch brokers. The native m4pro broker is separate."
         }
       },
       "panel-8": {
         "kind": "Panel",
         "spec": {
           "id": 8,
-          "title": "RabbitMQ publish, consume, ACK, retry and DLQ activity",
+          "title": "K3s RabbitMQ publish, consume, ACK, retry and DLQ activity",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -1052,14 +1073,15 @@
                 "overrides": []
               }
             }
-          }
+          },
+          "description": " Shared K3s broker (receipts vhost); execution-host selection does not switch brokers. The native m4pro broker is separate."
         }
       },
       "panel-9": {
         "kind": "Panel",
         "spec": {
           "id": 9,
-          "title": "Oldest RabbitMQ message age",
+          "title": "K3s Oldest RabbitMQ message age",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -1111,6 +1133,150 @@
                   "unit": "s",
                   "min": 0
                 },
+                "overrides": []
+              }
+            }
+          },
+          "description": " Shared K3s broker (receipts vhost); execution-host selection does not switch brokers. The native m4pro broker is separate."
+        }
+      },
+      "panel-12": {
+        "kind": "Panel",
+        "spec": {
+          "id": 12,
+          "title": "Receipt processing overlap by worker",
+          "description": "One row per worker and receipt. Processing signals refresh every 15 seconds and expire after 30 seconds. Overlapping coloured intervals show concurrent receipt processing. Receipt identities remain in logs, not Prometheus labels. Completed, failed and retried attempts emit an idle state; abrupt worker shutdown leaves at most a 30-second tail. Historical logs before this signal was added are excluded. Attempt IDs distinguish retries, and the same heartbeat is recorded in PostgreSQL for the combined SQL report.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "last_over_time({namespace=\"home-budget\", environment=~\"${environment:regex}\", node=~\"${worker_host:regex}\", app=~\"receipt-worker|receipt-processor\"} |= \"receipt_processing_state\" | json | event=\"receipt_processing_state\" | attempt_id!=\"\" | keep worker_id,receipt_name,attempt_id,processing_state | unwrap processing_state | __error__=\"\" [30s])",
+                        "queryType": "range",
+                        "legendFormat": ""
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "state-timeline",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "mergeValues": true,
+                "showValue": "never",
+                "rowHeight": 0.8,
+                "legend": {
+                  "showLegend": false
+                },
+                "tooltip": {
+                  "mode": "single"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "displayName": "${__field.labels.worker_id} \u2014 ${__field.labels.receipt_name} (${__field.labels.attempt_id})",
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "mappings": [
+                    {
+                      "type": "value",
+                      "options": {
+                        "0": {
+                          "text": "Idle",
+                          "color": "transparent"
+                        },
+                        "1": {
+                          "text": "Processing"
+                        }
+                      }
+                    }
+                  ],
+                  "custom": {
+                    "lineWidth": 0,
+                    "fillOpacity": 80,
+                    "spanNulls": false
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-13": {
+        "kind": "Panel",
+        "spec": {
+          "id": 13,
+          "title": "Receipt worker and processor logs",
+          "description": "Receipt processing logs from local workers and K3s processors. Replaces the standalone receipt processor dashboard.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "{namespace=\"home-budget\", environment=~\"${environment:regex}\", node=~\"${worker_host:regex}\", app=~\"receipt-worker|receipt-processor\"}",
+                        "queryType": "range"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "showLabels": false,
+                "showCommonLabels": false,
+                "wrapLogMessage": true,
+                "sortOrder": "Descending",
+                "enableLogDetails": true,
+                "prettifyLogMessage": false
+              },
+              "fieldConfig": {
+                "defaults": {},
                 "overrides": []
               }
             }
@@ -1264,6 +1430,32 @@
                 "name": "panel-11"
               }
             }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 36,
+              "width": 24,
+              "height": 12,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-12"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 48,
+              "width": 24,
+              "height": 12,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-13"
+              }
+            }
           }
         ]
       }
@@ -1280,6 +1472,30 @@
         "targetBlank": false,
         "includeVars": false,
         "keepTime": false
+      },
+      {
+        "title": "m4pro \u2014 local",
+        "type": "link",
+        "icon": "",
+        "tooltip": "Show receipt processing on m4pro",
+        "url": "/d/{{ monitoring_grafana_receipt_dashboard_uid }}?var-worker_host=m4pro&var-environment=%24__all",
+        "tags": [],
+        "asDropdown": false,
+        "targetBlank": false,
+        "includeVars": false,
+        "keepTime": true
+      },
+      {
+        "title": "Arsene \u2014 K3s",
+        "type": "link",
+        "icon": "",
+        "tooltip": "Show receipt processing on arsene",
+        "url": "/d/{{ monitoring_grafana_receipt_dashboard_uid }}?var-worker_host=arsene&var-environment=%24__all",
+        "tags": [],
+        "asDropdown": false,
+        "targetBlank": false,
+        "includeVars": false,
+        "keepTime": true
       }
     ],
     "liveNow": false,
@@ -1395,13 +1611,13 @@
           "name": "worker_host",
           "current": {
             "text": [
-              "All"
+              "m4pro"
             ],
             "value": [
-              "$__all"
+              "m4pro"
             ]
           },
-          "label": "Worker host",
+          "label": "Execution host",
           "hide": "dontHide",
           "refresh": "onDashboardLoad",
           "skipUrlSync": false,

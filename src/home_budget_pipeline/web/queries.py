@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+import math
+import uuid
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from home_budget_pipeline.categorization.logic import normalize_for_match
+from ..product_labels import product_name
 
 
 EXPENSE_SORT_COLUMNS = {
@@ -19,6 +23,31 @@ EXPENSE_SORT_COLUMNS = {
     "extraction_status": "extraction_status",
     "requires_review": "requires_review",
 }
+
+
+class RecommendationConflict(ValueError):
+    """The user must reload before changing a newer receipt item or decision."""
+
+
+def recommendation_candidate(payload: dict) -> dict:
+    """Only a saved recommended product-page candidate can be accepted."""
+    decision = payload.get('decision') or {}
+    if decision.get('disposition') != 'recommended' or payload.get('blocking_errors'):
+        raise ValueError('This collaboration requires review and cannot be accepted')
+    candidate = next((c for c in payload.get('search_results', [])
+                      if c.get('id') == decision.get('candidate_id')), None)
+    if not candidate or not (candidate.get('evidence') or {}).get('product_page'):
+        raise ValueError('Recommendation has no recorded product-page evidence')
+    title, url = candidate.get('title'), candidate.get('url')
+    parsed = urlparse(url or '')
+    if not isinstance(title, str) or not title.strip() or parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        raise ValueError('Recommendation has an invalid product title or URL')
+    if title != decision.get('candidate_title') or url != decision.get('candidate_url'):
+        raise ValueError('Recommendation does not match its recorded candidate')
+    confidence = decision.get('confidence')
+    if not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
+        raise ValueError('Recommendation has an invalid evidence score')
+    return candidate
 
 
 @dataclass(frozen=True)
@@ -214,6 +243,169 @@ class LedgerQueryService:
                 audit_id = audit["id"] if isinstance(audit, dict) else audit[0]
             conn.commit()
             return {"expense_item_id": expense_item_id, "product_description": description, "product_url": product_url, "audit_id": audit_id}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def accept_product_recommendation(self, source_sha256: str, expense_item_id: int,
+                                     collaboration_id: int, *, expected_description: Optional[str],
+                                     expected_url: Optional[str], actor_user: str,
+                                     actor_email: Optional[str] = None) -> dict[str, Any]:
+        """Apply one saved candidate atomically, with correction audit and lineage."""
+        from psycopg.types.json import Jsonb
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT i.id,i.product_description, i.product_url, i.item_name,
+                    i.budget_category,i.category_source,i.category_rationale,e.source,e.store_name,r.source_reference
+                    FROM budget.expense_items i JOIN budget.expenses e ON e.id=i.expense_pk
+                    JOIN ingest.receipts r ON r.source_sha256=%s
+                    WHERE i.id=%s AND EXISTS (SELECT 1 FROM budget.receipt_evidence e
+                        WHERE e.source_sha256=r.source_sha256 AND e.expense_pk=i.expense_pk)
+                    FOR UPDATE OF i""", (source_sha256, expense_item_id))
+                item = cur.fetchone()
+                if item is None:
+                    raise LookupError('Receipt item not found')
+                cur.execute("""SELECT id, run_uuid, payload FROM enrichment.receipt_collaborations
+                    WHERE expense_item_id=%s ORDER BY completed_at DESC,id DESC LIMIT 1 FOR UPDATE""",
+                    (expense_item_id,))
+                collaboration = cur.fetchone()
+                if not collaboration or collaboration['id'] != collaboration_id:
+                    raise RecommendationConflict('Recommendation changed; reload the receipt')
+                candidate = recommendation_candidate(collaboration['payload'])
+                description = product_name(candidate['title'], candidate['url'])
+                cur.execute("""SELECT payload FROM lineage.receipt_events WHERE source_sha256=%s
+                    AND payload->>'event'='product_recommendation_accepted'
+                    AND payload->>'collaboration_id'=%s ORDER BY occurred_at DESC,id DESC LIMIT 1""",
+                    (source_sha256, str(collaboration_id)))
+                previous = cur.fetchone()
+                if previous:
+                    if item['product_url'] != candidate['url'] or item['product_description'] not in {candidate['title'], description}:
+                        raise RecommendationConflict('Item changed after acceptance; reload and review it')
+                    conn.commit()
+                    return {'expense_item_id': expense_item_id, 'audit_id': previous['payload']['audit_id'],
+                            'product_description': item['product_description'], 'product_url': candidate['url'],
+                            'already_accepted': True}
+                if (item['product_description'], item['product_url']) != (expected_description, expected_url):
+                    raise RecommendationConflict('Item description changed; reload the receipt')
+                cur.execute("""UPDATE budget.expense_items SET product_description=%s,product_url=%s,
+                    updated_at=NOW() WHERE id=%s""", (description, candidate['url'], expense_item_id))
+                from .product_categories import apply_category
+                category_change = apply_category(cur, item, description)
+                cur.execute("""INSERT INTO budget.expense_item_description_audit
+                    (expense_item_id,actor_user,actor_email,old_description,new_description,old_url,new_url)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                    (expense_item_id, actor_user, actor_email, item['product_description'], description,
+                     item['product_url'], candidate['url']))
+                audit_id = cur.fetchone()['id']
+                query = candidate.get('query') or candidate.get('search_query') or ''
+                confidence = collaboration['payload']['decision']['confidence']
+                cur.execute("""INSERT INTO budget.product_enrichment_results
+                    (expense_item_id,provider,search_query,candidate_title,candidate_url,confidence,status)
+                    VALUES (%s,'collaboration-review',%s,%s,%s,%s,'accepted')
+                    ON CONFLICT (expense_item_id) DO UPDATE SET provider=EXCLUDED.provider,
+                    search_query=EXCLUDED.search_query,candidate_title=EXCLUDED.candidate_title,
+                    candidate_url=EXCLUDED.candidate_url,confidence=EXCLUDED.confidence,
+                    status='accepted',searched_at=NOW()""",
+                    (expense_item_id, query, candidate['title'], candidate['url'], confidence))
+                from ..product_enrichment import normalized_cache_item_name, retailer_domain
+                domain = retailer_domain(item['store_name'])
+                if domain:
+                    cur.execute('''INSERT INTO enrichment.product_cache
+                        (merchant_key,receipt_text_norm,product_description,product_url,provider,search_query,confidence,status)
+                        VALUES (%s,%s,%s,%s,'collaboration-review',%s,%s,'accepted')
+                        ON CONFLICT (merchant_key,receipt_text_norm) DO UPDATE SET
+                        product_description=EXCLUDED.product_description,product_url=EXCLUDED.product_url,
+                        provider=EXCLUDED.provider,search_query=EXCLUDED.search_query,
+                        confidence=EXCLUDED.confidence,status='accepted',last_used_at=NOW(),
+                        use_count=enrichment.product_cache.use_count+1''', (domain, normalized_cache_item_name(item['item_name']), description, candidate['url'], query, confidence))
+                event = {'event': 'product_recommendation_accepted', 'collaboration_id': collaboration_id,
+                         'run_uuid': str(collaboration['run_uuid']), 'item_id': expense_item_id,
+                         'audit_id': audit_id, 'actor_user': actor_user, 'actor_email': actor_email,
+                         'candidate_id': candidate['id'], 'product_description': description,
+                         'product_url': candidate['url'], 'confidence': confidence,
+                         'category_change': category_change}
+                cur.execute("""INSERT INTO lineage.receipt_events
+                    (id,source_sha256,source_reference,payload) VALUES (%s,%s,%s,%s)""",
+                    (uuid.uuid4(), source_sha256, item['source_reference'], Jsonb(event)))
+            conn.commit()
+            return {'expense_item_id': expense_item_id, 'product_description': description,
+                    'product_url': candidate['url'], 'audit_id': audit_id, 'already_accepted': False}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def refresh_receipt_items(self, source_sha256: str, *, actor_user: str,
+                              actor_email: Optional[str] = None) -> dict[str, int]:
+        """Apply accepted exact cache matches and deterministic categories on one receipt."""
+        from psycopg.types.json import Jsonb
+        from ..product_enrichment import retailer_domain, normalized_cache_item_name, candidate_evidence
+        from .product_categories import apply_category
+        conn = self._connect()
+        stats = {'products_applied': 0, 'categories_applied': 0, 'products_pending': 0}
+        try:
+            with conn.cursor() as cur:
+                cur.execute('SELECT source_reference FROM ingest.receipts WHERE source_sha256=%s', (source_sha256,))
+                receipt = cur.fetchone()
+                if receipt is None:
+                    raise LookupError('Receipt not found')
+                cur.execute('''SELECT i.*,e.source,e.store_name FROM budget.expense_items i
+                    JOIN budget.expenses e ON e.id=i.expense_pk WHERE EXISTS
+                    (SELECT 1 FROM budget.receipt_evidence re WHERE re.expense_pk=i.expense_pk
+                        AND re.source_sha256=%s) ORDER BY i.id FOR UPDATE OF i''', (source_sha256,))
+                items = cur.fetchall()
+                for item in items:
+                    product_change = None
+                    description = item.get('product_description') or ''
+                    domain = retailer_domain(item['store_name'])
+                    # A saved per-item review takes precedence over an inherited cache match.
+                    if not description and not item.get('product_url') and domain:
+                        cur.execute('SELECT 1 FROM enrichment.receipt_collaborations WHERE expense_item_id=%s LIMIT 1', (item['id'],))
+                        reviewed = cur.fetchone()
+                        cur.execute('''SELECT product_description,product_url,confidence,search_query
+                            FROM enrichment.product_cache WHERE merchant_key=%s AND receipt_text_norm=%s
+                            AND status='accepted' ''', (domain, normalized_cache_item_name(item['item_name'])))
+                        cached = cur.fetchone()
+                        if cached and not reviewed and cached['confidence'] is not None and float(cached['confidence']) >= .85:
+                            evidence = candidate_evidence(item['item_name'], domain, cached['product_description'], cached['product_url'])
+                            if evidence['product_page'] and evidence['confidence'] >= .85:
+                                description = product_name(cached['product_description'], cached['product_url'])
+                                cur.execute('''UPDATE budget.expense_items SET product_description=%s,
+                                    product_url=%s,updated_at=NOW() WHERE id=%s''', (description, cached['product_url'], item['id']))
+                                cur.execute('''INSERT INTO budget.expense_item_description_audit
+                                    (expense_item_id,actor_user,actor_email,old_description,new_description,old_url,new_url)
+                                    VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id''',
+                                    (item['id'], actor_user, actor_email, item.get('product_description'), description,
+                                     item.get('product_url'), cached['product_url']))
+                                audit_id = cur.fetchone()['id']
+                                cur.execute('''INSERT INTO budget.product_enrichment_results
+                                    (expense_item_id,provider,search_query,candidate_title,candidate_url,confidence,status)
+                                    VALUES (%s,'accepted-cache',%s,%s,%s,%s,'accepted')
+                                    ON CONFLICT (expense_item_id) DO UPDATE SET provider=EXCLUDED.provider,
+                                    search_query=EXCLUDED.search_query,candidate_title=EXCLUDED.candidate_title,
+                                    candidate_url=EXCLUDED.candidate_url,confidence=EXCLUDED.confidence,
+                                    status='accepted',searched_at=NOW()''', (item['id'], cached['search_query'],
+                                    cached['product_description'], cached['product_url'], evidence['confidence']))
+                                product_change = {'description': description, 'url': cached['product_url'],
+                                                  'audit_id': audit_id, 'evidence': evidence,
+                                                  'merchant_key': domain, 'receipt_text_norm': normalized_cache_item_name(item['item_name'])}
+                                stats['products_applied'] += 1
+                    category_change = apply_category(cur, item, description)
+                    stats['categories_applied'] += int(category_change is not None)
+                    stats['products_pending'] += int(not description)
+                    if product_change or category_change:
+                        cur.execute('''INSERT INTO lineage.receipt_events
+                            (id,source_sha256,source_reference,payload) VALUES (%s,%s,%s,%s)''',
+                            (uuid.uuid4(), source_sha256, receipt['source_reference'], Jsonb({
+                                'event': 'receipt_item_refreshed', 'item_id': item['id'],
+                                'actor_user': actor_user, 'actor_email': actor_email,
+                                'product_change': product_change, 'category_change': category_change})))
+            conn.commit()
+            return stats
         except Exception:
             conn.rollback()
             raise

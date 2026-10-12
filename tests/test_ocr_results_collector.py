@@ -214,14 +214,15 @@ def test_collector_ack_follows_commit_and_retry_publish_precedes_ack(tmp_path, c
     }
 
 
-def test_ocr_worker_produces_results_without_opening_database(tmp_path, monkeypatch):
+@pytest.mark.parametrize('cache_hits', [0, 1])
+def test_ocr_worker_produces_results_without_opening_database(tmp_path, monkeypatch, cache_hits):
     source = tmp_path / "receipt.pdf"
     source.write_bytes(b"receipt")
     receipt = result_receipt(source)
     cache = tmp_path / "cache"
     cache.mkdir()
     (cache / "receipt.pdf.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(queue.backlog, "parse_scans_parallel", lambda *args, **kwargs: ([receipt], 0))
+    monkeypatch.setattr(queue.backlog, "parse_scans_parallel", lambda *args, **kwargs: ([receipt], cache_hits))
     monkeypatch.setattr(
         queue.backlog.scan,
         "_db_connect",
@@ -229,10 +230,12 @@ def test_ocr_worker_produces_results_without_opening_database(tmp_path, monkeypa
     )
     args = SimpleNamespace(receipt_root=str(tmp_path), ocr_cache=str(cache))
 
-    status, events = queue.produce_result_messages(
+    result = queue.produce_result_messages(
         ReceiptMessage(receipt.source_sha256, source.name), args,
     )
+    status, events = result
 
+    assert result.cache_hit is bool(cache_hits)
     assert status == "results_published"
     assert len(events) == 2
     assert events[0].payload["persistence_mode"] == "normal"
@@ -268,10 +271,14 @@ def test_duplicate_cache_request_reuses_locked_valid_artifact(tmp_path, monkeypa
         batch_total=1,
     )
 
-    first, _ = queue.produce_result_messages(message, args)
-    duplicate, _ = queue.produce_result_messages(message, args)
+    first_result = queue.produce_result_messages(message, args)
+    duplicate_result = queue.produce_result_messages(message, args)
     cache_path.unlink()
-    repaired, _ = queue.produce_result_messages(message, args)
+    repaired_result = queue.produce_result_messages(message, args)
+    first, _ = first_result
+    duplicate, _ = duplicate_result
+    repaired, _ = repaired_result
+    assert [result.cache_hit for result in (first_result, duplicate_result, repaired_result)] == [False, True, False]
 
     assert (first, duplicate, repaired) == (
         "cache_results_published",

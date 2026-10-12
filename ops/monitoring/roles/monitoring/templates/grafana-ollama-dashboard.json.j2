@@ -1,0 +1,1203 @@
+{
+  "apiVersion": "dashboard.grafana.app/v2",
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "arsene-ollama",
+    "annotations": {
+      "grafana.app/folder": "{{ monitoring_grafana_brown_rook_folder_uid_effective | default(monitoring_grafana_brown_rook_folder_uid) }}"
+    }
+  },
+  "spec": {
+    "annotations": [
+      {
+        "kind": "AnnotationQuery",
+        "spec": {
+          "query": {
+            "kind": "DataQuery",
+            "group": "grafana",
+            "version": "v0",
+            "datasource": {
+              "name": "-- Grafana --"
+            },
+            "spec": {}
+          },
+          "enable": true,
+          "hide": true,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "name": "Annotations & Alerts",
+          "builtIn": true,
+          "legacyOptions": {
+            "type": "dashboard"
+          }
+        }
+      }
+    ],
+    "cursorSync": "Crosshair",
+    "description": "Native Ollama service, host resources, NVIDIA GPU and journal logs. Service memory is cgroup memory including cache and child runners. CPU is cores used. GPU activity is host-wide. Loaded model bytes come from api/ps. Application token throughput is retained in Home Budget Product Model Comparison, not inferred from GPU utilization.",
+    "editable": false,
+    "elements": {
+      "panel-1": {
+        "kind": "Panel",
+        "spec": {
+          "id": 1,
+          "title": "Metric endpoint / API health",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "up{job=\"ollama-host\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Exporter",
+                        "range": false,
+                        "instant": true
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_api_up{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Ollama API",
+                        "range": false,
+                        "instant": true
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-2": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2,
+          "title": "Ollama CPU cores used",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "rate(ollama_service_cpu_seconds_total{host=\"arsene\",service=\"ollama\"}[$__rate_interval])",
+                        "editorMode": "code",
+                        "legendFormat": "Service and runners",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "cores"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-3": {
+        "kind": "Panel",
+        "spec": {
+          "id": 3,
+          "title": "Ollama service RAM and swap",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_service_memory_bytes{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Cgroup RAM including cache",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_service_swap_bytes{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Swap",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "bytes"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-4": {
+        "kind": "Panel",
+        "spec": {
+          "id": 4,
+          "title": "Host memory headroom",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_host_memory_available_bytes{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Available RAM",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_host_memory_total_bytes{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Total RAM",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "bytes"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-5": {
+        "kind": "Panel",
+        "spec": {
+          "id": 5,
+          "title": "Host CPU utilization",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "100 * (1 - sum(rate(ollama_host_cpu_seconds_total{host=\"arsene\",mode=\"idle\"}[$__rate_interval])) / sum(rate(ollama_host_cpu_seconds_total{host=\"arsene\"}[$__rate_interval])))",
+                        "editorMode": "code",
+                        "legendFormat": "Busy CPU",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "percent"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-6": {
+        "kind": "Panel",
+        "spec": {
+          "id": 6,
+          "title": "Host swap used",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_host_memory_swap_total_bytes{host=\"arsene\",service=\"ollama\"} - ollama_host_memory_swap_free_bytes{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Used swap",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "bytes"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-7": {
+        "kind": "Panel",
+        "spec": {
+          "id": 7,
+          "title": "GPU utilization \u2014 all host workloads",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_gpu_util_percent{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "GPU {% raw %}{{gpu_index}}{% endraw %}",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "percent"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-8": {
+        "kind": "Panel",
+        "spec": {
+          "id": 8,
+          "title": "GPU memory \u2014 all host workloads",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_gpu_memory_bytes{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Used",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_gpu_memory_total_bytes{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Total",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "bytes"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-9": {
+        "kind": "Panel",
+        "spec": {
+          "id": 9,
+          "title": "GPU power and temperature",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_gpu_power_watts{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Power (W)",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_gpu_temperature_c{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Temperature (C)",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "watt"
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Temperature (C)"
+                    },
+                    "properties": [
+                      {
+                        "id": "unit",
+                        "value": "celsius"
+                      },
+                      {
+                        "id": "custom.axisPlacement",
+                        "value": "right"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-10": {
+        "kind": "Panel",
+        "spec": {
+          "id": 10,
+          "title": "Loaded model allocation",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_model_size{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "{% raw %}{{model}}{% endraw %} total",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_model_size_vram{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "{% raw %}{{model}}{% endraw %} GPU",
+                        "range": true,
+                        "instant": false
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "legend": {
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "desc"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "bytes"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-11": {
+        "kind": "Panel",
+        "spec": {
+          "id": 11,
+          "title": "Collector health",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_service_collector_success{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Cgroup",
+                        "range": false,
+                        "instant": true
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "B",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_gpu_collector_success{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "GPU",
+                        "range": false,
+                        "instant": true
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "C",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "ollama_host_collector_success{host=\"arsene\",service=\"ollama\"}",
+                        "editorMode": "code",
+                        "legendFormat": "Host",
+                        "range": false,
+                        "instant": true
+                      }
+                    }
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "area",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short"
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "Managed Ollama service metrics. GPU measurements include all host workloads."
+        }
+      },
+      "panel-12": {
+        "kind": "Panel",
+        "spec": {
+          "id": 12,
+          "title": "Managed Ollama server logs",
+          "description": "Startup, loads, offload, API timings and failures. Prompts and responses are not logged.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "refId": "A",
+                    "hidden": false,
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "{host=\"arsene\",service=\"ollama\",collection=\"host-journal\"}",
+                        "queryType": "range",
+                        "editorMode": "code",
+                        "maxLines": 1000
+                      }
+                    }
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "showLabels": false,
+                "showCommonLabels": false,
+                "wrapLogMessage": true,
+                "sortOrder": "Descending",
+                "enableLogDetails": true,
+                "prettifyLogMessage": false
+              },
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              }
+            }
+          }
+        }
+      }
+    },
+    "layout": {
+      "kind": "GridLayout",
+      "spec": {
+        "items": [
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-1"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-2"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 8,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-3"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 12,
+              "y": 8,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-4"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 16,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-5"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 12,
+              "y": 16,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-6"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 24,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-7"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 12,
+              "y": 24,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-8"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 32,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-9"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 12,
+              "y": 32,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-10"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 40,
+              "width": 12,
+              "height": 8,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-11"
+              }
+            }
+          },
+          {
+            "kind": "GridLayoutItem",
+            "spec": {
+              "x": 0,
+              "y": 48,
+              "width": 24,
+              "height": 12,
+              "element": {
+                "kind": "ElementReference",
+                "name": "panel-12"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "links": [
+      {
+        "title": "Home Budget model comparisons",
+        "url": "/d/home-budget-enrichment-comparison",
+        "type": "link",
+        "icon": "",
+        "tooltip": "Compare application inference quality and timings",
+        "tags": [],
+        "asDropdown": false,
+        "targetBlank": false,
+        "includeVars": false,
+        "keepTime": true
+      }
+    ],
+    "liveNow": false,
+    "preload": false,
+    "tags": [
+      "arsene",
+      "ollama",
+      "infrastructure"
+    ],
+    "timeSettings": {
+      "timezone": "browser",
+      "from": "now-1h",
+      "to": "now",
+      "autoRefresh": "15s",
+      "autoRefreshIntervals": [
+        "5s",
+        "10s",
+        "30s",
+        "1m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "1d"
+      ],
+      "hideTimepicker": false,
+      "fiscalYearStartMonth": 0
+    },
+    "title": "Arsene Ollama",
+    "variables": []
+  }
+}

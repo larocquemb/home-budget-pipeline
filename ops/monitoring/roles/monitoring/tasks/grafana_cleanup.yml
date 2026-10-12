@@ -1,0 +1,39 @@
+---
+- name: Read retained receipt dashboard placement
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/apis/dashboard.grafana.app/v2/namespaces/{{ monitoring_grafana_api_namespace }}/dashboards/{{ monitoring_grafana_receipt_dashboard_uid }}"
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_cleanup_receipt
+  check_mode: false
+  no_log: true
+
+- name: Preserve receipt dashboard folder during consolidation
+  ansible.builtin.set_fact:
+    monitoring_grafana_home_budget_folder_uid_effective: "{{ monitoring_grafana_cleanup_receipt.json.metadata.annotations['grafana.app/folder'] }}"
+    monitoring_grafana_demos_folder_uid_effective: "{{ monitoring_grafana_demos_folder_uid }}"
+
+- name: Consolidate audited Grafana dashboards
+  grafana_consolidate:
+    url: "{{ monitoring_grafana_url }}"
+    username: "{{ monitoring_grafana_admin_user }}"
+    password: "{{ monitoring_grafana_admin_password }}"
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    namespace: "{{ monitoring_grafana_api_namespace }}"
+    prometheus_provisioning: "{{ monitoring_grafana_prometheus_provisioning_path }}"
+    telemetry: "{{ lookup('ansible.builtin.template', 'grafana-receipt-telemetry-dashboard.json.j2') | from_json }}"
+    demos_uid: "{{ monitoring_grafana_demos_folder_uid_effective }}"
+    dashboards:
+      - "{{ lookup('ansible.builtin.template', 'grafana-ocr-performance-dashboard.json.j2') | from_json }}"
+      - "{{ lookup('ansible.builtin.template', 'grafana-product-comparison-dashboard.json.j2') | from_json }}"
+      - "{{ lookup('ansible.builtin.template', 'grafana-public-live-demo-dashboard.json.j2') | from_json }}"
+  register: monitoring_grafana_cleanup_result
+
+- name: Report Grafana consolidation actions
+  ansible.builtin.debug:
+    var: monitoring_grafana_cleanup_result.actions

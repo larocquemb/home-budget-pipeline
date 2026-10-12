@@ -150,6 +150,7 @@ sobeys_receipt_items_categorized.xlsx
 .dev-certs/
 .local-logging/
 .local-postgres/
+.local-services/
 .monitoring/
 .observability-validation.*/
 .ocr_cache/
@@ -161,3 +162,6 @@ k8s/*-secret.yaml
 k8s/secret.yaml
 *.kubeconfig
 .env.monitoring
+
+# Private receipt model outputs and comparison reports.
+.model-evals/

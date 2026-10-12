@@ -33,7 +33,7 @@ jobs:
           python -m pip install -e ".[dev,db,ops]"
 
       - name: Run unit tests
-        run: python -m pytest -v -m "not integration"
+        run: python -m pytest -v -m "not integration" --durations=10
 
       - name: Validate monitoring automation
         run: make monitoring-gitops-syntax ollama-gitops-syntax

@@ -7,7 +7,7 @@ import uuid
 LOG = logging.getLogger(__name__)
 
 
-def record(message, status, *, attempt_id=None, error_type=None, queue=None, result_runs=()):
+def record(message, status, *, attempt_id=None, error_type=None, queue=None, result_runs=(), cache_hit=None):
     if message is None or not os.getenv('DATABASE_URL'):
         return
     payload = {'message_id': message.message_id, 'request_id': message.request_id,
@@ -16,6 +16,8 @@ def record(message, status, *, attempt_id=None, error_type=None, queue=None, res
                'status': status, 'worker_host': socket.gethostname(),
                'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME'),
                'error_type': error_type, 'queue': queue, 'result_runs': list(result_runs)}
+    if cache_hit is not None:
+        payload['cache_hit'] = cache_hit
     try:
         import psycopg
         from psycopg.types.json import Jsonb

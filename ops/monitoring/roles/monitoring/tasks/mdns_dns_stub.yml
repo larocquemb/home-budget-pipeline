@@ -1,0 +1,76 @@
+---
+- name: Require existing LAN DNS upstreams
+  ansible.builtin.assert:
+    that:
+      - monitoring_mdns_upstream_dns | length > 0
+    fail_msg: Set monitoring_mdns_upstream_dns to the existing LAN DNS server addresses.
+
+- name: Preserve Proxmox-managed host DNS configuration
+  ansible.builtin.slurp:
+    src: /etc/resolv.conf
+  register: monitoring_mdns_original_resolv
+
+- name: Install the multicast-aware DNS stub
+  ansible.builtin.apt:
+    name: systemd-resolved
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    policy_rc_d: 101
+
+# Debian's package can replace resolv.conf during installation. Keep the host
+# configuration; only Grafana will see the stub through its mount namespace.
+- name: Restore host DNS after resolver package installation
+  ansible.builtin.copy:
+    content: "{{ monitoring_mdns_original_resolv.content | b64decode }}"
+    dest: /etc/resolv.conf
+    follow: false
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create resolver drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure LAN DNS and multicast resolution
+  ansible.builtin.template:
+    src: resolved-mdns.conf.j2
+    dest: /etc/systemd/resolved.conf.d/home-budget-mdns.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart multicast DNS stub
+
+- name: Start the DNS stub across reboots
+  ansible.builtin.systemd_service:
+    name: systemd-resolved
+    enabled: true
+    state: started
+
+- name: Create Grafana resolver override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/grafana-server.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Use the multicast-aware DNS stub inside Grafana
+  ansible.builtin.copy:
+    content: |
+      # Managed by ops/monitoring/site.yml.
+      [Unit]
+      Requires=systemd-resolved.service
+      After=systemd-resolved.service
+      [Service]
+      BindReadOnlyPaths=/run/systemd/resolve/stub-resolv.conf:/etc/resolv.conf
+    dest: /etc/systemd/system/grafana-server.service.d/home-budget-mdns.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart Grafana

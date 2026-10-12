@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +18,8 @@ def test_profiles_report_missing_credentials_and_apply_token_budgets(monkeypatch
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv('COLLAB_CONTEXT_TOKENS', '16384')
     monkeypatch.setenv('COLLAB_OUTPUT_TOKENS', '4096')
+    monkeypatch.setenv('QWEN_CONTEXT_TOKENS', '')
+    monkeypatch.setenv('QWEN_OUTPUT_TOKENS', ' ')
     monkeypatch.setenv('OLLAMA_COLLAB_MODELS', 'qwen3:30b,qwen3-vl:8b,qwen3:30b')
     enabled, skipped = providers.profiles()
     assert len(enabled) == 2 and enabled[1].vision is True
@@ -34,7 +37,7 @@ def test_invalid_profiles_are_rejected_before_requests(monkeypatch, rows):
     with pytest.raises(ValueError): providers.profiles()
 
 
-def test_qwen_text_and_vision_requests_use_explicit_budgets_and_release_model(monkeypatch):
+def test_qwen_text_and_vision_requests_use_explicit_budgets_and_reuse_model(monkeypatch):
     calls = []
     monkeypatch.setattr(providers, 'post', lambda url, body, headers=None: calls.append(body) or {
         'message': {'content': json.dumps(OUTPUT)}, 'done': True, 'done_reason': 'stop',
@@ -46,7 +49,9 @@ def test_qwen_text_and_vision_requests_use_explicit_budgets_and_release_model(mo
     assert 'images' not in calls[0]['messages'][0]
     assert calls[1]['messages'][0]['images'] == ['encoded-image']
     assert calls[1]['options'] == {'temperature': 0, 'num_ctx': 16384, 'num_predict': 4096}
-    assert calls[1]['keep_alive'] == 0
+    assert calls[1]['keep_alive'] == '5m'
+    assert json.dumps(PROPOSAL_SCHEMA, separators=(',', ':')) in calls[0]['messages'][0]['content']
+    assert calls[0]['format'] == PROPOSAL_SCHEMA
 
 
 @pytest.mark.parametrize('provider', ['qwen', 'gemini', 'anthropic'])
@@ -102,3 +107,77 @@ def test_openai_images_schema_and_budget_are_sent_together(monkeypatch):
     assert result['output'] == OUTPUT
     assert calls[0]['max_output_tokens'] == 4096 and calls[0]['store'] is False
     assert calls[0]['input'][0]['content'][-1]['image_url'].startswith('data:image/png;base64,')
+
+
+@pytest.mark.parametrize('content', ['', '{"reading": "unfinished', 'START' + '繰り返し' * 1000 + 'END'])
+def test_qwen_truncation_diagnostics_are_bounded_and_keep_usage(monkeypatch, content):
+    thinking = 'private reasoning' * 500
+    monkeypatch.setattr(providers, 'post', lambda *args: {
+        'done': True, 'done_reason': 'length', 'message': {'content': content, 'thinking': thinking},
+        'prompt_eval_count': 623, 'eval_count': 2048, 'eval_duration': 2_000_000_000,
+        'total_duration': 3_000_000_000, 'unexpected': 'must not be retained'})
+    with pytest.raises(providers.IncompleteModelOutput) as error:
+        providers.request(providers.Profile('qwen', 'qwen', 'test'), 'request must not be retained', PROPOSAL_SCHEMA, IMAGES)
+    usage = error.value.usage
+    sample = usage['incomplete_output']
+    assert sample['content_chars'] == len(content) and sample['thinking_chars'] == len(thinking)
+    assert len(sample['content_head']) + len(sample['content_tail']) <= 1024
+    expected_head = content[:768] if len(content) > 1024 else content
+    assert sample['content_head'] == expected_head
+    assert sample['omitted_content_chars'] == max(0, len(content) - 1024)
+    if len(content) > 1024: assert sample['content_tail'].endswith('END')
+    assert usage['input_tokens'] == 623 and usage['output_tokens'] == 2048
+    assert usage['ollama_eval_seconds'] == 2 and usage['ollama_total_seconds'] == 3
+    assert 'private reasoning' not in json.dumps(usage)
+    assert 'must not be retained' not in json.dumps(usage)
+    assert 'encoded-image' not in json.dumps(usage)
+
+
+@pytest.mark.parametrize('message', [None, {}, {'content': None}, {'content': [], 'thinking': {}}])
+def test_missing_or_invalid_response_fields_do_not_mask_truncation(message):
+    sample = providers.incomplete_ollama_output(message)
+    assert sample['content_chars'] is None and sample['thinking_chars'] is None
+    assert sample['content_head'] is None and sample['omitted_content_chars'] is None
+
+
+def test_qwen_defaults_leave_room_for_reasoning_without_increasing_paid_budget(monkeypatch):
+    for key in ('RECEIPT_MODEL_PROFILES', 'COLLAB_CONTEXT_TOKENS', 'COLLAB_OUTPUT_TOKENS',
+                'QWEN_CONTEXT_TOKENS', 'QWEN_OUTPUT_TOKENS'):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    enabled, _ = providers.profiles()
+    qwen = next(p for p in enabled if p.provider == 'qwen')
+    openai = next(p for p in enabled if p.provider == 'openai')
+    assert (qwen.context_tokens, qwen.output_tokens) == (32768, 8192)
+    assert (openai.context_tokens, openai.output_tokens) == (16384, 2048)
+    monkeypatch.setenv('QWEN_OUTPUT_TOKENS', '16384')
+    enabled, _ = providers.profiles()
+    assert next(p for p in enabled if p.provider == 'qwen').output_tokens == 16384
+    assert next(p for p in enabled if p.provider == 'openai').output_tokens == 2048
+
+
+def test_production_configmap_preserves_qwen_budget_over_shared_defaults(monkeypatch):
+    import yaml
+    for key in ('RECEIPT_MODEL_PROFILES', 'COLLAB_CONTEXT_TOKENS', 'COLLAB_OUTPUT_TOKENS',
+                'QWEN_CONTEXT_TOKENS', 'QWEN_OUTPUT_TOKENS'):
+        monkeypatch.delenv(key, raising=False)
+    config = yaml.safe_load((Path(__file__).resolve().parents[1] / 'k8s/receipt-model-profiles.yaml').read_text())
+    for key, value in config['data'].items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    enabled, _ = providers.profiles()
+    qwen = next(p for p in enabled if p.provider == 'qwen')
+    openai = next(p for p in enabled if p.provider == 'openai')
+    assert (qwen.context_tokens, qwen.output_tokens) == (32768, 8192)
+    assert (openai.context_tokens, openai.output_tokens) == (16384, 2048)
+    assert qwen.model == 'qwen3-vl-receipts:30b-instruct'
+
+
+def test_prefix_task_uses_bounded_exploration_sampling(monkeypatch):
+    bodies = []
+    monkeypatch.setattr(providers, 'post', lambda url, body, headers=None: bodies.append(body) or {
+        'message': {'content': '{"queries":["picante medium"]}'}, 'done': True, 'done_reason': 'stop'})
+    providers.request(providers.Profile('qwen', 'qwen', 'local', 32768, 8192), 'expand prefixes',
+        {'type': 'object', 'properties': {'queries': {'type': 'array'}}}, [])
+    assert bodies[0]['options'] == {'temperature': .7, 'top_p': .8, 'top_k': 20, 'seed': 42,
+        'num_ctx': 32768, 'num_predict': 8192}

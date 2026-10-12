@@ -1,0 +1,81 @@
+---
+- name: List Grafana datasource metadata
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/api/datasources"
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_audit_sources
+  no_log: true
+
+- name: List Grafana dashboards for comparison
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/api/search?type=dash-db&limit=1000"
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_grafana_audit_search
+  no_log: true
+
+- name: Require a complete dashboard inventory
+  ansible.builtin.assert:
+    that:
+      - monitoring_grafana_audit_search.json | length < 1000
+    fail_msg: Inventory requires pagination before cleanup can proceed.
+
+- name: Export dashboard definitions
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/api/dashboards/uid/{{ item.uid }}"
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  loop: "{{ monitoring_grafana_audit_search.json }}"
+  loop_control:
+    label: "{{ item.uid }}"
+  register: monitoring_grafana_audit_dashboards
+  no_log: true
+
+- name: Keep datasource credentials out of the audit
+  ansible.builtin.set_fact:
+    monitoring_grafana_audit_public_sources: >-
+      {{ monitoring_grafana_audit_public_sources | default([]) + [
+      {'uid': item.uid, 'name': item.name, 'type': item.type,
+       'url': item.url, 'isDefault': item.isDefault}] }}
+  loop: "{{ monitoring_grafana_audit_sources.json }}"
+  no_log: true
+
+- name: Create private local audit directory
+  ansible.builtin.file:
+    path: "{{ monitoring_repo_root }}/.local-services/grafana-cleanup"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+- name: Save dashboard audit for review
+  ansible.builtin.copy:
+    content: >-
+      {{ {'datasources': monitoring_grafana_audit_public_sources,
+          'dashboards': monitoring_grafana_audit_dashboards.results | map(attribute='json') | list,
+          'search': monitoring_grafana_audit_search.json} | to_nice_json }}
+    dest: "{{ monitoring_repo_root }}/.local-services/grafana-cleanup/inventory.json"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Report local audit destination
+  ansible.builtin.debug:
+    msg: "Saved dashboard definitions to .local-services/grafana-cleanup/inventory.json; Grafana was not modified."

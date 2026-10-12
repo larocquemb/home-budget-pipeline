@@ -442,3 +442,122 @@ def test_telemetry_secret_example_targets_managed_backend():
         "endpoint": "monitoring.idc.brownrook.net:4317",
         "server-name": "monitoring.idc.brownrook.net",
     }
+
+
+def test_otlp_protocol_selection_and_signal_override(monkeypatch):
+    monkeypatch.delenv('OTEL_EXPORTER_OTLP_PROTOCOL', raising=False)
+    monkeypatch.delenv('OTEL_EXPORTER_OTLP_TRACES_PROTOCOL', raising=False)
+    monkeypatch.delenv('OTEL_EXPORTER_OTLP_METRICS_PROTOCOL', raising=False)
+    assert '.grpc.' in telemetry._otlp_exporter_class('traces').__module__
+    monkeypatch.setenv('OTEL_EXPORTER_OTLP_PROTOCOL', 'http/protobuf')
+    assert '.http.' in telemetry._otlp_exporter_class('traces').__module__
+    assert '.http.' in telemetry._otlp_exporter_class('metrics').__module__
+    monkeypatch.setenv('OTEL_EXPORTER_OTLP_TRACES_PROTOCOL', 'grpc')
+    assert '.grpc.' in telemetry._otlp_exporter_class('traces').__module__
+    assert '.http.' in telemetry._otlp_exporter_class('metrics').__module__
+    monkeypatch.setenv('OTEL_EXPORTER_OTLP_METRICS_PROTOCOL', 'invalid')
+    with pytest.raises(ValueError, match='Unsupported OTLP protocol'):
+        telemetry._otlp_exporter_class('metrics')
+
+
+def test_http_telemetry_exports_both_signals_without_loading_grpc():
+    import sys
+    # A fresh interpreter represents an OCR worker and avoids global SDK state.
+    script = '''
+import os,sys,subprocess
+from unittest.mock import MagicMock
+import requests
+posts=[]
+class Session(requests.Session):
+    def request(self,method,url,**kwargs):
+        assert method.upper() == 'POST'
+        posts.append((url,kwargs['data']))
+        response=requests.Response()
+        response.status_code=200
+        response._content=b''
+        return response
+os.environ.update(HOME_BUDGET_TELEMETRY_ENABLED='true',
+    OTEL_EXPORTER_OTLP_PROTOCOL='http/protobuf',
+    OTEL_EXPORTER_OTLP_ENDPOINT='http://127.0.0.1:4318',
+    OTEL_METRIC_EXPORT_INTERVAL='60000')
+for signal in ('TRACES','METRICS'):
+    for key in ('PROTOCOL','ENDPOINT'):
+        os.environ.pop(f'OTEL_EXPORTER_OTLP_{signal}_{key}',None)
+from home_budget_pipeline import telemetry
+from opentelemetry import metrics
+# Inject the public session argument: newer exporters may choose a different
+# default HTTP transport, so patching requests.Session does not intercept it.
+exporter_class = telemetry._otlp_exporter_class
+def exporter_with_session(signal):
+    exporter = exporter_class(signal)
+    return lambda **kwargs: exporter(session=Session(), **kwargs)
+telemetry._otlp_exporter_class = exporter_with_session
+assert telemetry.configure_telemetry()
+with telemetry.span('receipt.test'):
+    subprocess.run([sys.executable,'-c','pass'],check=True)
+metrics.get_meter('test').create_counter('test.counter').add(1)
+telemetry.shutdown_telemetry()
+assert {url for url,payload in posts} == {'http://127.0.0.1:4318/v1/traces','http://127.0.0.1:4318/v1/metrics'}, posts
+assert all(isinstance(payload,bytes) and payload for url,payload in posts)
+assert 'grpc' not in sys.modules
+'''
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'FD from fork parent' not in result.stderr
+
+
+def test_foreground_output_is_forwarded_and_terminal_streams_restored(tmp_path, monkeypatch, capsys):
+    import sys
+    monkeypatch.setenv('HOME_BUDGET_LOCAL_LOG_DIR', str(tmp_path))
+    stdout, stderr = sys.stdout, sys.stderr
+    with telemetry.local_command_logging('enrichment'):
+        print('first item selected')
+        print('search progress', file=sys.stderr)
+        telemetry.LOG.info('item completed')
+    captured = capsys.readouterr()
+    assert captured.out == 'first item selected\n'
+    assert 'search progress' in captured.err
+    assert 'item completed' in captured.err
+    text = (tmp_path / 'enrichment.log').read_text()
+    assert text.count('first item selected') == 1
+    assert text.count('item completed') == 1
+    assert 'search progress' in text
+    assert sys.stdout is stdout and sys.stderr is stderr
+    assert (tmp_path / 'enrichment.log').stat().st_mode & 0o777 == 0o600
+
+
+def test_local_command_failure_is_saved_and_raised(tmp_path, monkeypatch):
+    from home_budget_pipeline import cli
+    monkeypatch.setenv('HOME_BUDGET_LOCAL_LOG_DIR', str(tmp_path))
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://unused')
+    monkeypatch.setenv('BRAVE_SEARCH_API_KEY', 'test-key')
+    monkeypatch.setattr(cli.receipt_enrichment, 'resolve_item_ids', lambda *args: (1,))
+    def fail(**kwargs): raise TimeoutError('test search timeout')
+    monkeypatch.setattr(cli.receipt_enrichment, 'run', fail)
+    with pytest.raises(TimeoutError, match='test search timeout'):
+        cli.main(['receipts', 'enrich', '--receipt', '1', '--limit', '1'])
+    rows = [json.loads(line) for line in (tmp_path / 'enrichment.log').read_text().splitlines()]
+    assert any('command_started' in row['message'] for row in rows)
+    failure = next(row for row in rows if row['level'] == 'ERROR')
+    assert 'command_failed' in failure['message']
+    assert 'TimeoutError: test search timeout' in failure['exception']
+
+
+def test_local_web_wrapper_captures_output_and_preserves_failure(tmp_path):
+    root = tmp_path / 'repo'
+    (root / 'scripts').mkdir(parents=True)
+    script = root / 'scripts/run_local_web.sh'
+    script.write_text((ROOT / 'scripts/run_local_web.sh').read_text())
+    (root / '.env.dev').write_text('LEDGER_PROXY_SECRET=test\n')
+    (root / '.venv/bin').mkdir(parents=True)
+    uvicorn = root / '.venv/bin/uvicorn'
+    uvicorn.write_text('#!/bin/sh\necho "test access log"\necho "test web error" >&2\nexit 7\n')
+    uvicorn.chmod(0o700)
+    import os
+    env = os.environ.copy()
+    env.pop('HOME_BUDGET_LOCAL_LOG_DIR', None)
+    result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
+    assert result.returncode == 7
+    text = (root / '.local-services/web.log').read_text()
+    assert 'test access log' in text and 'test web error' in text
+    assert 'test access log' in result.stdout

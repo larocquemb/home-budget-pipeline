@@ -1,4 +1,47 @@
-# Compare OpenAI and Qwen product matches
+# Product comparison and receipt collaboration
+
+## Query caching and accepted items
+
+Brave raw search results are persisted in `enrichment.brave_query_cache` and reused
+across items and jobs. The key includes the exact trimmed query, endpoint/version,
+country, language and result count. API keys are never stored. Results are rescored
+against each item's original text and retailer; a cached score from another item
+is never reused as proof. Positive results expire after 90 days and empty
+results after one hour. Set `BRAVE_CACHE_DAYS=180` on the Make command to retain
+newly fetched positive responses longer (1–3650 days). Existing entries keep
+the expiry recorded when fetched; changing the setting does not rewrite history.
+Failed requests are not cached. Concurrent jobs serialize
+a shared cache miss to avoid duplicate requests.
+
+Normal enrichment and collaboration skip accepted items with complete product
+fields before applying `LIMIT`, including receipt-scoped runs. Comparison mode
+deliberately still includes accepted items to compare both models. In collaboration,
+a skipped accepted item makes no image, model or search request. Cached Brave
+results do not suppress Qwen processing for pending items.
+
+```sh
+# Process pending items using cached search evidence where available.
+make enrich-products COLLABORATE=1 LIMIT=100 RECEIPT='receipt.pdf'
+# Deliberately include accepted items and fetch fresh search evidence.
+make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf' REFRESH=1
+```
+
+`REFRESH=1` can incur fresh API calls. It retains normal review/acceptance
+requirements and deduplicates a repeated query within the job. With `COMPARE=1`,
+it refreshes search evidence without changing accepted products. The CLI equivalent
+is `ENRICHMENT_REFRESH=1`. `DRY_RUN=1` on the Make target validates the Job and
+makes no provider or cache calls; CLI runs without `--write-db` still perform
+searches and populate the query cache, but do not save product decisions.
+
+`enrichment_brave_cache` logs identify `memory_hit`, `persistent_hit`, `miss` or
+`refresh`, with original fetch time and item/run identifiers where available.
+Collaboration and comparison payloads retain cache provenance; summaries report
+`brave_api_requests` (request attempts) and `brave_cache_hits`. The graph's search
+queries retain cache status and fetch time. Reused evidence is historical evidence,
+not another independent search result. The cache table is created additively for
+existing deployments when a job starts and is included in database bootstrap.
+
+## Paired comparison
 
 Use `make enrich-products COMPARE=1` to run both models on the **same database
 receipt items**. This is product enrichment after OCR, not a comparison of OCR
@@ -212,20 +255,84 @@ make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='20260214_sobeys_363_95.pdf'
 select one mode per Job. The mode reads the latest stored OCR run for each receipt
 source, including Tesseract, Paddle and any persisted vision-engine passes. It
 retrieves probable matching lines, consensus text, line geometry, quantities,
-prices, receipt totals and arithmetic checks. It does not rerun missing OCR engines.
+prices, receipt totals and arithmetic checks. When asynchronous pass records lack
+text, it reads the current run's recorded `ocr-cache` artifact from the mounted
+cache directory. It verifies the recorded file size and SHA-256, source SHA and
+reference, run UUID, and pass identity before recovering alternate text. Sources
+retain their pass/run IDs and artifact URI/digest for audit and graph navigation.
+It does not rerun missing OCR engines or silently substitute older OCR runs.
+
+Only PVC artifacts beneath the configured cache root are supported by this
+reader. Missing, overwritten, unsupported or invalid artifacts are reported in
+`artifact_errors` and block automatic recommendations while leaving available
+text usable for review. Old runs without a recorded artifact are not guessed
+from filenames. The loader never writes recovered text back to PostgreSQL.
 
 Round one gives each available model the same retrieved text and Brave baseline.
+The baseline searches the original phrase and a bounded OCR C/O alternative.
+Additional expansions are learned at runtime from the same retailer's accepted
+`enrichment.product_cache` matches with confidence at least 0.9 and a product
+page that still scores at least 0.9 against its original receipt text. For example,
+an accepted `Oep Pic Med` → `Old El Paso Salsa Picante Medium` pair can teach the
+brand initialism and the `Pic`/`Med` prefixes for later searches. There is no
+fixed brand or abbreviation dictionary. Conflicting learned expansions are
+bounded alternatives, not votes or proof of product identity. Review, rejected,
+error, recipe, other-retailer and experimental model results cannot teach rules.
+
+Learned searches record cache IDs, original text, product titles and URLs in
+`learned_searches` in the logs and comparison/collaboration payloads. The graph
+links these prior matches to the searches they generated. The history is reread
+for each item, so accepting or revoking a cache match changes future searches
+without a code change. Candidate scores still use the current original receipt
+text; prior matches do not count as current receipt observations or independent
+model votes. On an empty accepted cache, the system uses original/OCR-alternative
+searches plus model-generated proposals; it does not invent learned mappings.
 Vision profiles also receive up to two receipt page images, verified against the
 source SHA-256 and read from the mounted receipt inbox. Text-only Qwen sees the
 OCR evidence. Models propose readings and search queries with source citations.
+
+The production collaboration profile uses `qwen3-vl-receipts:30b-instruct` so Qwen receives the
+same page images as OpenAI. Before syncing this profile, install the model on
+Arsene (set `OLLAMA_HOST` to the managed service address):
+
+```sh
+OLLAMA_HOST=http://192.168.2.201:11434 ollama pull qwen3-vl:30b-a3b-instruct-q4_K_M
+make ollama-gitops-check
+make ollama-gitops-apply
+```
+
+The host role creates `qwen3-vl-receipts:30b-instruct` from these installed weights
+with a managed ChatML template and stop tokens; it does not download or duplicate
+the weights. The installed upstream tag was observed with `{{ .Prompt }}` as
+its template. The managed alias is tested through the standard chat API with
+both text and receipt images.
+
+Large scanned PDFs up to 128 MiB are hash-verified in a stream and rendered
+without loading the entire source into a Python byte buffer. Uploaded evidence
+remains limited to two page images, each at most 2048 pixels per dimension.
+Image failures include a machine-readable reason such as `source_too_large` or
+`source_hash_mismatch`; source paths and credentials are not logged.
+
+Model prompts group duplicate readings and use compact citation metadata. Full
+artifact URIs, digests and pass provenance remain in the saved evidence bundle
+and graph instead of being repeated for every observation in the prompt. The
+character budget and request guard reserve 4096 tokens per attached image plus
+the configured output budget; these are conservative estimates, not exact model
+tokenization. Prompts request concise readings, explanations and citations.
+Logs include `prompt_bytes`, `reserved_image_tokens`, and Ollama `finish_reason`
+for incomplete outputs. A prompt-budget or truncation failure remains incomplete
+and cannot become an accepted recommendation.
 Brave searches those proposals; round two exposes every provider's proposal and
 the ranked product candidates to every reviewer. Responses cannot cite unseen
 sources or invent candidate IDs.
 
-The decision is `recommended` only when reviewers agree across at least two
-provider families, original receipt scoring reaches the threshold, a retailer
-product page and supporting OCR observation are cited, arithmetic has no detected
-failure, and relevant evidence has not been omitted by the retrieval budget.
+Collaboration tries Qwen first for discovery and review. A valid Qwen review can
+produce a `recommended` result without an OpenAI call when original receipt scoring
+reaches the threshold, a retailer product page and supporting OCR observation are
+explicitly cited, both item and receipt arithmetic pass, required images are
+available, and all relevant evidence is included without search or model errors.
+Otherwise additional configured providers review the evidence and agreement across
+at least two provider families is required; existing evidence checks still apply.
 Qwen variants count as one family. Disagreements, abstentions, errors and weak
 citations stay in `review`. Recommendations **do not overwrite** item names,
 prices, totals, accepted products or product caches. This is evidence gathering
@@ -258,10 +365,135 @@ also consume context. A conservative character check rejects oversized prompts;
 it is not an exact provider tokenizer. Inspect actual usage and truncation errors.
 Larger budgets are experiments, not guaranteed accuracy improvements.
 
+Collaboration keeps distinct retrieved OCR readings as separate
+`reading_hypotheses`, with their source IDs. It searches each reading on the
+retailer site before model proposals, reusing cached queries. For example,
+`Cep Pic Med` and `Oep Pic Med` remain separate hypotheses even when both occur
+in the same OCR pass. Repeated passes do not add independent votes. Up to eight
+distinct readings are searched; exceeding that budget records an error and keeps
+the item in review. Hypotheses and search queries are retained in the run payload,
+and hypotheses appear in `enrichment_collaboration_evidence` logs.
+
+Models are asked to explore unresolved readings and abbreviation expansions;
+there is no fixed mapping from Oep to a brand. Discovery results remain scored
+against the original item. Review selections are constrained to supplied product
+IDs or null, with local citation validation still enforced. A successful search
+or model agreement alone does not approve a product.
+
+Before the shared proposal/review rounds, each unresolved reading receives a
+separate text-only expansion call, trying configured models in order until
+discovery finds a strong retailer product match with supporting OCR. That call receives
+the target reading, its citations, the merchant and up to six ranked Brave
+results. The result list refreshes after each discovery search; titles, URLs and
+snippets are untrusted evidence, not other models' unverified brand guesses.
+When the brand is uncertain, the model is asked to search expanded product/style/size
+words without the brand rather than repeat the literal abbreviations. Partial queries are tested against retailer and OCR evidence first. Unverified
+queries retaining short receipt tokens are omitted from full expansions; Qwen
+moves to another reading while paid fallback, when enabled, may correct once. The heuristic can also reject real short product words;
+an unresolved expansion is recorded rather than accepted as a product fact.
+Expanded queries are pooled and deduplicated for Brave verification, with scores
+still calculated against the original receipt item. Only product pages can be
+selected in the final review; brand indexes and store pages remain discovery
+evidence. Calls run sequentially, so ambiguous items take more time and model
+usage when discovery remains unresolved. Brave checks expansions as they arrive;
+once a strong match is found, remaining expansions and the shared proposal round
+are skipped. Qwen reviews the pooled evidence first. Paid models are disabled by default for collaboration, including discovery and
+review. Set `PAID_FALLBACK=1` to opt into paid fallback when local recommendation
+checks are not satisfied. If literal Brave results
+already supply a supported product page, discovery model calls are skipped too.
+The decision records `review_policy.skipped_profiles` and `fallback_reasons` so
+paid-model use or omission can be inspected in logs and the graph. `enrichment_collaboration_discovery` records the
+stop reason, expansion call count and whether the proposal round was skipped.
+
+Qwen receives the JSON schema in its prompt as well as Ollama's `format` argument.
+Review schemas restrict citations to supplied source IDs and request at most six.
+If a provider still returns more than the legacy validator limit of 20 citations,
+the full list must contain only supplied IDs before it can be reduced to six,
+retaining a citation that supports the selected product. The original list and
+counts are saved under `citation_normalization` in model logs and attempt history.
+Unknown citations, mismatched product titles, and missing OCR support still fail
+validation; excess valid citations alone do not require another model call.
+Expansion reading/query strings are limited to 160 characters, reasons to 300,
+and citations to six. Partial queries containing receipt abbreviations are searched
+before requesting corrections. Only retailer product pages with the existing score
+and independent OCR support can stop discovery; a partial model guess cannot.
+If those queries do not verify, Qwen moves to the next OCR reading instead of
+spending another reasoning call on the same partial expansion. Other providers
+retain one semantic correction attempt, and a failed correction preserves the
+valid first response and both attempt records.
+Production uses the explicitly named Instruct model rather than the ambiguous
+`30b` tag. Thinking-only truncations (no answer content, nonempty thinking)
+skip the larger-budget retry and record `retry_skipped_reason`; expansion then
+opens its existing provider circuit and allows fallback discovery. Review also
+skips that unproductive retry. Other truncated responses get one concise retry. Qwen recovery requests may
+double the output budget, capped at 16384 tokens and the context ceiling.
+A retry is skipped when the budget cannot grow; the existing context and image
+budget guard still applies. Default Qwen profiles use 32768 context tokens and
+8192 output tokens, independently of OpenAI's 2048-token output default.
+Thinking and the final answer share Ollama's output budget. Override only Qwen
+with `make enrich-products COLLABORATE=1 LIMIT=1 QWEN_CONTEXT_TOKENS=32768 QWEN_OUTPUT_TOKENS=8192`.
+Shared `CONTEXT_TOKENS`/`OUTPUT_TOKENS` settings still apply to all defaults unless
+the Qwen-specific values are supplied; explicit JSON profiles retain their budgets.
+Larger contexts use more GPU memory and may cause CPU offload on the 24 GB card.
+If both attempts truncate, expansion calls stop for that Qwen profile rather than
+repeating failures across every remaining OCR reading. Other configured profiles
+can continue discovery. Qwen reviews also get one bounded truncation retry.
+Truncated Ollama responses include `incomplete_output` in the model-result log
+and saved attempt history. `content_head` and `content_tail` retain at most 1024
+response characters combined (768 from the beginning and 256 from the end for
+long responses); `content_chars` and `omitted_content_chars` describe the full
+response length without storing its middle. `thinking_chars` counts returned
+thinking text without retaining that text; null means Ollama did not return a
+string in that field and does not prove that no reasoning occurred. Request
+bodies and attached images are not copied into these diagnostics. Token usage,
+`finish_reason`, requested output budget and Ollama timing remain available for
+comparison. Inspect the sample for repetition or unfinished JSON before raising
+budgets again. Historical runs cannot recover response text that was discarded.
+Incomplete responses are never parsed as valid evidence. Persistent failures
+remain recorded, including failures later superseded by verified discovery and
+a successful review.
+Reviews require `candidate_title` to exactly match the retailer title for
+`candidate_id`; both fields must be null when abstaining. The title schema is
+restricted to supplied retailer titles, and title/ID mismatches require a fresh
+review. Unverified expansion names are retained in discovery history but are
+not repeated as product identities in the review summary.
+`product_source_id` must equal `candidate_id` (both null when abstaining); `source_ids` must cite supporting OCR evidence. The schema restricts
+both product fields to supplied candidate IDs. Missing or mismatched product
+citations or missing supporting OCR citations get one new model review. Both attempts remain recorded; citations are never inserted
+by the application. Unresolved evidence failures continue to block recommendations.
+
+An expansion `IncompleteModelOutput` can be classified as recovered only after
+verified retailer discovery, complete evidence, passing item and receipt
+arithmetic, and a valid, cited review from that same model profile. The review
+must meet the normal product-page, score, OCR-citation and title checks. Other
+search/model failures, missing evidence and failed reviews remain blocking.
+The original `errors` list is retained; `recovered_errors` and `blocking_errors`
+explain their effect on the final decision. Run `incomplete` counts use blocking
+errors, so successful recovery does not fail the Job. Logs and graph decision
+properties retain the recovered discovery failures.
+
+A model-generated quoted Brave search with no results gets one retry after
+removing phrase quotes. Every search term and the retailer site restriction remain;
+the broader query uses the original receipt item for scoring. Successful quoted
+searches are not broadened. Both queries are cached and retained, with
+`query_fallbacks` and `enrichment_collaboration_search_fallback` recording the
+reason. Search errors remain errors and do not masquerade as empty results.
+
+Inspect `enrichment_collaboration_expansion` for `target_reading`, `attempts`,
+`expansion_state`, queries and GPU usage. The payload retains expansions, and
+the knowledge graph links their proposals to observations and actual searches.
+This restores the successful August 22 interactive method: OpenAI proposed
+`Old El Paso medium picante salsa`, Brave returned the Sobeys product page,
+and the former enrichment flow accepted it. That earlier run used OpenAI;
+Qwen now participates in the same expansion process. Historical acceptance
+does not override the evidence requirements of a new collaboration run.
+
 Models on your Mac are not automatically available on Arsene. The Job never
 pulls models. Qwen profiles containing `vl` are treated as vision capable by the
 default configuration; use explicit profiles for custom model names. GPU requests
-run sequentially and unload each model after its call. The managed Ollama host
+run sequentially and keep a requested model loaded for five minutes after each
+call to reuse it across stages; Ollama manages replacement when another model
+is requested. The managed Ollama host
 limits loaded models and parallel requests to one. Apply the updated host role
 with `make ollama-gitops-check` / `make ollama-gitops-apply`. No new replica count or
 worker CPU allocation is required.
@@ -308,3 +540,111 @@ SELECT run_uuid, expense_item_id, completed_at,
 FROM enrichment.receipt_collaborations
 ORDER BY completed_at DESC;
 ```
+
+### Review and accept saved results in Ledger
+
+A completed collaboration records a recommendation, not an accepted product.
+Open its receipt in Ledger and inspect **Recommendation evidence**, the product
+URL, the search evidence and the retained OCR readings. An evidence score is a
+matching score rather than a calibrated probability. Choose **Accept
+recommendation for this item** to save the description and product URL with an
+audit event. Acceptance applies to one item; it does not automatically accept
+other identical rows. Supported category rules are applied to unresolved categories
+during acceptance, while established categories and manual overrides are retained.
+
+To repair older rows, use **Apply accepted matches and category rules** on the
+receipt page. It reuses accepted exact retailer/text cache matches, rechecks their
+product-page evidence, and fills only empty product fields without a per-item
+collaboration review. It makes no provider calls and audits each change.
+
+To gather evidence for remaining items without an accepted match, run a larger
+receipt-scoped collaboration:
+
+```sh
+make enrich-products COLLABORATE=1 LIMIT=100 RECEIPT='receipt.pdf' DRY_RUN=1
+make enrich-products COLLABORATE=1 LIMIT=100 RECEIPT='receipt.pdf'
+```
+
+Replace the filename with your receipt. `LIMIT=100` permits up to 100 items;
+`LIMIT=1` only processes one. Review and accept eligible saved recommendations
+in Ledger. The cached repair action does not generate descriptions for unknown
+products or classify every item from a grocery merchant as Groceries.
+
+If a supported reading correction was accepted, the item label leads with
+**Accepted interpretation**, for example `Oep Pic Med`. **Import history** retains
+the selected import text, such as `Cep Pic Med`. Neither value describes every
+OCR pass. **Related OCR observations** retains actual readings and provenance,
+with **row association unverified** when the observations were retrieved by text
+similarity. The imported item text, financial amount and recorded observations
+are preserved. Product labels omit shopping prompts while the full source title
+remains inspectable.
+
+Use `make receipts-graph` after a new collaboration or acceptance to refresh the
+projection, then open **View receipt knowledge graph** from the receipt. Select
+the item and run to follow evidence, expansion, search, verification and the final
+recommendation/acceptance. See the [user guide](user-guide.md#follow-the-processing-story)
+and [graph manual](receipt-knowledge-graph.md) for navigation and provenance limits.
+
+### Local-only collaboration
+
+Discovery also searches the descriptive tokens without the uncertain brand,
+then builds up to three follow-up queries from full words actually matched in
+retailer titles/URLs/snippets. For example, prefix matches can expand a style
+and size without a fixed brand or product glossary. The discovery log records
+`descriptive_queries` and `grounded_descriptive_queries`.
+
+The uncertain brand is identified from its original position before scoring
+filters short or noise tokens. Thus `ep Pic Med` still requires evidence for
+both `Pic` and `Med`; a match for `medicine` alone cannot produce a grounded
+query. Matches for `picante` and `medium` preserve both words in the query.
+
+When the combined suffix search produces no hit explaining all descriptive
+tokens, discovery tries up to three distinct individual descriptor searches.
+These broader hits still must explain every descriptor on the same result
+before supplying full words for a grounded follow-up query or guiding Qwen.
+The discovery log records these probes as `relaxed_descriptive_queries`.
+Verified product evidence skips the expansion and proposal rounds and goes
+directly to Qwen review with the receipt images and OCR.
+
+When searches still lack a verified product, one small Qwen lexical task per
+distinct descriptor suffix (at most three) generates brand-free full-word
+hypotheses. Its JSON grammar preserves each descriptor prefix and excludes
+brands, prices and extra product words. The application validates that grammar
+again before searching. Sampling uses temperature 0.7, top-p 0.8, top-k 20 and
+seed 42 for this task; final review retains temperature 0. The discovery log
+records `descriptive_expansion_calls` and `verified_descriptive_match`. These
+hypotheses remain unverified until a retailer product page passes original-item
+scoring and independent OCR support. Discovery citations are constrained to the
+IDs actually supplied in each prompt.
+
+If discovery remains unresolved, the fallback proposal prompt contains one
+citation per distinct OCR reading, rather than repeated engine observations.
+This round generates plausible full-word grocery search hypotheses without
+requiring prior search confirmation; its first query should omit the uncertain
+brand. Final review receives the full OCR evidence and still requires a verified
+retailer product page, original-item scoring and independent OCR support.
+Qwen requests keep the model loaded for five minutes after each call so adjacent
+stages can reuse it instead of paying the model load cost each time.
+
+Search hits that do not explain every descriptive receipt token are excluded
+from model discovery context, preventing brand-only hits from steering Qwen.
+Selectable review products must pass the original-item score threshold, explain
+every meaningful token, and have independent OCR support. Other hits stay
+unverified and cannot be selected merely because a brand prefix matches.
+
+```sh
+make enrich-products COLLABORATE=1 LIMIT=1
+```
+
+Production collaboration uses Qwen, receipt images/OCR and Brave without calling
+OpenAI, Anthropic or Gemini. Skipped paid profiles are recorded with
+`paid_fallback_disabled`. A local-only run requires at least one Qwen profile;
+insufficient evidence remains in review without changing the accepted product.
+Explicit opt-in restores paid discovery and review fallback:
+
+```sh
+make enrich-products COLLABORATE=1 LIMIT=1 PAID_FALLBACK=1
+```
+
+`COMPARE=1` still compares OpenAI and Qwen; this local-only policy applies to
+collaboration, not comparison or other receipt pipeline stages.

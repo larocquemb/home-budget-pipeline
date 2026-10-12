@@ -64,7 +64,9 @@ flowchart TB
     collector[OCR Results Collector]
     db[(PostgreSQL system of record)]
     enrich[Product enrichment job]
-    providers[Brave Search and optional OpenAI]
+    providers[Brave Search, local Qwen and optional paid models]
+    review[Ledger recommendation review]
+    graph[(Neo4j evidence projection)]
 
     sources --> files --> mode
     mode -->|base| cron
@@ -78,8 +80,11 @@ flowchart TB
     collector -->|validate and persist| db
     worker -->|transient retry or terminal failure| rabbit
     db -->|pending items| enrich
-    enrich -->|accepted product evidence| db
+    enrich -->|product evidence and saved collaboration| db
     enrich -->|search and optional query expansion| providers
+    db -->|saved recommendation| review
+    review -->|explicit acceptance and audit event| db
+    db -->|rebuildable evidence projection| graph
 ```
 
 The base Kubernetes deployment runs receipt discovery and processing in one
@@ -103,6 +108,22 @@ The main processing path is:
    classification only after rule-based matching fails.
 6. Present receipts, expenses, review queues, reconciliation, duplicates, and
    category reports in Ledger.
+
+Post-import product enrichment has separate modes. The original enrichment path
+can persist sufficiently strong matches automatically. Collaborative jobs pool
+retained OCR/image evidence, Qwen proposals, Brave results and model verification,
+and save a recommendation for human review. Production collaboration tries Qwen
+first and enables paid fallback only by explicit configuration. Comparison mode
+calls OpenAI and Qwen to record paired results without accepting products.
+
+Ledger acceptance updates the selected item's product description and URL in one
+PostgreSQL transaction, preserving imported item text and amounts and recording
+the actor and lineage event. Supported accepted interpretations lead the UI;
+imported text remains in collapsed history. Related OCR lines retain their source
+citations but do not establish exact item-row identity. Neo4j projects retained
+evidence and acceptance events; it does not choose or overwrite canonical products.
+See the [user guide](user-guide.md), [collaboration manual](product-model-comparison.md)
+and [graph reference](receipt-knowledge-graph.md).
 
 In queued mode, delivery is at least once. Shared-volume source locks and cache
 request markers prevent concurrent or repeated OCR for one refresh, while

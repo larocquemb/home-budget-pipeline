@@ -1,0 +1,48 @@
+{
+  "source_sha256": "7b8bf99efba7e4baf082ee4b0dfbf7c1d15b581bff03b21324e453711dbeb218",
+  "verification": "Transcribed from the single source PDF page, including negative return signs; spellings follow the printed purchase label. The small IJ/IO glyph in the printed label is ambiguous; both transcriptions are explicitly accepted.",
+  "expected": {
+    "merchant": "Michaels",
+    "transaction_date": "2026-05-31",
+    "payment_method": "Visa",
+    "subtotal": -37.98,
+    "tax": -4.56,
+    "total": -42.54,
+    "items": [
+      {
+        "line_total": -18.99,
+        "aliases": [
+          "CRCT IJ PUFF 12X1",
+          "CRCT IO PUFF 12X1"
+        ]
+      },
+      {
+        "line_total": -18.98,
+        "aliases": [
+          "CRCT IJ PUFF 12X1",
+          "CRCT IO PUFF 12X1"
+        ]
+      },
+      {
+        "line_total": -0.01,
+        "aliases": [
+          "CRCT IJ PUFF 12X1",
+          "CRCT IO PUFF 12X1"
+        ]
+      }
+    ]
+  },
+  "tax_components": {
+    "GST": -1.9,
+    "PST": -2.66
+  },
+  "unscored_fields": {
+    "categories": "No verified category labels."
+  },
+  "financial_rules": {
+    "reconcile_items_to_subtotal": true,
+    "non_monetary_patterns": [
+      "^Previous Michaels Reward Balance"
+    ]
+  }
+}

@@ -1,0 +1,94 @@
+// Native macOS logs. Filenames and receipt/run IDs stay in message content.
+local.file_match "local_receipts" {
+  path_targets = [
+    {__path__ = string.replace(sys.env("LOCAL_WORKER_LOG"), "worker.log", "worker*.log"), service = "home-budget-local-receipt-worker", app = "receipt-worker"},
+    {__path__ = sys.env("LOCAL_COLLECTOR_LOG"), service = "home-budget-local-ocr-collector", app = "ocr-results-collector"},
+    {__path__ = sys.env("LOCAL_ENRICHMENT_LOG"), service = "home-budget-local-product-enrichment", app = "product-enrichment"},
+    {__path__ = sys.env("LOCAL_PUBLISHER_LOG"), service = "home-budget-local-receipt-publisher", app = "receipt-publisher"},
+    {__path__ = sys.env("LOCAL_CLI_LOG"), service = "home-budget-local-cli", app = "ledger-cli"},
+    {__path__ = sys.env("LOCAL_WEB_LOG"), service = "home-budget-local-web", app = "ledger-web"},
+    {__path__ = sys.env("LOCAL_ALLOY_LOG"), service = "home-budget-local-alloy", app = "alloy"},
+    {__path__ = sys.env("LOCAL_PROBE_LOG"), service = "home-budget-local-telemetry-probe", app = "telemetry-probe"},
+  ]
+  sync_period = "5s"
+}
+
+loki.source.file "local_receipts" {
+  targets = local.file_match.local_receipts.targets
+  forward_to = [loki.process.local_receipts.receiver]
+}
+
+loki.process "local_receipts" {
+  stage.decolorize {}
+  stage.static_labels {
+    values = {
+      environment = "development",
+      collection = "local-file",
+      cluster = "local-macos",
+      namespace = "home-budget",
+      host = sys.env("LOCAL_TELEMETRY_HOST"),
+      node = sys.env("LOCAL_TELEMETRY_HOST"),
+    }
+  }
+  stage.replace {
+    expression = `(?i)(postgres(ql)?|amqps?)://[^\s"']+`
+    replace = "[REDACTED_CONNECTION_URL]"
+  }
+  stage.replace {
+    expression = `(?i)(api[_-]?key|token|password)\s*[=:]\s*[^\s,;]+`
+    replace = "[REDACTED_CREDENTIAL]"
+  }
+  stage.replace {
+    expression = `(?i)bearer\s+[^\s,;]+`
+    replace = "Bearer [REDACTED]"
+  }
+  forward_to = [loki.write.monitoring.receiver]
+}
+
+loki.write "monitoring" {
+  endpoint {
+    url = "https://monitoring.idc.brownrook.net:3100/loki/api/v1/push"
+    tls_config {
+      ca_file = sys.env("LOCAL_TELEMETRY_CA")
+      cert_file = sys.env("LOCAL_LOKI_CERT")
+      key_file = sys.env("LOCAL_LOKI_KEY")
+      server_name = "monitoring.idc.brownrook.net"
+      min_version = "TLS12"
+    }
+  }
+  wal { enabled = true }
+}
+
+// Applications connect only over loopback. Remote export uses verified mTLS.
+otelcol.receiver.otlp "local_receipts" {
+  grpc { endpoint = "127.0.0.1:4317" }
+  http { endpoint = "127.0.0.1:4318" }
+  output {
+    traces = [otelcol.processor.batch.local_receipts.input]
+    metrics = [otelcol.processor.batch.local_receipts.input]
+  }
+}
+
+otelcol.processor.batch "local_receipts" {
+  timeout = "1s"
+  send_batch_size = 256
+  send_batch_max_size = 512
+  output {
+    traces = [otelcol.exporter.otlp.monitoring.input]
+    metrics = [otelcol.exporter.otlp.monitoring.input]
+  }
+}
+
+otelcol.exporter.otlp "monitoring" {
+  client {
+    endpoint = "monitoring.idc.brownrook.net:4317"
+    tls {
+      ca_file = sys.env("LOCAL_TELEMETRY_CA")
+      cert_file = sys.env("LOCAL_OTLP_CERT")
+      key_file = sys.env("LOCAL_OTLP_KEY")
+      server_name = "monitoring.idc.brownrook.net"
+      min_version = "1.2"
+    }
+  }
+  sending_queue { queue_size = 2048 }
+}

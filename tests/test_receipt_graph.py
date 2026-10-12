@@ -30,6 +30,17 @@ def evidence():
             'collaborations': [{'payload': p}]}
 
 
+def test_search_queries_retain_cache_provenance_and_original_fetch_time():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    payload['brave_cache'] = [{'query': payload['search_queries'][0]['query'],
+                             'cache_status': 'persistent_hit', 'fetched_at': '2026-10-01T00:00:00+00:00',
+                             'cache_key': 'cache-key'}]
+    query = next(n for n in g.build(data)['nodes'] if n['kind'] == 'SearchQuery' and n['label'] == payload['search_queries'][0]['query'])
+    assert query['properties']['cache_status'] == 'persistent_hit'
+    assert query['properties']['fetched_at'] == '2026-10-01T00:00:00+00:00'
+
+
 def test_graph_connects_shared_evidence_without_accepting_proposals():
     graph = g.build(evidence())
     nodes = {n['id']: n for n in graph['nodes']}
@@ -43,6 +54,26 @@ def test_graph_connects_shared_evidence_without_accepting_proposals():
     ocr = next(n for n in nodes.values() if n['kind'] == 'OCRPass')
     assert ocr['properties']['seconds'] == 4
     assert g.build(evidence()) == graph
+
+
+def test_expansion_graph_keeps_each_reading_and_links_actual_search():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    source = payload['evidence_bundle']['sources'][0]['id']
+    payload['expansions'] = [{
+        'profile': 'openai', 'provider': 'openai', 'model': 'test', 'stage': 'expansion',
+        'target_reading': reading, 'status': 'success', 'input_source_ids': [source],
+        'image_count': 0, 'searched_queries': ['Old El Paso picante medium'],
+        'output': {'reading': 'Old El Paso Picante Medium', 'source_ids': [source]}}
+        for reading in ['Cep Pic Med', 'Oep Pic Med']]
+    graph = g.build(data)
+    invocations = [n for n in graph['nodes'] if n['kind'] == 'ModelInvocation' and n['properties']['stage'] == 'expansion']
+    assert len(invocations) == 2 and len({n['id'] for n in invocations}) == 2
+    assert any(e['kind'] == 'PROPOSED_SEARCH' for e in graph['edges'])
+    images = {n['id'] for n in graph['nodes'] if n['kind'] == 'ImageReference'}
+    assert not any(e['kind'] == 'RECEIVED' and e['source'] in {n['id'] for n in invocations}
+                   and e['target'] in images for e in graph['edges'])
+    assert g.build(data) == graph
 
 
 def test_run_observations_and_citations_remain_separate():
@@ -69,6 +100,20 @@ def test_reused_database_ids_do_not_merge_different_receipts():
     second['receipt']['source_sha256'] = 'b'*64
     item_ids = [next(n['id'] for n in g.build(data)['nodes'] if n['kind'] == 'Item') for data in (first,second)]
     assert item_ids[0] != item_ids[1]
+
+
+def test_learned_queries_link_prior_matches_without_becoming_current_receipt_evidence():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    query = payload['search_queries'][0]['query']
+    payload['learned_searches'] = [{'query': query, 'prior_matches': [{
+        'cache_id': 7, 'receipt_text': 'oep pic med', 'product_title': 'Old El Paso Picante Medium',
+        'product_url': 'https://sobeys.com/products/old-el-paso-medium'}]}]
+    result = g.build(data)
+    ids = {n['id'] for n in result['nodes'] if n['kind'] == 'PriorProductMatch'}
+    assert len(ids) == 1
+    assert any(e['kind'] == 'LEARNED_FROM' and e['target'] in ids for e in result['edges'])
+    assert not any(e['kind'] in {'CITES', 'SUPPORTS', 'RECEIVED'} and e['target'] in ids for e in result['edges'])
 
 
 def test_retry_requires_an_observed_retry_not_merely_multiple_runs():
@@ -120,3 +165,108 @@ def test_http_graph_routes_require_identity_and_keep_credentials_server_side(mon
         assert 'server-only-test-password' not in response.text
         assert 'Explore related receipts' in response.text
         assert client.get(web.BASE_PATH + '/api/graph/receipts/invalid', headers=headers).status_code == 422
+
+
+def test_explicit_product_citation_projects_without_mutating_review():
+    data = evidence()
+    for review in data['collaborations'][0]['payload']['reviews']:
+        review['output']['product_source_id'] = 'product:1'
+        review['output']['source_ids'].remove('product:1')
+    before = deepcopy(data)
+    graph = g.build(data)
+    nodes = {n['id']: n for n in graph['nodes']}
+    reviews = {n['id'] for n in graph['nodes'] if n['kind'] == 'ModelReview'}
+    product_links = [e for e in graph['edges'] if e['kind'] == 'CITES' and e['source'] in reviews
+                     and nodes[e['target']]['kind'] == 'SearchResult']
+    assert len(product_links) == 2
+    assert data == before
+
+
+def test_graph_review_label_uses_verified_retailer_title_and_retains_recovery_audit():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    title = payload['search_results'][0]['title']
+    payload['decision']['recovered_discovery_errors'] = [{'profile': 'qwen', 'stage': 'expansion', 'error_type': 'IncompleteModelOutput'}]
+    for review in payload['reviews']:
+        review['output'].update(candidate_title=title, reason='Unverified different brand hypothesis')
+    graph = g.build(data)
+    assert all(n['label'] == title for n in graph['nodes'] if n['kind'] == 'ModelReview')
+    decision = next(n for n in graph['nodes'] if n['kind'] == 'Decision')
+    assert json.loads(decision['properties']['recovered_discovery_errors']) == payload['decision']['recovered_discovery_errors']
+
+
+def test_descriptor_proposal_tracks_derivation_search_and_review():
+    data = evidence()
+    payload = data['collaborations'][0]['payload']
+    source = payload['evidence_bundle']['sources'][0]['id']
+    payload['descriptor_expansions'] = [{
+        'profile': 'qwen', 'provider': 'qwen', 'model': 'managed-vl', 'stage': 'descriptive_expansion',
+        'descriptive_tokens': ['pic', 'med'], 'derived_source_ids': [source], 'status': 'success',
+        'image_count': 0, 'searched_queries': ['Old El Paso picante medium'],
+        'output': {'queries': ['picante medium', 'pictorial medium', 'piccolo medium']}}]
+    graph = g.build(data)
+    invocation = next(n for n in graph['nodes'] if n['kind'] == 'ModelInvocation'
+                      and n['properties']['stage'] == 'descriptive_expansion')
+    proposal = next(n for n in graph['nodes'] if n['kind'] == 'Proposal' and n['label'] == 'picante medium')
+    assert any(e['kind'] == 'PRODUCED' and e['source'] == invocation['id'] and e['target'] == proposal['id'] for e in graph['edges'])
+    assert {'DERIVED_FROM', 'PROPOSED_SEARCH'} <= {e['kind'] for e in graph['edges'] if e['source'] == proposal['id']}
+    assert any(e['kind'] == 'CONSIDERED_PROPOSAL' and e['target'] == proposal['id'] for e in graph['edges'])
+    assert not any(e['kind'] == 'RECEIVED' and e['source'] == invocation['id'] for e in graph['edges'])
+
+
+def test_story_selects_latest_run_even_when_it_failed_and_keeps_items_separate(monkeypatch):
+    data = evidence()
+    data['collaborations'][0].update(completed_at='2026-10-01T12:00:00+00:00', id=1)
+    later = deepcopy(data['collaborations'][0])
+    later.update(completed_at='2026-10-02T12:00:00+00:00', id=2)
+    later['payload']['run_uuid'] = 'failed-latest'
+    later['payload']['decision'] = {'disposition': 'review', 'canonical_updated': False}
+    later['payload']['evidence_bundle']['sources'][0]['text'] = 'Latest reading'
+    data['collaborations'].append(later)
+    other = deepcopy(later)
+    other.update(completed_at='2026-09-01T12:00:00+00:00', id=3)
+    other['payload'].update(item_id=11, run_uuid='other-item')
+    data['items'].append({'id': 11, 'item_name': 'Other item'})
+    data['collaborations'].append(other)
+    result = g.build(data)
+    monkeypatch.setattr(web, 'read', lambda *a, **k: [{'graph': json.dumps(result), 'observed_at': 'now'}])
+    story = web.receipt('a'*64, perspective='story', offset=0, limit=1)
+    assert story['chronology_known'] is True
+    assert story['nodes'] and len(story['nodes']) > 1  # Story is scoped before pagination.
+    assert next(n for n in story['nodes'] if n['kind'] == 'Collaboration')['properties']['run_uuid'] == 'failed-latest'
+    assert {n['label'] for n in story['nodes'] if n['kind'] == 'Decision'} == {'review'}
+    assert {n['label'] for n in story['nodes'] if n['kind'] == 'Observation'} == {'Latest reading'}
+    assert {n['label'] for n in story['nodes'] if n['kind'] == 'Item'} == {'Cep Pic Med'}
+    assert len(story['runs']) == 2
+    historical = web.processing_story(result, story['item_id'], story['runs'][1]['id'])
+    assert {n['label'] for n in historical['nodes'] if n['kind'] == 'Observation'} == {'Oep Pic Med'}
+    other_item = next(i['id'] for i in story['items'] if i['label'] == 'Other item')
+    with pytest.raises(HTTPException):
+        web.processing_story(result, other_item, story['run_id'])
+
+
+def test_story_shows_recommendation_provenance_and_does_not_invent_chronology():
+    story = web.processing_story(g.build(evidence()))
+    assert not story['chronology_known']
+    path = set(story['path_ids'])
+    for kind in ['Observation', 'SearchResult', 'ModelInvocation', 'ModelReview', 'Decision']:
+        assert any(n['kind'] == kind and n['id'] in path for n in story['nodes'])
+    assert next(n for n in story['nodes'] if n['kind'] == 'Decision')['properties']['canonical_updated'] is False
+    assert web.processing_story(g.build({**evidence(), 'collaborations': []}))['nodes'] == []
+    with pytest.raises(HTTPException):
+        web.processing_story(g.build(evidence()), 'unrelated-item')
+
+
+def test_only_recorded_human_acceptance_connects_recommendation_to_canonical_update():
+    data = evidence()
+    data['events'] = [{'id': 'acceptance-1', 'occurred_at': '2026-10-06T12:00:00+00:00',
+                      'payload': {'event': 'product_recommendation_accepted', 'item_id': 10,
+                                  'run_uuid': 'compare-1', 'audit_id': 7, 'actor_user': 'paul',
+                                  'product_description': 'Old El Paso Picante Medium',
+                                  'product_url': 'https://sobeys.com/products/1'}}]
+    story = web.processing_story(g.build(data))
+    acceptance = next(n for n in story['nodes'] if n['kind'] == 'ProductAcceptance')
+    assert acceptance['properties']['actor_user'] == 'paul'
+    assert acceptance['id'] in story['path_ids']
+    assert {'ACCEPTED_AS', 'UPDATED', 'PERSISTED_AS'} <= {e['kind'] for e in story['edges']}
+    assert not any(n['kind'] == 'ProductAcceptance' for n in g.build(evidence())['nodes'])

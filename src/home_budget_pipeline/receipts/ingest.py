@@ -172,11 +172,21 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _tesseract_environment() -> dict[str, str] | None:
+    threads = os.getenv("HOME_BUDGET_OCR_THREADS")
+    if not threads:
+        return None
+    count = int(threads)
+    if count < 1:
+        raise ValueError("HOME_BUDGET_OCR_THREADS must be positive")
+    return {**os.environ, "OMP_NUM_THREADS": str(count), "OMP_THREAD_LIMIT": str(count)}
+
+
 def _run_tesseract(path: Path, psm: str = "4") -> str:
     binary = shutil.which("tesseract")
     if not binary:
         return ""
-    proc = subprocess.run([binary, str(path), "stdout", "--psm", psm], capture_output=True, text=True, check=False)
+    proc = subprocess.run([binary, str(path), "stdout", "--psm", psm], capture_output=True, text=True, check=False, env=_tesseract_environment())
     return proc.stdout if proc.returncode == 0 else ""
 
 
@@ -190,6 +200,7 @@ def _run_tesseract_candidate(path: Path, *, dpi: int, psm: str) -> OCRCandidate:
         capture_output=True,
         text=True,
         check=False,
+        env=_tesseract_environment(),
     )
     if proc.returncode != 0:
         return OCRCandidate("", (), dpi, psm, status="failed", error_type="nonzero_exit")
@@ -237,12 +248,19 @@ def _run_paddle_candidate(image, *, dpi: int) -> OCRCandidate:
         if _PADDLE_OCR is None:
             from paddleocr import PaddleOCR  # type: ignore
 
+            thread_options = {}
+            if os.getenv("HOME_BUDGET_OCR_THREADS"):
+                threads = int(os.environ["HOME_BUDGET_OCR_THREADS"])
+                if threads < 1:
+                    raise ValueError("HOME_BUDGET_OCR_THREADS must be positive")
+                thread_options["cpu_threads"] = threads
             _PADDLE_OCR = PaddleOCR(
                 text_detection_model_name=os.getenv("HOME_BUDGET_PADDLE_DET_MODEL", "PP-OCRv6_medium_det"),
                 text_recognition_model_name=os.getenv("HOME_BUDGET_PADDLE_REC_MODEL", "PP-OCRv6_medium_rec"),
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
+                **thread_options,
             )
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = Path(tmp.name)
@@ -508,7 +526,12 @@ def _ocr_pass_metric(candidate: OCRCandidate, *, page: int, variant: str, second
         },
         "engine_options": engine_options,
         "usage": {},
-        "provenance": {},
+        "provenance": {"lines": [
+            {"line_number": index + 1, "text": line.text,
+             "confidence": line.confidence,
+             "x": line.x, "y": line.y, "width": line.width, "height": line.height}
+            for index, line in enumerate(candidate.lines)
+        ]},
     }
 
 

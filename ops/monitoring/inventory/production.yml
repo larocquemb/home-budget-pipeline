@@ -1,6 +1,12 @@
 all:
   children:
     monitoring:
+      vars:
+        monitoring_mdns_enabled: true
+        monitoring_mdns_grafana_dns_stub: true
+        monitoring_mdns_upstream_dns: [192.168.2.252]
+        monitoring_mdns_search_domains: [brownrook.net]
+        monitoring_grafana_cleanup_enabled: true
       hosts:
         monitoring-production:
           ansible_host: 192.168.2.202

@@ -11,6 +11,7 @@ import urllib.request
 from typing import Optional
 
 from home_budget_pipeline import product_enrichment as core
+from home_budget_pipeline import telemetry
 
 _core_ai_product_queries = core.ai_product_queries
 
@@ -29,16 +30,8 @@ def brave_search(
     timeout = float(os.getenv("BRAVE_TIMEOUT_SECONDS", "10"))
     started = time.monotonic()
     _log(f"enrichment brave_start timeout={timeout:g}s query={query!r}")
-    url = "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode(
-        {"q": query, "count": 10, "country": "ca", "search_lang": "en"}
-    )
-    request = urllib.request.Request(
-        url,
-        headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
-    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.load(response)
+        rows = core.brave_query_results(api_key, query, timeout=timeout)
     except Exception as exc:
         elapsed = time.monotonic() - started
         _log(
@@ -48,10 +41,10 @@ def brave_search(
         return None
 
     candidates = []
-    for row in payload.get("web", {}).get("results", []):
+    for row in rows:
         title = row.get("title", "")
         candidate_url = row.get("url", "")
-        snippet = row.get("description", "")
+        snippet = row.get("snippet", "")
         candidates.append(
             core.SearchResult(
                 title,
@@ -105,7 +98,7 @@ def ai_product_queries(item_name: str, merchant: str) -> tuple[str, ...]:
     return queries
 
 
-def main() -> int:
+def _main() -> int:
     if "--compare-models" in sys.argv or "--collaborate-models" in sys.argv:
         # Comparison must distinguish search failures from legitimate no matches.
         return core.main()
@@ -118,3 +111,15 @@ def main() -> int:
         f"ai_max_queries={os.getenv('AI_PRODUCT_MAX_QUERIES', '2')}"
     )
     return core.main()
+
+
+def main() -> int:
+    with telemetry.local_command_logging("enrichment"):
+        telemetry.LOG.info("enrichment_started")
+        try:
+            result = _main()
+        except Exception:
+            telemetry.LOG.exception("enrichment_failed")
+            raise
+        telemetry.LOG.info("enrichment_completed exit_code=%s", result)
+        return result

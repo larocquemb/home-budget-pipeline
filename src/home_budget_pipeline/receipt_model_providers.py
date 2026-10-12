@@ -24,6 +24,25 @@ class IncompleteModelOutput(ValueError):
         self.usage = usage
 
 
+def incomplete_ollama_output(message):
+    """Capture at most 1024 response characters; count reasoning without storing it."""
+    message = message if isinstance(message, dict) else {}
+    content = message.get('content')
+    thinking = message.get('thinking')
+    head, tail = None, ''
+    if isinstance(content, str):
+        head = content if len(content) <= 1024 else content[:768]
+        tail = content[-256:] if len(content) > 1024 else ''
+    return {
+        'sample_limit_chars': 1024,
+        'content_chars': len(content) if isinstance(content, str) else None,
+        'thinking_chars': len(thinking) if isinstance(thinking, str) else None,
+        'content_head': head,
+        'content_tail': tail,
+        'omitted_content_chars': max(0, len(content) - 1024) if isinstance(content, str) else None,
+    }
+
+
 def profiles() -> tuple[list[Profile], list[dict]]:
     """Explicit profiles override defaults; missing credentials never look like votes."""
     configured = os.getenv('RECEIPT_MODEL_PROFILES', '').strip()
@@ -41,9 +60,13 @@ def profiles() -> tuple[list[Profile], list[dict]]:
             if model:
                 selected.append(Profile(provider, provider, model, **budgets, vision=True))
         models = os.getenv('OLLAMA_COLLAB_MODELS', 'qwen3:30b').split(',')
+        qwen_budgets = {
+            'context_tokens': int(os.getenv('QWEN_CONTEXT_TOKENS', '').strip() or os.getenv('COLLAB_CONTEXT_TOKENS', '32768')),
+            'output_tokens': int(os.getenv('QWEN_OUTPUT_TOKENS', '').strip() or os.getenv('COLLAB_OUTPUT_TOKENS', '8192')),
+        }
         for index, model in enumerate(dict.fromkeys(m.strip() for m in models if m.strip())):
             selected.append(Profile(f'qwen-{index + 1}', 'qwen', model,
-                **budgets,
+                **qwen_budgets,
                 vision='vl' in model.lower()))
     if len(selected) > 8 or len({p.name for p in selected}) != len(selected):
         raise ValueError('Profiles must have unique names and at most eight entries')
@@ -54,8 +77,8 @@ def profiles() -> tuple[list[Profile], list[dict]]:
             raise ValueError('Unknown provider or missing profile name/model')
         if not isinstance(profile.vision, bool):
             raise ValueError('vision must be a JSON boolean')
-        if not 1024 <= profile.context_tokens <= 65536 or not 256 <= profile.output_tokens <= 8192:
-            raise ValueError('Context must be 1024..65536; output must be 256..8192 tokens')
+        if not 1024 <= profile.context_tokens <= 65536 or not 256 <= profile.output_tokens <= 16384:
+            raise ValueError('Context must be 1024..65536; output must be 256..16384 tokens')
         if profile.output_tokens >= profile.context_tokens:
             raise ValueError('Output budget must be smaller than context')
         if profile.provider in keys and not os.getenv(keys[profile.provider], '').strip():
@@ -75,6 +98,13 @@ def post(url, body, headers=None):
         headers={'Content-Type': 'application/json', **(headers or {})})
     with urllib.request.urlopen(request, timeout=float(os.getenv('COMPARISON_TIMEOUT_SECONDS', '180'))) as response:
         return json.load(response)
+
+
+def qwen_content(text, schema, images):
+    content = text + '\nReturn one concise JSON object matching this schema; do not repeat instructions or evidence:\n' + json.dumps(schema, separators=(',', ':'))
+    if images:
+        content += '\nImages in order: ' + ', '.join(image['id'] for image in images)
+    return content
 
 
 def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> dict:
@@ -134,18 +164,20 @@ def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> di
     if profile.provider != 'qwen':
         raise ValueError('Unknown model provider')
     base = os.getenv('OLLAMA_BASE_URL', 'http://192.168.2.201:11434').rstrip('/')
-    message = {'role': 'user', 'content': text}
+    message = {'role': 'user', 'content': qwen_content(text, schema, images)}
     if images:
         message['images'] = [image['data'] for image in images]
-        message['content'] += '\nImages in order: ' + ', '.join(image['id'] for image in images)
+    options = {'temperature': 0, 'num_ctx': profile.context_tokens, 'num_predict': profile.output_tokens}
+    if set(schema.get('properties', {})) == {'queries'}:
+        options.update(temperature=0.7, top_p=0.8, top_k=20, seed=42)
     data = post(base + '/api/chat', {'model': profile.model, 'messages': [message],
-        'stream': False, 'think': False, 'format': schema, 'keep_alive': 0,
-        'options': {'temperature': 0, 'num_ctx': profile.context_tokens, 'num_predict': profile.output_tokens}})
-    if not data.get('done') or data.get('done_reason') != 'stop':
-        raise IncompleteModelOutput({'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count')})
-    result = {'output': json.loads(data['message']['content']),
-              'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count')}
+        'stream': False, 'think': False, 'format': schema, 'keep_alive': '5m',
+        'options': options})
+    usage = {'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count')}
     for field in ('total_duration', 'load_duration', 'prompt_eval_duration', 'eval_duration'):
         value = data.get(field)
-        result['ollama_' + field.replace('duration', 'seconds')] = value / 1e9 if isinstance(value, (int, float)) else None
-    return result
+        usage['ollama_' + field.replace('duration', 'seconds')] = value / 1e9 if isinstance(value, (int, float)) else None
+    if not data.get('done') or data.get('done_reason') != 'stop':
+        raise IncompleteModelOutput({**usage, 'finish_reason': data.get('done_reason'),
+                                     'incomplete_output': incomplete_ollama_output(data.get('message'))})
+    return {'output': json.loads(data['message']['content']), **usage}

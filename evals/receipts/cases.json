@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {
+      "id": "sobeys-20260214",
+      "split": "development",
+      "source": "2026-02-14/20260214_sobeys_363_95.pdf",
+      "pages": [
+        1,
+        2
+      ],
+      "complete_items": false,
+      "expected_file": "sobeys-image-reference.json"
+    }
+  ]
+}
