@@ -51,12 +51,12 @@ def parse_queries(text: str) -> list[str]:
     return list(dict.fromkeys(q.strip() for q in queries))
 
 
-def _generate_once(provider: str, text: str) -> dict:
+def _generate_once(provider: str, text: str, *, model: str | None = None) -> dict:
     """One provider request; empty responses are handled by the shared retry policy."""
     if provider == "openai":
         from openai import OpenAI
 
-        model = os.getenv("AI_PRODUCT_MODEL", "gpt-5.6-terra")
+        model = model or os.getenv("AI_PRODUCT_MODEL", "gpt-5.6-terra")
         client = OpenAI(timeout=float(os.getenv("COMPARISON_TIMEOUT_SECONDS", "180")),
                         max_retries=0)
         response = client.responses.create(
@@ -68,7 +68,7 @@ def _generate_once(provider: str, text: str) -> dict:
         return {"queries": parse_queries(response.output_text), "model": model,
                 "input_tokens": getattr(usage, "input_tokens", None),
                 "output_tokens": getattr(usage, "output_tokens", None)}
-    model = os.getenv("OLLAMA_PRODUCT_MODEL", "qwen3:30b")
+    model = model or os.getenv("OLLAMA_PRODUCT_MODEL", "qwen3:30b")
     base = os.getenv("OLLAMA_BASE_URL", "http://192.168.2.201:11434").rstrip("/")
     request = urllib.request.Request(
         base + "/api/chat",
@@ -83,6 +83,8 @@ def _generate_once(provider: str, text: str) -> dict:
         os.getenv("COMPARISON_TIMEOUT_SECONDS", "180")
     )) as response:
         data = json.load(response)
+    if data.get('done') is False or data.get('done_reason') not in (None, 'stop'):
+        raise ValueError('Incomplete model output')
     result = {"queries": parse_queries(data["message"]["content"]), "model": model,
               "input_tokens": data.get("prompt_eval_count"),
               "output_tokens": data.get("eval_count")}
@@ -107,7 +109,7 @@ class NoProductQueriesError(ValueError):
         self.details = details
 
 
-def generate(provider: str, text: str) -> dict:
+def generate(provider: str, text: str, *, model: str | None = None) -> dict:
     """Require a proposal from either provider; retry only an empty response once."""
     totals = {"input_tokens": 0, "output_tokens": 0,
               "ollama_total_seconds": 0, "ollama_load_seconds": 0,
@@ -119,7 +121,8 @@ def generate(provider: str, text: str) -> dict:
             "plausible expanded product search query now. These are hypotheses for "
             "retailer search verification, not a claim that a product is correct."
         )
-        result = _generate_once(provider, request_text)
+        result = (_generate_once(provider, request_text, model=model) if model is not None
+                  else _generate_once(provider, request_text))
         for key in totals:
             value = result.get(key)
             if isinstance(value, (int, float)):
@@ -134,9 +137,9 @@ def generate(provider: str, text: str) -> dict:
 
 
 def evaluate(provider: str, item: str, merchant: str, api_key: str,
-             threshold: float, search_cache: dict, baseline=(), context=None) -> dict:
+             threshold: float, search_cache: dict, baseline=(), context=None, *, model: str | None = None) -> dict:
     started = time.monotonic()
-    result = {"provider": provider, "model": os.getenv(
+    result = {"provider": provider, "model": model or os.getenv(
         "AI_PRODUCT_MODEL" if provider == "openai" else "OLLAMA_PRODUCT_MODEL",
         "gpt-5.6-terra" if provider == "openai" else "qwen3:30b"),
         "status": "error", "confidence": None, "accepted": False}
@@ -149,7 +152,8 @@ def evaluate(provider: str, item: str, merchant: str, api_key: str,
         with sampler if sampler else nullcontext():
             model_started = time.monotonic()
             try:
-                result.update(generate(provider, prompt(item, merchant, evidence)))
+                text = prompt(item, merchant, evidence)
+                result.update(generate(provider, text, model=model) if model is not None else generate(provider, text))
             finally:
                 result["model_seconds"] = round(time.monotonic() - model_started, 3)
         domain = core.retailer_domain(merchant)
