@@ -265,3 +265,14 @@ def test_provider_does_not_borrow_other_models_expanded_search_results(monkeypat
     left = comparison.evaluate('openai', 'Cep Pic Med', 'Sobeys', 'key', .85, cache, [('initial', baseline)])
     right = comparison.evaluate('qwen', 'Cep Pic Med', 'Sobeys', 'key', .85, cache, [('initial', baseline)])
     assert left['accepted'] and right['confidence'] == 0
+
+
+def test_explicit_ollama_model_does_not_mutate_environment(monkeypatch):
+    calls = []
+    monkeypatch.setenv('OLLAMA_PRODUCT_MODEL', 'production:tag')
+    monkeypatch.setattr(comparison, '_generate_once', lambda provider, text, **kw:
+                        calls.append(kw['model']) or {'queries': ['Salsa'], 'model': kw['model']})
+    assert comparison.generate('qwen', 'prompt', model='candidate:tag')['model'] == 'candidate:tag'
+    assert calls == ['candidate:tag']
+    import os
+    assert os.getenv('OLLAMA_PRODUCT_MODEL') == 'production:tag'

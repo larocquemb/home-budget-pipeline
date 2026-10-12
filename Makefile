@@ -308,3 +308,9 @@ k3s-postgres-grafana-apply:
 
 eval-models:
 	@PYTHONPATH=src $(PYTHON) -m home_budget_pipeline.model_evaluation --baseline "$(BASELINE)" --candidate "$(CANDIDATE)" --cases "$(EVAL_CASES)" --receipt-root "$(RECEIPT_ROOT)" --repeats "$(EVAL_REPEATS)" --output "$(EVAL_OUTPUT)" --context-tokens "$(EVAL_CONTEXT_TOKENS)" --output-tokens "$(EVAL_OUTPUT_TOKENS)"
+
+ENRICHMENT_EVAL_CASES ?= evals/enrichment/cases.json
+EVAL_ENV_FILE ?= .env.dev
+.PHONY: eval-enrichment
+eval-enrichment:
+	@PYTHONPATH=src $(PYTHON) scripts/eval_enrichment.py --env-file "$(EVAL_ENV_FILE)" --baseline "$(BASELINE)" --candidate "$(CANDIDATE)" --cases "$(ENRICHMENT_EVAL_CASES)" --output "$(EVAL_OUTPUT)"
