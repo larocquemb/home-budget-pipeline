@@ -314,7 +314,7 @@ ENRICHMENT_EVAL_CASES ?= evals/enrichment/cases.json
 EVAL_ENV_FILE ?= .env.dev
 .PHONY: eval-enrichment
 eval-enrichment:
-	@PYTHONPATH=src $(PYTHON) scripts/eval_enrichment.py --env-file "$(EVAL_ENV_FILE)" --baseline "$(BASELINE)" --candidate "$(CANDIDATE)" --cases "$(ENRICHMENT_EVAL_CASES)" --output "$(EVAL_OUTPUT)"
+	@PYTHONPATH=src $(PYTHON) scripts/eval_enrichment.py --env-file "$(EVAL_ENV_FILE)" --receipt-root "$(RECEIPT_ROOT)" --baseline "$(BASELINE)" --candidate "$(CANDIDATE)" --cases "$(ENRICHMENT_EVAL_CASES)" --output "$(EVAL_OUTPUT)"
 
 eval-rescore:
 	@test -n "$(REPORT)" || (echo "Usage: make eval-rescore REPORT=path/to/report.json" >&2; exit 2)

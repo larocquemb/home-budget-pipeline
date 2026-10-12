@@ -97,7 +97,7 @@ def test_evaluator_uses_pipeline_brave_key_without_disclosing_it(monkeypatch, tm
         keys.append(key)
         return [], []
     monkeypatch.setattr(evaluation, 'run', run)
-    assert evaluation.main(['--baseline', 'base', '--candidate', 'new', '--cases', str(manifest),
+    assert evaluation.main(['--workflow', 'paired', '--baseline', 'base', '--candidate', 'new', '--cases', str(manifest),
                             '--output', str(tmp_path / 'reports')]) == 0
     assert keys == ['configured-pipeline-key']
     raw = next((tmp_path / 'reports').glob('*/report.json')).read_text()
