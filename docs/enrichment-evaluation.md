@@ -15,6 +15,7 @@ OLLAMA_BASE_URL=http://192.168.2.201:11434 make eval-enrichment \
 ```
 
 Both models must be installed in the managed LAN service. The launcher safely
+uses the pipeline’s `BRAVE_SEARCH_API_KEY` and safely
 parses the existing `.env.dev` without executing it and loads only the Brave and
 Ollama settings it needs. Exported variables take precedence; use
 `EVAL_ENV_FILE=/path/to/ignored/env-file` for another configuration. It never

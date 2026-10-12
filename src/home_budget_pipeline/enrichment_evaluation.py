@@ -132,7 +132,7 @@ def main(argv=None):
               'ollama_url': base, 'threshold': args.threshold,
               'settings': {'temperature': 0, 'think': False, 'output_tokens': 1200,
                            'context_tokens': int(os.getenv('OLLAMA_CONTEXT_TOKENS', '4096'))}}
-    key = os.getenv('BRAVE_API_KEY', '').strip()
+    key = os.getenv('BRAVE_SEARCH_API_KEY', '').strip()
     try:
         if not key:
             raise ValueError('missing_brave_credentials')

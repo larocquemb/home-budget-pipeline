@@ -10,7 +10,7 @@ from home_budget_pipeline.enrichment_evaluation import main
 def configure_environment(path):
     if path.is_file():
         values = read_env(path)
-        for key in ('BRAVE_API_KEY', 'OLLAMA_BASE_URL', 'OLLAMA_HOST', 'OLLAMA_CONTEXT_TOKENS',
+        for key in ('BRAVE_SEARCH_API_KEY', 'OLLAMA_BASE_URL', 'OLLAMA_HOST', 'OLLAMA_CONTEXT_TOKENS',
                     'COMPARISON_TIMEOUT_SECONDS', 'BRAVE_TIMEOUT_SECONDS'):
             if values.get(key) and not os.getenv(key):
                 os.environ[key] = values[key]
