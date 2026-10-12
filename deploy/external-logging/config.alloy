@@ -212,6 +212,22 @@ prometheus.remote_write "local_prometheus" {
   }
 }
 
+// Pull continuous host/service/GPU metrics from Arsene's existing private helper.
+// This does not depend on the Kubernetes API or trigger model loading.
+prometheus.scrape "ollama_arsene" {
+  targets = [{
+    __address__ = "192.168.2.201:11435",
+    host = "arsene",
+    service = "ollama",
+    environment = "production",
+  }]
+  job_name = "ollama-host"
+  metrics_path = "/metrics"
+  scrape_interval = "15s"
+  scrape_timeout = "10s"
+  forward_to = [prometheus.remote_write.local_prometheus.receiver]
+}
+
 // Tempo's ingest listener is loopback-only. Keep this exporter synchronous so
 // failures propagate to the Collector's persistent sending queue.
 otelcol.exporter.otlp "tempo" {

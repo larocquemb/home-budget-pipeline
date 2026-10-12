@@ -1,0 +1,142 @@
+---
+- name: Require the existing monitoring client identity
+  ansible.builtin.assert:
+    that:
+      - ollama_monitoring_pki_dir | length > 0
+    fail_msg: Set MONITORING_PKI_DIR from .env.monitoring before applying Ollama monitoring.
+
+- name: Check monitoring identity files on the controller
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ ollama_monitoring_ca_source }}"
+    - "{{ ollama_monitoring_cert_source }}"
+    - "{{ ollama_monitoring_key_source }}"
+  delegate_to: localhost
+  become: false
+  register: ollama_monitoring_identity
+  no_log: true
+
+- name: Require readable monitoring identity files
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+    fail_msg: The configured monitoring client identity is missing on the controller.
+  loop: "{{ ollama_monitoring_identity.results }}"
+  no_log: true
+
+- name: Add the signed Grafana RPM repository
+  ansible.builtin.yum_repository:
+    name: grafana
+    description: Grafana stable packages
+    baseurl: https://rpm.grafana.com
+    gpgcheck: true
+    repo_gpgcheck: true
+    gpgkey: https://rpm.grafana.com/gpg.key
+    sslverify: true
+
+- name: Import the Grafana package signing key
+  ansible.builtin.rpm_key:
+    key: https://rpm.grafana.com/gpg.key
+    state: present
+
+- name: Read the installed Alloy version
+  ansible.builtin.command:
+    argv: [rpm, -q, --queryformat, "%{VERSION}", alloy]
+  register: ollama_alloy_installed
+  changed_when: false
+  failed_when: ollama_alloy_installed.rc not in [0, 1]
+  check_mode: false
+
+# Use the CLI because the NVIDIA DNF plugin emits non-JSON output.
+- name: Install pinned native Alloy # noqa command-instead-of-module
+  ansible.builtin.command:
+    argv: [dnf, -y, install, "alloy-{{ ollama_alloy_version }}"]
+  when:
+    - not ansible_check_mode
+    - ollama_alloy_installed.rc == 1 or ollama_alloy_installed.stdout != ollama_alloy_version
+  changed_when: true
+
+- name: Report native Alloy installation in check mode
+  ansible.builtin.debug:
+    msg: "Would install native Alloy {{ ollama_alloy_version }}."
+  when:
+    - ansible_check_mode
+    - ollama_alloy_installed.rc == 1 or ollama_alloy_installed.stdout != ollama_alloy_version
+  changed_when: true
+
+- name: Configure the installed native collector
+  when: not ansible_check_mode or ollama_alloy_installed.rc == 0
+  block:
+    - name: Ensure journal reader groups exist
+      ansible.builtin.group:
+        name: "{{ item }}"
+        system: true
+      loop: [adm, systemd-journal]
+
+    - name: Grant Alloy access to the host journal
+      ansible.builtin.user:
+        name: alloy
+        groups: [adm, systemd-journal]
+        append: true
+      notify: Restart Ollama Alloy
+
+    - name: Create private Alloy TLS directory
+      ansible.builtin.file:
+        path: /etc/alloy/tls
+        state: directory
+        owner: root
+        group: alloy
+        mode: "0750"
+
+    - name: Install Alloy client identity
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "/etc/alloy/tls/{{ item.name }}"
+        owner: root
+        group: alloy
+        mode: "0640"
+      loop:
+        - {src: "{{ ollama_monitoring_ca_source }}", name: ca.crt}
+        - {src: "{{ ollama_monitoring_cert_source }}", name: client.crt}
+        - {src: "{{ ollama_monitoring_key_source }}", name: client.key}
+      no_log: true
+      notify: Restart Ollama Alloy
+
+    - name: Install validated Ollama journal collector
+      ansible.builtin.template:
+        src: ollama.alloy.j2
+        dest: /etc/alloy/config.alloy
+        owner: root
+        group: alloy
+        mode: "0640"
+        validate: /usr/bin/alloy validate %s
+      notify: Restart Ollama Alloy
+
+    - name: Create Alloy service override directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/alloy.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Keep the collector administration listener on loopback
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/alloy.service.d/ollama.conf
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/alloy run --storage.path=/var/lib/alloy/data --server.http.listen-addr=127.0.0.1:12345 /etc/alloy/config.alloy
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart Ollama Alloy
+
+    - name: Enable native Ollama journal collection
+      ansible.builtin.systemd_service:
+        name: alloy
+        daemon_reload: true
+        enabled: true
+        state: started

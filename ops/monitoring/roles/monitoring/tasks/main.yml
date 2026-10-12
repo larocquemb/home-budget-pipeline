@@ -1757,6 +1757,9 @@
       - label: product model comparison
         resource: >-
           {{ lookup('ansible.builtin.template', 'grafana-product-comparison-dashboard.json.j2') | from_json }}
+      - label: Arsene Ollama
+        resource: >-
+          {{ lookup('ansible.builtin.template', 'grafana-ollama-dashboard.json.j2') | from_json }}
       - label: public live demo
         resource: >-
           {{ lookup('ansible.builtin.template', 'grafana-public-live-demo-dashboard.json.j2') | from_json }}
