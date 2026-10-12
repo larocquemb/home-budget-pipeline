@@ -24,7 +24,8 @@ OLLAMA_BASE_URL=http://192.168.2.201:11434 make eval-models \
 
 The default case uses your private Sobeys PDF at
 `.receipt-test/inbox/2026-02-14/20260214_sobeys_363_95.pdf`. Override its root with
-`RECEIPT_ROOT=/path/to/inbox`. Both models receive exactly the same rendered
+`RECEIPT_ROOT=/path/to/inbox`. The default case includes both pages of that PDF.
+Both models receive exactly the same rendered
 images, extraction prompt, JSON schema, context and output budgets, with thinking
 disabled and temperature zero. These settings override model sampling defaults.
 The context defaults to 32768 and output to 8192 tokens, matching the current

@@ -249,7 +249,12 @@ def model_snapshot(base, model):
 
 
 def report_markdown(report):
+    incomplete = any(row['status'] != 'ok' for row in report['runs'])
+    state = ('In progress / partial' if 'finished_at' not in report else
+             'Incomplete' if incomplete or report.get('model_digests_unchanged') is not True else
+             'Completed; quality requires review')
     lines = ['# Receipt model comparison', '', f"Run: `{report['run_id']}`", '',
+             f'Status: **{state}**', '',
              'Quality differences are informational. This report does not change production.', '',
              'Partial reference labels cannot establish overall receipt accuracy or hallucination rates.', '',
              '| Model | Case | Successful runs | Summary matches | Known items matched | Median wall seconds |',
