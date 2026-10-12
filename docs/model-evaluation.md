@@ -65,18 +65,57 @@ These live comparisons are manual and are not required GitHub CI gates.
 
 ## Reference coverage
 
-The existing Sobeys regression fixture supplies merchant, date, total, payment
-method and known item names/prices. It is a **partial** reference: tax, subtotal,
-full item count and categories are unscored. Extra extracted rows are retained
-for review and are not called hallucinations. Matching preserves duplicate
-purchase counts and accepts only explicitly listed name aliases plus exact
-currency amounts, rounded to cents. This is strict label agreement, not a
-semantic accuracy estimate; inspect spelling differences before judging them.
-Arithmetic checks are informational because receipts may include additional
-fees or rounding.
+The Sobeys case now uses a separate image-verified reference rather than the
+OCR regression fixture. The original regression fixture is unchanged. Merchant
+and transaction date are unscored because neither is visible in the supplied
+images. Payment method, subtotal, combined GST/PST and total are verified. The
+known purchase labels remain partial; category accuracy is unscored. Reference
+files record their source SHA-256 and the evaluator refuses a different PDF.
+
+Financial checks explicitly report:
+
+- Combined tax against the verified GST + PST amount.
+- The signed sum of **all emitted rows**, including discounts and fees, against
+  the verified subtotal. Reward rows are not silently filtered from this sum.
+- Each required environmental fee, preserving duplicate counts.
+- Reward points and promotional annotations incorrectly included as item rows.
+
+These checks remain informational. Enable subtotal reconciliation only after
+verifying that the selected pages cover every monetary row and the receipt uses
+that arithmetic convention. Balanced sums alone do not prove all items are right.
+Strict item matching compares printed labels or explicitly documented aliases
+plus signed prices; spelling discrepancies still require review. Tax components
+are retained as reference provenance, since the output schema has one combined
+tax field. Both test models keep the original evaluation prompt unchanged, so
+rescoring isolates scoring corrections from prompt changes.
+
+A second manifest covers the existing Michaels return receipt, with verified
+negative amounts and a complete three-row purchase reference. Run it separately
+against your private receipt archive:
+
+```sh
+make eval-models EVAL_CASES=evals/receipts/michaels-cases.json \
+  RECEIPT_ROOT=/Volumes/files/brownrook/home-budget/receipts/raw/scanned/inbox
+```
+
+Michaels is labelled **validation**, not a pristine holdout: it already appears
+in regression tests. A genuine holdout set must be reserved separately.
+
+## Rescore saved model outputs
+
+```sh
+make eval-rescore REPORT=.model-evals/20261012T123024Z-6460f351/report.json
+```
+
+This makes no network, model or image-rendering calls. It creates a new private
+report directory, preserving the original report and all outputs, timings and
+input hashes. It records the original report digest, new reference/manifest
+hashes and scoring Git revision. The new references must match the original
+source hash and selected pages; a different receipt or page selection is rejected.
+Existing errors remain errors. A partial original run remains partial.
 
 Add cases to `evals/receipts/cases.json`. Private images stay outside Git. A case
-can specify direct verified labels instead of `expected_fixture`:
+can specify direct verified labels or an `expected_file` containing `expected`, `source_sha256`, reference notes and optional `financial_rules`:
 
 ```json
 {
