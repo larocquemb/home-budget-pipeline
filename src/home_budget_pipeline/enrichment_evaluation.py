@@ -40,7 +40,7 @@ def markdown(report):
     lines = ['# Informational product enrichment comparison', '',
              f"Run: `{report['run_id']}`", '',
              '**Informational only. Model disagreements and incomplete API requests do not fail CI.**', '',
-             'Uses the existing paired enrichment experiment: shared baseline retailer evidence, model query expansion, retailer searches, and original-item evidence scoring. This is not the full collaboration/voting workflow.', '',
+             ('Uses the production collaborate_item path with real OCR/image evidence, descriptor/brand expansion, retries and citation review.' if report.get('workflow') == 'collaboration' else 'Uses the older paired enrichment experiment.'), '',
              'Categories use built-in deterministic application rules on accepted product labels. Database overrides and AI category fallback are not evaluated.', '',
              '| Case | Model | Status | Product | Reference product | Category | Reference category | Confidence heuristic | Seconds |',
              '|---|---|---|---|---|---|---|---:|---:|']
@@ -108,6 +108,8 @@ def main(argv=None):
     parser.add_argument('--cases', type=Path, default=Path('evals/enrichment/cases.json'))
     parser.add_argument('--output', type=Path, default=Path('.model-evals'))
     parser.add_argument('--threshold', type=float, default=.85)
+    parser.add_argument('--workflow', choices=('collaboration', 'paired'), default='collaboration')
+    parser.add_argument('--receipt-root', type=Path, help='Local copies of hash-verified production source files')
     args = parser.parse_args(argv)
     if args.baseline == args.candidate or not 0 <= args.threshold <= 1:
         parser.error('Use distinct models and a threshold between 0 and 1')
@@ -126,13 +128,13 @@ def main(argv=None):
     report = {'run_id': run_id, 'started_at': datetime.now(timezone.utc).isoformat(),
               'git_commit': subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip(),
               'manifest_sha256': hashlib.sha256(args.cases.read_bytes()).hexdigest(),
-              'reference_note': manifest.get('reference_note'),
+              'reference_note': manifest.get('reference_note'), 'workflow': args.workflow,
               'cases': cases, 'models': [], 'results': [], 'search_evidence': [],
               'schema_sha256': hashlib.sha256(json.dumps(comparison.QUERY_SCHEMA, sort_keys=True).encode()).hexdigest(),
               'ollama_url': base, 'threshold': args.threshold,
               'settings': {'temperature': 0, 'think': False, 'output_tokens': 1200,
                            'context_tokens': int(os.getenv('OLLAMA_CONTEXT_TOKENS', '4096'))}}
-    key = os.getenv('BRAVE_API_KEY', '').strip()
+    key = os.getenv('BRAVE_SEARCH_API_KEY', '').strip()
     try:
         if not key:
             raise ValueError('missing_brave_credentials')
@@ -143,10 +145,28 @@ def main(argv=None):
             if not found:
                 raise ValueError('model_not_installed')
             report['models'].append({'name': model, 'digest': found['digest']})
-        report['results'], report['search_evidence'] = run(cases, [args.baseline, args.candidate], key, args.threshold)
+        if args.workflow == 'collaboration':
+            from . import collaboration_evaluation as production
+            if args.receipt_root:
+                os.environ['HOME_BUDGET_RECEIPTS_ROOT'] = str(args.receipt_root.resolve())
+            inputs = production.load_inputs(cases, os.getenv('DATABASE_URL') or os.getenv('HOME_BUDGET_PG_DSN'))
+            context_tokens = int(os.getenv('QWEN_CONTEXT_TOKENS') or '32768')
+            output_tokens = int(os.getenv('QWEN_OUTPUT_TOKENS') or '8192')
+            if not 1024 <= context_tokens <= 65536 or not 256 <= output_tokens <= 16384 or output_tokens >= context_tokens:
+                raise ValueError('invalid_collaboration_budgets')
+            report['settings'].update(context_tokens=context_tokens, output_tokens=output_tokens,
+                                      profile_policy='one vision-enabled Qwen profile per independent model run',
+                                      descriptor_expansion={'temperature': 0.7, 'top_p': 0.8, 'top_k': 20, 'seed': 42})
+            report['schema_sha256'] = None  # Production derives stage schemas and citation enums dynamically.
+            report['results'], report['search_evidence'] = production.run(
+                cases, [args.baseline, args.candidate], key, args.threshold, inputs, context_tokens, output_tokens)
+            for row in report['results']:
+                row['qualification'] = qualify(row, next(case for case in cases if case['id'] == row['case_id']))
+        else:
+            report['results'], report['search_evidence'] = run(cases, [args.baseline, args.candidate], key, args.threshold)
     except Exception as exc:
         report['preflight_error_type'] = type(exc).__name__
-        report['preflight_reason'] = ('missing_brave_credentials' if not key else 'model_or_api_unavailable')
+        report['preflight_reason'] = ('missing_brave_credentials' if not key else 'evaluation_setup_unavailable')
         report['results'] = [{'case_id': case['id'], 'model': model, 'status': 'error',
                               'error_type': type(exc).__name__, 'confidence': None,
                               'qualification': qualify({'status': 'error'}, case)}
@@ -156,7 +176,7 @@ def main(argv=None):
     directory = args.output / run_id
     directory.mkdir(parents=True, exist_ok=False)
     os.chmod(directory, 0o700)
-    for name, content in [('report.json', json.dumps(report, indent=2)), ('report.md', markdown(report))]:
+    for name, content in [('report.json', json.dumps(report, indent=2, default=str)), ('report.md', markdown(report))]:
         target = directory / name
         target.write_text(content)
         os.chmod(target, 0o600)

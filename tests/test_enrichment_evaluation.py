@@ -51,7 +51,7 @@ def test_quality_difference_and_no_match_are_complete(monkeypatch):
 
 
 def test_missing_credentials_make_informational_report_with_success_exit(monkeypatch, tmp_path):
-    monkeypatch.delenv('BRAVE_API_KEY', raising=False)
+    monkeypatch.delenv('BRAVE_SEARCH_API_KEY', raising=False)
     manifest = tmp_path / 'cases.json'; manifest.write_text(json.dumps({'cases': [CASE]}))
     assert evaluation.main(['--cases', str(manifest), '--output', str(tmp_path / 'reports')]) == 0
     report_path = next((tmp_path / 'reports').glob('*/report.json'))
@@ -70,13 +70,36 @@ def test_local_settings_are_literal_filtered_and_do_not_override_environment(mon
     spec = importlib.util.spec_from_file_location('eval_launcher', Path('scripts/eval_enrichment.py'))
     launcher = importlib.util.module_from_spec(spec); spec.loader.exec_module(launcher)
     path = tmp_path / 'env'
-    path.write_text("BRAVE_API_KEY='literal$(do-not-run)'\nOLLAMA_BASE_URL=http://file.example\nUNRELATED_PASSWORD=unused\n")
-    monkeypatch.delenv('BRAVE_API_KEY', raising=False)
+    path.write_text("BRAVE_SEARCH_API_KEY='literal$(do-not-run)'\nOLLAMA_BASE_URL=http://file.example\nUNRELATED_PASSWORD=unused\n")
+    monkeypatch.delenv('BRAVE_SEARCH_API_KEY', raising=False)
     monkeypatch.delenv('UNRELATED_PASSWORD', raising=False)
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://exported.example')
     # Ensure monkeypatch restores the key assigned by the launcher afterwards.
-    monkeypatch.setenv('BRAVE_API_KEY', '')
+    monkeypatch.setenv('BRAVE_SEARCH_API_KEY', '')
     launcher.configure_environment(path)
-    assert os.getenv('BRAVE_API_KEY') == 'literal$(do-not-run)'
+    assert os.getenv('BRAVE_SEARCH_API_KEY') == 'literal$(do-not-run)'
     assert os.getenv('OLLAMA_BASE_URL') == 'http://exported.example'
     assert os.getenv('UNRELATED_PASSWORD') is None
+
+
+def test_evaluator_uses_pipeline_brave_key_without_disclosing_it(monkeypatch, tmp_path):
+    monkeypatch.setenv('BRAVE_SEARCH_API_KEY', 'configured-pipeline-key')
+    monkeypatch.setenv('BRAVE_API_KEY', 'wrong-variable')
+    manifest = tmp_path / 'cases.json'; manifest.write_text(json.dumps({'cases': [CASE]}))
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self):
+            return json.dumps({'models': [{'name': name, 'digest': name} for name in ('base', 'new')]}).encode()
+    monkeypatch.setattr(evaluation.urllib.request, 'urlopen', lambda *args, **kw: Response())
+    keys = []
+    def run(cases, models, key, threshold):
+        keys.append(key)
+        return [], []
+    monkeypatch.setattr(evaluation, 'run', run)
+    assert evaluation.main(['--workflow', 'paired', '--baseline', 'base', '--candidate', 'new', '--cases', str(manifest),
+                            '--output', str(tmp_path / 'reports')]) == 0
+    assert keys == ['configured-pipeline-key']
+    raw = next((tmp_path / 'reports').glob('*/report.json')).read_text()
+    assert 'configured-pipeline-key' not in raw
+    assert 'wrong-variable' not in raw
