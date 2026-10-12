@@ -1,0 +1,12 @@
+{
+  "cases": [
+    {
+      "id": "sobeys-20260214",
+      "split": "development",
+      "source": "2026-02-14/20260214_sobeys_363_95.pdf",
+      "pages": [1, 2],
+      "expected_fixture": "../../tests/fixtures/sobeys_receipt_41_ocr.json",
+      "complete_items": false
+    }
+  ]
+}
