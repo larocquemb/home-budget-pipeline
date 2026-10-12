@@ -81,6 +81,16 @@ for dashboard_path in dashboard_paths:
     dashboard = json.loads(rendered)
     if dashboard.get("apiVersion") != "dashboard.grafana.app/v2":
         raise ValueError(f"{dashboard_path} is not a Grafana v2 dashboard resource")
+    # Required DashboardLink fields in Grafana's v2 schema. Valid JSON alone
+    # does not guarantee the resource will pass the API's schema validation.
+    for index, link in enumerate(dashboard["spec"].get("links", [])):
+        for field in ("title", "type", "icon", "tooltip"):
+            if not isinstance(link.get(field), str):
+                raise ValueError(
+                    f"{dashboard_path}: link {index} requires string {field}"
+                )
+        if link["type"] not in ("link", "dashboards"):
+            raise ValueError(f"{dashboard_path}: link {index} has invalid type")
     for element in dashboard["spec"]["elements"].values():
         if element["kind"] != "Panel":
             continue
