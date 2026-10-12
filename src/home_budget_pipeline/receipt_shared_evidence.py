@@ -178,11 +178,12 @@ class ReceiptImageError(ValueError):
         self.reason = reason
 
 
-def render_images(bundle: dict) -> tuple[list[dict], list[dict]]:
+def render_images(bundle: dict, *, root: Path | None = None) -> tuple[list[dict], list[dict]]:
     """Stream hash-verified sources; send at most two bounded page images."""
     from PIL import Image
     images, errors = [], []
-    root = Path(os.getenv('HOME_BUDGET_RECEIPTS_ROOT', '/data/receipts/raw/scanned/inbox')).resolve()
+    root = (root if root is not None else Path(os.getenv(
+        'HOME_BUDGET_RECEIPTS_ROOT', '/data/receipts/raw/scanned/inbox'))).resolve()
     for document in bundle['documents']:
         if len(images) >= 2:
             break

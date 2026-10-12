@@ -162,3 +162,6 @@ k8s/*-secret.yaml
 k8s/secret.yaml
 *.kubeconfig
 .env.monitoring
+
+# Private receipt model outputs and comparison reports.
+.model-evals/

@@ -34,6 +34,16 @@ MONITORING_GITOPS ?= ./scripts/monitoring_gitops.sh
 POSTGRES_LAN_IP ?=
 POSTGRES_HOST ?= $(if $(POSTGRES_LAN_IP),$(POSTGRES_LAN_IP),m4pro.local)
 LOG_COLLECTION_COMPARE ?= ./scripts/compare_log_collection_probe.sh
+BASELINE ?= qwen3-vl-receipts:30b-instruct
+CANDIDATE ?= qwen3.8:27b
+EVAL_CASES ?= evals/receipts/cases.json
+RECEIPT_ROOT ?= $(RECEIPT_TEST_ROOT)/inbox
+EVAL_REPEATS ?= 3
+EVAL_OUTPUT ?= .model-evals
+EVAL_CONTEXT_TOKENS ?= 32768
+EVAL_OUTPUT_TOKENS ?= 8192
+
+.PHONY: eval-models
 
 .PHONY: help docs-build docs-serve test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
 
@@ -68,6 +78,7 @@ dev-postgres-tls-prepare:
 	@bash scripts/prepare_receipt_postgres_tls.sh "$(POSTGRES_HOST)"
 
 help:
+	@echo "Model evaluation: make eval-models BASELINE=MODEL CANDIDATE=MODEL [EVAL_REPEATS=3]"
 	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
 	@echo "Local checks: check-local (unit tests, Python wheel, strict docs); build-local"
 	@echo "Local logs:  dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down"
@@ -294,3 +305,6 @@ k3s-postgres-grafana-check:
 
 k3s-postgres-grafana-apply:
 	@$(PYTHON) scripts/configure_k3s_receipt_postgres.py --apply
+
+eval-models:
+	@PYTHONPATH=src $(PYTHON) -m home_budget_pipeline.model_evaluation --baseline "$(BASELINE)" --candidate "$(CANDIDATE)" --cases "$(EVAL_CASES)" --receipt-root "$(RECEIPT_ROOT)" --repeats "$(EVAL_REPEATS)" --output "$(EVAL_OUTPUT)" --context-tokens "$(EVAL_CONTEXT_TOKENS)" --output-tokens "$(EVAL_OUTPUT_TOKENS)"
