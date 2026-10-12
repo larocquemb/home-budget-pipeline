@@ -3,5 +3,13 @@ ollama_port: 11434
 ollama_gpu_telemetry_port: 11435
 ollama_max_loaded_models: 1
 ollama_num_parallel: 1
+ollama_cgroup_path: /sys/fs/cgroup/system.slice/ollama.service
+ollama_monitoring_enabled: true
+ollama_alloy_version: 1.19.2
+ollama_monitoring_host: monitoring.idc.brownrook.net
+ollama_monitoring_pki_dir: "{{ lookup('ansible.builtin.env', 'MONITORING_PKI_DIR') }}"
+ollama_monitoring_ca_source: "{{ ollama_monitoring_pki_dir }}/root/root_ca.crt"
+ollama_monitoring_cert_source: "{{ ollama_monitoring_pki_dir }}/leafs/alloy-loki-client/alloy-loki-client.fullchain.crt"
+ollama_monitoring_key_source: "{{ ollama_monitoring_pki_dir }}/leafs/alloy-loki-client/alloy-loki-client.key"
 # Empty means use firewalld's default zone; override for a dedicated LAN zone.
 ollama_firewall_zone: ""

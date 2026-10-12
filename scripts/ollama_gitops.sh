@@ -12,5 +12,12 @@ case "$mode" in
   apply) options+=(--ask-become-pass) ;;
   *) echo "Usage: $0 {syntax|check|apply} [ansible-playbook options]" >&2; exit 2 ;;
 esac
+# Reuse the existing private Loki client identity; never put keys in Git.
+if [[ "$mode" != "syntax" && -f "$repository_root/.env.monitoring" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$repository_root/.env.monitoring"
+  set +a
+fi
 exec ansible-playbook -i "$repository_root/ops/ollama/inventory/production.yml" \
   "$repository_root/ops/ollama/site.yml" "${options[@]}" "$@"

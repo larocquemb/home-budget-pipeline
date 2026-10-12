@@ -1,5 +1,9 @@
 # Managed by ops/ollama Ansible. Edit the inventory, then reconcile.
 [Service]
+CPUAccounting=yes
+MemoryAccounting=yes
 Environment="OLLAMA_HOST={{ ollama_listen_address }}:{{ ollama_port }}"
 Environment="OLLAMA_MAX_LOADED_MODELS={{ ollama_max_loaded_models }}"
 Environment="OLLAMA_NUM_PARALLEL={{ ollama_num_parallel }}"
+Environment="OLLAMA_DEBUG=INFO"
+Environment="OLLAMA_DEBUG_LOG_REQUESTS=false"

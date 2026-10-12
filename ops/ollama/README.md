@@ -1,5 +1,10 @@
 # Arsene Ollama configuration
 
+See [Ollama monitoring](../../docs/ollama-monitoring.md) for native journal
+forwarding, continuous host/service/GPU metrics, the Grafana dashboard, and
+deployment verification. Applying the role now loads `.env.monitoring` and
+requires its existing monitoring client identity when journal collection is enabled.
+
 This Git-managed Ansible playbook reconciles the existing Ollama host service.
 It binds the API to `192.168.2.201:11434`, enables the service, restarts it only
 when the systemd override changes, and verifies `/api/tags` on the LAN address.

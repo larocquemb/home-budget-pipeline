@@ -68,6 +68,10 @@
     mode: "0644"
   notify: Restart Ollama GPU telemetry
 
+- name: Configure native Ollama journal forwarding
+  ansible.builtin.import_tasks: monitoring.yml
+  when: ollama_monitoring_enabled | bool
+
 - name: Configure source restricted access when firewalld is running
   when: (ansible_facts.services.get('firewalld.service', {})).get('state', '') == 'running'
   block:
@@ -178,6 +182,25 @@
   ansible.builtin.assert:
     that:
       - ollama_gpu_api.json.gpus | length > 0
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Verify continuous service metrics on the private helper
+  ansible.builtin.uri:
+    url: "http://{{ ollama_listen_address }}:{{ ollama_gpu_telemetry_port }}/metrics"
+    return_content: true
+    use_proxy: false
+    status_code: 200
+  register: ollama_metrics_api
+  when: not ansible_check_mode
+
+- name: Confirm host service and GPU accounting are readable
+  ansible.builtin.assert:
+    that:
+      - "'ollama_service_collector_success 1' in ollama_metrics_api.content"
+      - "'ollama_host_collector_success 1' in ollama_metrics_api.content"
+      - "'ollama_gpu_collector_success 1' in ollama_metrics_api.content"
+      - "'ollama_api_up 1' in ollama_metrics_api.content"
     quiet: true
   when: not ansible_check_mode
 
