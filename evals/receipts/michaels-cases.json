@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {
+      "id": "michaels-return-20260531",
+      "split": "validation",
+      "source": "2026-08-11/receipt_0009.pdf",
+      "pages": [
+        1
+      ],
+      "expected_file": "michaels-image-reference.json",
+      "complete_items": true
+    }
+  ]
+}

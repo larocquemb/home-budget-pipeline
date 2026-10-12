@@ -201,3 +201,112 @@ def test_overlapping_aliases_use_maximum_one_to_one_matching():
 def test_malformed_answer_keys_cannot_be_scored(expected):
     with pytest.raises(ValueError):
         evaluation.validate_reference(expected)
+
+
+def test_financial_checks_find_reward_money_and_missing_duplicate_fee():
+    output = receipt(subtotal=10.24, tax=1, total=11.24, items=[
+        {'item_name': 'Milk', 'line_total': 10, 'category': None},
+        {'item_name': '+EHC', 'line_total': .12, 'category': None},
+        {'item_name': 'POINTS EARNED', 'line_total': 200, 'category': None}])
+    rules = {'reconcile_items_to_subtotal': True,
+             'required_fees': [{'item_name': '+EHC', 'line_total': .12}] * 2,
+             'non_monetary_patterns': ['^POINTS EARNED']}
+    result = evaluation.score(output, {'subtotal': 10.24, 'tax': 1}, financial_rules=rules)
+    financial = result['financial']
+    assert financial['signed_item_sum'] == 210.12
+    assert financial['item_sum_matches_reference_subtotal'] is False
+    assert financial['fees_matched'] == 1 and financial['fees_scored'] == 2
+    assert financial['non_monetary_rows'] == [output['items'][-1]]
+
+
+def test_reconciliation_uses_signed_values_and_verified_subtotal():
+    output = receipt(subtotal=-10, tax=-1.3, total=-11.3, items=[
+        {'item_name': 'Return', 'line_total': -12, 'category': None},
+        {'item_name': 'Adjustment', 'line_total': 2, 'category': None}])
+    rules = {'reconcile_items_to_subtotal': True}
+    financial = evaluation.score(output, {'subtotal': -10}, financial_rules=rules)['financial']
+    assert financial['item_sum_matches_reference_subtotal'] is True
+    output['subtotal'] = -9
+    financial = evaluation.score(output, {'subtotal': -10}, financial_rules=rules)['financial']
+    assert financial['item_sum_matches_reference_subtotal'] is True
+    assert financial['item_sum_matches_reported_subtotal'] is False
+
+
+def saved_report(tmp_path):
+    reference = tmp_path / 'reference.json'
+    reference.write_text(json.dumps({'source_sha256': 'source-hash',
+        'expected': {'total': 11.3, 'subtotal': 10},
+        'financial_rules': {'reconcile_items_to_subtotal': True}}))
+    manifest = tmp_path / 'cases.json'
+    manifest.write_text(json.dumps({'cases': [{'id': 'case', 'pages': [1], 'expected_file': reference.name}]}))
+    source = tmp_path / 'original.json'
+    source.write_text(json.dumps({'run_id': 'old-run', 'finished_at': 'original-time',
+        'models': [{'name': 'model'}], 'model_digests_unchanged': True,
+        'cases': [{'id': 'case', 'source_sha256': 'source-hash',
+                   'images': [{'page_number': 1, 'sha256': 'image-hash'}]}],
+        'runs': [{'model': 'model', 'case': 'case', 'repeat': 1, 'status': 'ok',
+                  'output': receipt(), 'wall_seconds': 12.13, 'quality': {}}]}))
+    return source, manifest, reference
+
+
+def test_offline_rescore_preserves_outputs_timings_and_original_without_network(monkeypatch, tmp_path):
+    source, manifest, _ = saved_report(tmp_path)
+    original = source.read_bytes()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Offline rescoring must not call network or render images')
+    for name in ('get_json', 'model_snapshot', 'render_images'):
+        monkeypatch.setattr(evaluation, name, forbidden)
+    monkeypatch.setattr(evaluation.providers, 'request', forbidden)
+    assert evaluation.main(['--rescore', str(source), '--cases', str(manifest),
+                            '--output', str(tmp_path / 'output')]) == 0
+    result = json.loads(next((tmp_path / 'output').glob('*/report.json')).read_text())
+    assert source.read_bytes() == original
+    assert result['runs'][0]['output'] == receipt()
+    assert result['runs'][0]['wall_seconds'] == 12.13
+    assert result['rescore_of']['report_sha256'] == evaluation.digest(original)
+    assert result['runs'][0]['quality']['financial']['item_sum_matches_reference_subtotal'] is True
+
+
+@pytest.mark.parametrize('mismatch', ['source', 'pages'])
+def test_rescore_rejects_different_receipt_evidence(tmp_path, mismatch):
+    source, manifest, reference = saved_report(tmp_path)
+    if mismatch == 'source':
+        data = json.loads(reference.read_text()); data['source_sha256'] = 'different-source'
+        reference.write_text(json.dumps(data))
+    else:
+        data = json.loads(manifest.read_text()); data['cases'][0]['pages'] = [2]
+        manifest.write_text(json.dumps(data))
+    assert evaluation.rescore_report(source, manifest, tmp_path / 'output') == 2
+    assert not (tmp_path / 'output').exists()
+
+
+def test_sobeys_image_reference_omits_invisible_summary_and_preserves_price_counts():
+    manifest = Path('evals/receipts/cases.json')
+    entry = json.loads(manifest.read_text())['cases'][0]
+    expected, _, metadata = evaluation.load_reference(entry, manifest)
+    assert 'merchant' not in expected and 'transaction_date' not in expected
+    assert expected['tax'] == 8.09
+    assert len(expected['items']) == 23
+    assert expected['items'][:2] == [{'item_name': 'Cep Pic Med', 'line_total': 6.49}] * 2
+    assert len(metadata['financial_rules']['required_fees']) == 2
+    assert round(sum(metadata['tax_components'].values()), 2) == expected['tax']
+
+
+def test_partial_rescore_stays_incomplete(tmp_path):
+    source, manifest, _ = saved_report(tmp_path)
+    report = json.loads(source.read_text()); report.pop('finished_at')
+    source.write_text(json.dumps(report))
+    assert evaluation.rescore_report(source, manifest, tmp_path / 'output') == 1
+    markdown = next((tmp_path / 'output').glob('*/report.md')).read_text()
+    assert 'In progress / partial' in markdown
+
+
+def test_tax_component_provenance_cannot_disagree_with_combined_label(tmp_path):
+    _, manifest, reference = saved_report(tmp_path)
+    data = json.loads(reference.read_text())
+    data['expected']['tax'] = 8.09
+    data['tax_components'] = {'GST': 3.37, 'PST': 4.35}
+    reference.write_text(json.dumps(data))
+    entry = json.loads(manifest.read_text())['cases'][0]
+    with pytest.raises(ValueError, match='sum'):
+        evaluation.load_reference(entry, manifest)
