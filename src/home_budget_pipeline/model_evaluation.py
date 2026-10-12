@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import statistics
 import subprocess
@@ -31,6 +32,7 @@ PROMPT = (
     'balance by inventing items. Return only the requested JSON.'
 )
 SUMMARY_FIELDS = ('merchant', 'transaction_date', 'payment_method', 'subtotal', 'tax', 'total')
+SCORING_VERSION = 'receipt-financial-v2'
 SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'required': [*SUMMARY_FIELDS, 'items'],
@@ -121,7 +123,7 @@ def validate_reference(expected):
             raise ValueError('Reference category must be a string or null')
 
 
-def score(output, expected, complete_items=False):
+def score(output, expected, complete_items=False, financial_rules=None):
     """Missing labels are unscored. Each actual row can satisfy one reference row."""
     checks = []
     for key in SUMMARY_FIELDS:
@@ -170,7 +172,7 @@ def score(output, expected, complete_items=False):
                         'actual': actual_items[by_reference[index]]['category'] if index in by_reference else None,
                         'match': index in by_reference and actual_items[by_reference[index]]['category'] == reference['category']}
                        for index, reference in enumerate(references) if 'category' in reference]
-    return {'summary_checks': checks, 'summary_matches': sum(c['match'] for c in checks),
+    result = {'summary_checks': checks, 'summary_matches': sum(c['match'] for c in checks),
             'summary_scored': len(checks), 'known_items_matched': len(matched),
             'known_items_scored': len(references), 'matched_items': matched,
             'missing_items': missing, 'unexpected_items': unexpected,
@@ -182,6 +184,73 @@ def score(output, expected, complete_items=False):
             'item_sum_minus_subtotal': float(sum((cents(row['line_total']) or Decimal(0)
                 for row in output['items']), Decimal(0)) - subtotal)
                 if subtotal is not None and all(row['line_total'] is not None for row in output['items']) else None}
+    signed_sum = (sum((cents(row['line_total']) for row in actual_items), Decimal(0))
+                  if all(row['line_total'] is not None for row in actual_items) else None)
+    rules = financial_rules or {}
+    reference_subtotal = cents(expected.get('subtotal'))
+    forbidden = [row for row in actual_items if any(
+        re.search(pattern, row['item_name'], re.IGNORECASE)
+        for pattern in rules.get('non_monetary_patterns', []))]
+    fees = rules.get('required_fees', [])
+    fee_quality = score(output, {'items': fees}) if fees else None
+    result['financial'] = {
+        'signed_item_sum': float(signed_sum) if signed_sum is not None else None,
+        'item_sum_matches_reported_subtotal': signed_sum == subtotal if signed_sum is not None and subtotal is not None else None,
+        'item_sum_matches_reference_subtotal': (signed_sum == reference_subtotal if signed_sum is not None else False)
+            if rules.get('reconcile_items_to_subtotal') else None,
+        'reference_subtotal': expected.get('subtotal') if rules.get('reconcile_items_to_subtotal') else None,
+        'non_monetary_rows': forbidden if 'non_monetary_patterns' in rules else None,
+        'fees_matched': fee_quality['known_items_matched'] if fee_quality else None,
+        'fees_scored': len(fees) if 'required_fees' in rules else None,
+        'missing_fees': fee_quality['missing_items'] if fee_quality else [],
+    }
+    return result
+
+
+def load_reference(entry, manifest):
+    expected = entry.get('expected', {})
+    reference_hash, metadata = None, {}
+    if entry.get('expected_file'):
+        raw = (manifest.parent / entry['expected_file']).read_bytes()
+        reference = json.loads(raw)
+        reference_hash = digest(raw)
+        expected = reference['expected']
+        metadata = {key: reference[key] for key in
+                    ('source_sha256', 'verification', 'unscored_fields', 'tax_components', 'financial_rules')
+                    if key in reference}
+    elif entry.get('expected_fixture'):
+        raw = (manifest.parent / entry['expected_fixture']).read_bytes()
+        fixture = json.loads(raw)
+        reference_hash = digest(raw)
+        expected = dict(fixture['expected'])
+        expected['items'] = [{'item_name': row['item_name'], 'line_total': row['line_total']}
+                             for row in fixture['detected_items']]
+        for row in fixture['items_to_find']:
+            expected['items'].extend({'aliases': row['ocr_names'], 'line_total': amount}
+                                     for amount in row['line_totals'])
+    validate_reference(expected)
+    rules = metadata.get('financial_rules', {})
+    if not isinstance(rules, dict):
+        raise ValueError('Financial rules must be an object')
+    if rules.get('reconcile_items_to_subtotal') and cents(expected.get('subtotal')) is None:
+        raise ValueError('Reconciliation requires a verified subtotal')
+    if 'reconcile_items_to_subtotal' in rules and not isinstance(rules['reconcile_items_to_subtotal'], bool):
+        raise ValueError('Reconciliation rule must be boolean')
+    if 'required_fees' in rules:
+        validate_reference({'items': rules['required_fees']})
+    patterns = rules.get('non_monetary_patterns', [])
+    if not isinstance(patterns, list) or any(not isinstance(pattern, str) for pattern in patterns):
+        raise ValueError('Non-monetary patterns must be an array of strings')
+    for pattern in patterns:
+        re.compile(pattern, re.IGNORECASE)
+    if metadata.get('tax_components'):
+        values = metadata['tax_components'].values()
+        if any(type(value) not in (int, float) or not math.isfinite(value) for value in values):
+            raise ValueError('Tax components must be finite numbers')
+        if sum((cents(value) for value in metadata['tax_components'].values()), Decimal(0)) != cents(expected.get('tax')):
+            raise ValueError('Verified tax components must sum to the combined tax reference')
+    return expected, reference_hash, metadata
+
 
 
 def get_json(base, path):
@@ -199,20 +268,9 @@ def load_cases(manifest, receipt_root):
         if source.stat().st_size > MAX_SOURCE_BYTES:
             raise ValueError(f"Receipt {entry['id']} exceeds the image renderer's source limit")
         source_bytes = source.read_bytes()
-        expected = entry.get('expected', {})
-        reference_hash = None
-        if entry.get('expected_fixture'):
-            reference = (manifest.parent / entry['expected_fixture']).resolve()
-            reference_bytes = reference.read_bytes()
-            reference_hash = digest(reference_bytes)
-            fixture = json.loads(reference_bytes)
-            expected = dict(fixture['expected'])
-            # Existing regression fixture labels only these known purchase rows.
-            expected['items'] = [{'item_name': row['item_name'], 'line_total': row['line_total']}
-                                 for row in fixture['detected_items']]
-            for row in fixture['items_to_find']:
-                expected['items'].extend({'aliases': row['ocr_names'], 'line_total': amount}
-                                         for amount in row['line_totals'])
+        expected, reference_hash, metadata = load_reference(entry, manifest)
+        if metadata.get('source_sha256') and metadata['source_sha256'] != digest(source_bytes):
+            raise ValueError(f"Receipt source hash differs from verified reference for {entry['id']}")
         complete = entry.get('complete_items', False)
         if not isinstance(complete, bool) or not expected:
             raise ValueError('Cases require explicit reference labels and boolean complete_items')
@@ -228,7 +286,8 @@ def load_cases(manifest, receipt_root):
             raise ValueError(f"Cannot render selected receipt pages for {entry['id']}: {errors}")
         cases.append({'id': entry['id'], 'split': entry.get('split', 'development'),
                       'source_sha256': digest(source_bytes), 'reference_sha256': reference_hash,
-                      'expected': expected, 'complete_items': complete, 'images': images})
+                      'expected': expected, 'complete_items': complete, 'images': images,
+                      'reference_metadata': metadata})
     if not cases or len({case['id'] for case in cases}) != len(cases):
         raise ValueError('Supply one or more cases with unique IDs')
     return cases
@@ -267,6 +326,30 @@ def report_markdown(report):
             items = ', '.join(f"{row['quality']['known_items_matched']}/{row['quality']['known_items_scored']}" for row in good) or 'unscored'
             wall = f"{statistics.median(row['wall_seconds'] for row in good):.2f}" if good else '—'
             lines.append(f"| {model['name']} | {case['id']} | {len(good)}/{len(rows)} | {summary} | {items} | {wall} |")
+    if report.get('rescore_of'):
+        lines.extend(['', f"Rescored saved outputs from `{report['rescore_of']['run_id']}`; no new inference was performed."])
+    lines.extend(['', '## Financial correctness', '',
+                  '| Model | Case | Repeat | Tax matches reference | Rows reconcile to verified subtotal | Fees matched | Non-monetary rows included |',
+                  '|---|---|---:|---|---|---|---:|'])
+    def verdict(value):
+        return 'unscored' if value is None else 'PASS' if value else 'FAIL'
+    for row in report['runs']:
+        if row['status'] != 'ok':
+            continue
+        quality = row['quality']
+        financial = quality.get('financial', {})
+        tax = next((check['match'] for check in quality['summary_checks'] if check['field'] == 'tax'), None)
+        fees = (f"{financial['fees_matched']}/{financial['fees_scored']}"
+                if financial.get('fees_scored') is not None else 'unscored')
+        exclusions = financial.get('non_monetary_rows')
+        lines.append(f"| {row['model']} | {row['case']} | {row['repeat']} | {verdict(tax)} | "
+                     f"{verdict(financial.get('item_sum_matches_reference_subtotal'))} | {fees} | "
+                     f"{len(exclusions) if exclusions is not None else 'unscored'} |")
+    lines.extend(['', '## Reference coverage', ''])
+    for case in report['cases']:
+        metadata = case.get('reference_metadata', {})
+        for field, reason in metadata.get('unscored_fields', {}).items():
+            lines.append(f"- {case['id']}: {field} unscored — {reason}")
     lines.extend(['', '## Repeat consistency', ''])
     for model in report['models']:
         for case in report['cases']:
@@ -292,6 +375,13 @@ def report_markdown(report):
             lines.append(f"- {prefix}: {quality['categories_scored'] - quality['categories_matched']} verified categories did not match.")
         if quality['subtotal_plus_tax_matches_total'] is False:
             lines.append(f'- {prefix}: subtotal + tax differs from total (informational).')
+        financial = quality.get('financial', {})
+        if financial.get('item_sum_matches_reference_subtotal') is False:
+            lines.append(f"- {prefix}: signed row sum {financial['signed_item_sum']} differs from verified subtotal {financial['reference_subtotal']}.")
+        for item in financial.get('non_monetary_rows') or []:
+            lines.append(f"- {prefix}: non-monetary annotation {item['item_name']!r} included as an item with amount {item['line_total']}.")
+        if financial.get('missing_fees'):
+            lines.append(f"- {prefix}: {len(financial['missing_fees'])} verified fee rows missing.")
     lines.extend(['', '## Review before promotion', '',
                   '- Inspect the saved outputs and discrepancies; no aggregate winner is chosen automatically.',
                   '- Review model digests, prompt/settings, case hashes, and repeat consistency in report.json.',
@@ -300,10 +390,58 @@ def report_markdown(report):
     return '\n'.join(lines)
 
 
+def rescore_report(source, manifest, output_root):
+    """Preserve original outputs/timings and bind new labels to the same evidence."""
+    try:
+        raw = source.read_bytes()
+        report = json.loads(raw)
+        entries = {entry['id']: entry for entry in json.loads(manifest.read_text())['cases']}
+        for case in report['cases']:
+            entry = entries[case['id']]
+            expected, reference_hash, metadata = load_reference(entry, manifest)
+            if metadata.get('source_sha256') != case['source_sha256']:
+                raise ValueError('Offline rescoring requires a verified reference bound to the same source hash')
+            if entry.get('pages', [1]) != [image['page_number'] for image in case['images']]:
+                raise ValueError('Selected pages differ from the original model inputs')
+            case.update(expected=expected, reference_sha256=reference_hash,
+                        complete_items=entry.get('complete_items', False), reference_metadata=metadata)
+            if not isinstance(case['complete_items'], bool):
+                raise ValueError('complete_items must be boolean')
+        cases = {case['id']: case for case in report['cases']}
+        for row in report['runs']:
+            if row['status'] != 'ok':
+                continue
+            if not valid_contract(row['output']):
+                raise ValueError('Saved successful output violates the extraction contract')
+            case = cases[row['case']]
+            row['quality'] = score(row['output'], case['expected'], case['complete_items'],
+                                   case['reference_metadata'].get('financial_rules'))
+        report['rescore_of'] = {'run_id': report['run_id'], 'report_sha256': digest(raw)}
+        report['run_id'] += '-rescore-' + uuid.uuid4().hex[:8]
+        report['rescored_at'] = datetime.now(timezone.utc).isoformat()
+        report['scoring_version'] = SCORING_VERSION
+        report['scoring_manifest_sha256'] = digest(manifest.read_bytes())
+        report['scoring_git_commit'] = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+        directory = output_root / report['run_id']
+        directory.mkdir(parents=True, exist_ok=False)
+        os.chmod(directory, 0o700)
+        for name, content in [('report.json', json.dumps(report, indent=2, allow_nan=False)),
+                              ('report.md', report_markdown(report))]:
+            target = directory / name
+            target.write_text(content)
+            os.chmod(target, 0o600)
+        print(f'Rescored report: {directory / "report.md"}')
+        return 1 if 'finished_at' not in report or any(row['status'] != 'ok' for row in report['runs']) or report.get('model_digests_unchanged') is not True else 0
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        print(f'Rescoring failed: {exc}')
+        return 2
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--baseline', required=True)
-    parser.add_argument('--candidate', required=True)
+    parser.add_argument('--baseline')
+    parser.add_argument('--candidate')
+    parser.add_argument('--rescore', type=Path, help='Rescore saved outputs without inference or image rendering')
     parser.add_argument('--cases', type=Path, default=Path('evals/receipts/cases.json'))
     parser.add_argument('--receipt-root', type=Path, default=Path('.receipt-test/inbox'))
     parser.add_argument('--output', type=Path, default=Path('.model-evals'))
@@ -312,6 +450,10 @@ def main(argv=None):
     parser.add_argument('--output-tokens', type=int, default=8192)
     parser.add_argument('--timeout', type=float, default=600)
     args = parser.parse_args(argv)
+    if args.rescore:
+        return rescore_report(args.rescore, args.cases, args.output)
+    if not args.baseline or not args.candidate:
+        parser.error('Supply --baseline and --candidate, or --rescore')
     if args.baseline == args.candidate or not 1 <= args.repeats <= 10:
         parser.error('Use distinct models and 1..10 repeats')
     if not 1024 <= args.context_tokens <= 65536 or not 256 <= args.output_tokens <= 16384 or args.output_tokens >= args.context_tokens or args.timeout <= 0:
@@ -336,7 +478,7 @@ def main(argv=None):
     directory = args.output / run_id
     directory.mkdir(parents=True, exist_ok=False)
     os.chmod(directory, 0o700)
-    report = {'run_id': run_id, 'started_at': datetime.now(timezone.utc).isoformat(),
+    report = {'run_id': run_id, 'scoring_version': SCORING_VERSION, 'started_at': datetime.now(timezone.utc).isoformat(),
               'git_commit': commit.stdout.strip() if commit.returncode == 0 else None,
               'git_dirty': bool(dirty.stdout.strip()), 'ollama_url': base, 'ollama_version': version,
               'models': models, 'prompt': PROMPT, 'prompt_sha256': digest(PROMPT.encode()),
@@ -378,7 +520,8 @@ def main(argv=None):
                         raise ValueError('Model returned an invalid extraction contract')
                     row.update(status='ok', output=response['output'],
                                usage={key: value for key, value in response.items() if key != 'output'},
-                               quality=score(response['output'], case['expected'], case['complete_items']))
+                               quality=score(response['output'], case['expected'], case['complete_items'],
+                                             case.get('reference_metadata', {}).get('financial_rules')))
                 except (ValueError, OSError, KeyError, TypeError) as exc:
                     row.update(status='error', error_type=type(exc).__name__, error_message=str(exc)[:1000])
                     if isinstance(exc, providers.IncompleteModelOutput):

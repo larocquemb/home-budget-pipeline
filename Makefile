@@ -44,6 +44,7 @@ EVAL_CONTEXT_TOKENS ?= 32768
 EVAL_OUTPUT_TOKENS ?= 8192
 
 .PHONY: eval-models
+.PHONY: eval-rescore
 
 .PHONY: help docs-build docs-serve test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts status otlp-demo dev-up dev-down dev-web dev-cert-install dev-db-reset dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down enrich-products postgres-config-check postgres-config-apply postgres-password-rotate deploy-k3s k3s-config-check k3s-config-apply monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare
 
@@ -308,3 +309,7 @@ k3s-postgres-grafana-apply:
 
 eval-models:
 	@PYTHONPATH=src $(PYTHON) -m home_budget_pipeline.model_evaluation --baseline "$(BASELINE)" --candidate "$(CANDIDATE)" --cases "$(EVAL_CASES)" --receipt-root "$(RECEIPT_ROOT)" --repeats "$(EVAL_REPEATS)" --output "$(EVAL_OUTPUT)" --context-tokens "$(EVAL_CONTEXT_TOKENS)" --output-tokens "$(EVAL_OUTPUT_TOKENS)"
+
+eval-rescore:
+	@test -n "$(REPORT)" || (echo "Usage: make eval-rescore REPORT=path/to/report.json" >&2; exit 2)
+	@PYTHONPATH=src $(PYTHON) -m home_budget_pipeline.model_evaluation --rescore "$(REPORT)" --cases "$(EVAL_CASES)" --output "$(EVAL_OUTPUT)"
