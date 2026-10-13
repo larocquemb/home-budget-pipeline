@@ -106,7 +106,7 @@ def reading_hypotheses(sources, merchant):
     for source in sources:
         # A trailing receipt price/tax marker is not a different product reading.
         # The unmodified line (including price) stays in the evidence bundle.
-        reading = re.sub(r'\s+\$?\d+[.,]\d{2}(?:\s+[A-Za-z])?\s*$', '', source['text']).strip()
+        reading = core.RECEIPT_SUFFIX_RE.sub('', source['text']).strip()
         query = core.product_query(reading, merchant)
         if not query:
             continue
@@ -592,7 +592,8 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
         core.candidate_evidence(h['reading'], core.retailer_domain(row['store_name']), r.title, r.url, r.snippet)['confidence'] >= threshold
         for query, r in baseline if query == h['query'])]
     def verified_product(result):
-        score = core.candidate_evidence(row['item_name'], core.retailer_domain(row['store_name']), result.title, result.url, result.snippet)
+        score = core.candidate_receipt_evidence(row['item_name'], core.retailer_domain(row['store_name']), result.title, result.url, result.snippet,
+                                              [s for s in bundle['sources'] if s['id'] in known_sources])
         return score['product_page'] and score['confidence'] >= threshold and any(
             s['id'] in known_sources and s['kind'] in {'ocr_pass', 'ocr_consensus', 'ocr_layout'} and
             core.candidate_score(s['text'], core.retailer_domain(row['store_name']), result.title, result.url, result.snippet) >= threshold
@@ -750,7 +751,8 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     for query, result in sorted(pool, key=lambda entry: entry[1].score, reverse=True):
         identifier = candidate_id(result.url)
         if identifier in cards: continue
-        score = core.candidate_evidence(row['item_name'], core.retailer_domain(row['store_name']), result.title, result.url, result.snippet)
+        score = core.candidate_receipt_evidence(row['item_name'], core.retailer_domain(row['store_name']), result.title, result.url, result.snippet,
+                                              [s for s in bundle['sources'] if s['id'] in known_sources])
         support = [s['id'] for s in bundle['sources'] if s['id'] in known_sources and s['kind'] in {'ocr_pass', 'ocr_consensus', 'ocr_layout'}
             and core.candidate_score(s['text'], core.retailer_domain(row['store_name']), result.title, result.url, result.snippet) >= threshold]
         cards[identifier] = {'id': identifier, 'query': query, 'title': result.title, 'url': result.url,

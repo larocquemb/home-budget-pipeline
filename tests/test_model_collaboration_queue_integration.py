@@ -15,6 +15,7 @@ def services(monkeypatch):
     if not dsn or not url:
         pytest.skip('Requires test PostgreSQL and RabbitMQ')
     monkeypatch.setattr(queue, 'PREFIX', 'test.models.' + uuid4().hex)
+    monkeypatch.setenv('COLLAB_TASK_TIMEOUT_SECONDS', '30')
     return dsn, url
 
 
@@ -28,7 +29,7 @@ def test_provider_tasks_overlap_and_duplicate_delivery_reuses_committed_result(s
         return {'status': 'success', 'provider': task['profile']['provider']}
     monkeypatch.setattr(queue, 'execute_task', handler)
     def worker(provider):
-        try: queue.worker(provider, dsn, url, stop)
+        try: queue.consume_loop(provider, dsn, url, stop)
         except Exception as exc: failures.append(exc)
     threads = [Thread(target=worker, args=(p,), daemon=True) for p in ('qwen', 'openai')]
     for thread in threads: thread.start()
@@ -38,6 +39,7 @@ def test_provider_tasks_overlap_and_duplicate_delivery_reuses_committed_result(s
     try:
         for stage in ('independent', 'exchange'):
             results = dispatcher.round(stage, profiles, {}, context)
+            assert all(r.get('status') == 'success' for r in results), (results, failures)
             assert {r['provider'] for r in results} == {'qwen', 'openai'}
             assert all(r['task_provenance']['worker_identity']['worker_host'] for r in results)
             if stage == 'independent': initial_results = results

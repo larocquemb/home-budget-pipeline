@@ -11,10 +11,11 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from decimal import Decimal
+from difflib import SequenceMatcher
 from typing import Optional
 
 LOG = logging.getLogger(__name__)
-SCORING_VERSION = 'receipt-evidence-v3'
+SCORING_VERSION = 'receipt-evidence-v4'
 
 RETAILER_DOMAINS = {
     "costco": "costco.ca",
@@ -27,7 +28,7 @@ RETAILER_DOMAINS = {
     "old navy": "oldnavy.gapcanada.ca",
 }
 BARCODE_RE = re.compile(r"\b\d{8,14}\b")
-RECEIPT_SUFFIX_RE = re.compile(r"(?:\s+\d+[.,]\d{2})?\s+(?:GP|LP|FP|H|A|B|T)$", re.IGNORECASE)
+RECEIPT_SUFFIX_RE = re.compile(r"\s+\$?\d+[.,]\d{2}\.?(?:\s+(?:BC|BR|GP|LP|FP|[ACBHT]))?\s*$|(?:\s+\d+[.,]\d{2})?\s+(?:GP|LP|FP|H|A|B|T)$", re.IGNORECASE)
 NOISE_TOKENS = {"acct", "cad", "each", "flash", "gp", "lp", "save", "upto"}
 PRODUCT_PATH_MARKERS = {
     "costco.ca": (".product.", "/product/"),
@@ -154,7 +155,7 @@ def scoped_search_query(expansion: str, merchant: str) -> Optional[str]:
 def evidence_text(text: str) -> str:
     """Normalize spacing in recorded package units without dropping their values."""
     return re.sub(r'\b(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l|lb|oz)\b',
-                  lambda m: m[1].replace(',', '.') + m[2], text.lower())
+                  lambda m: format(Decimal(m[1].replace(',', '.')).normalize(), 'f') + m[2], text.lower())
 
 
 def evidence_words(text: str) -> list[str]:
@@ -237,6 +238,43 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
 
 def candidate_score(item_name: str, domain: str, title: str, url: str, snippet: str = "") -> float:
     return candidate_evidence(item_name, domain, title, url, snippet)["confidence"]
+
+
+def candidate_receipt_evidence(item_name: str, domain: str, title: str, url: str,
+                               snippet: str, sources: list[dict]) -> dict:
+    """Resolve a single OCR glyph only when a retained observation records it."""
+    evidence = candidate_evidence(item_name, domain, title, url, snippet)
+    if not evidence['product_page'] or sum(t['kind'] == 'unmatched' for t in evidence['tokens']) != 1:
+        return evidence
+    confusions = {('m', 'n'), ('n', 'm'), ('i', 'l'), ('l', 'i'), ('c', 'o'), ('o', 'c')}
+    tokens = [dict(t) for t in evidence['tokens']]
+    canonical = normalized_cache_item_name(item_name)
+    for source in sources:
+        if source.get('kind') not in {'ocr_pass', 'ocr_consensus', 'ocr_layout'}:
+            continue
+        reading = RECEIPT_SUFFIX_RE.sub('', source['text']).strip()
+        if SequenceMatcher(None, canonical, normalized_cache_item_name(reading)).ratio() < .9:
+            continue
+        observed = candidate_evidence(reading, domain, title, url, snippet)
+        for token in tokens:
+            text = token['token']
+            if token['kind'] not in {'unmatched', 'observed_ocr_glyph'} or not text.isalpha() or not 3 <= len(text) <= 10:
+                continue
+            for observation in observed['tokens']:
+                alternative = observation['token']
+                differences = [(a, b) for a, b in zip(text, alternative) if a != b]
+                if (len(alternative) == len(text) and len(differences) == 1 and differences[0] in confusions
+                        and observation['kind'] != 'unmatched'):
+                    ids = token.get('source_ids', [])
+                    if source['id'] not in ids:
+                        ids = [*ids, source['id']]
+                    token.update(kind='observed_ocr_glyph', matched=observation['matched'], weight=.85,
+                                 observed_token=alternative, source_ids=ids)
+                    break
+    score = sum(t['weight'] for t in tokens) / len(tokens) if len(tokens) >= 2 else 0.0
+    if any(t['kind'] == 'unmatched' for t in tokens):
+        score = min(score, .84)
+    return {**evidence, 'tokens': tokens, 'confidence': round(score, 4)}
 
 
 def normalized_item_name_from_verified_product(item_name: str, product_title: str, confidence: float) -> Optional[str]:

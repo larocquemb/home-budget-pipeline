@@ -347,3 +347,28 @@ def test_independent_proposals_are_only_shared_after_the_exchange_barrier():
             if invocation['properties']['collaboration_round'] == 'independent':
                 assert invocation['properties']['profile'] == proposal['properties']['profile']
     assert len([e for e in graph['edges'] if e['kind'] == 'SHARED_IN']) == 4
+def test_collaboration_history_is_consumed_one_payload_at_a_time():
+    consumed = []
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, query, params):
+            assert params == (42,)
+        def __iter__(self):
+            assert self.itersize == 1
+            for i in range(50):
+                consumed.append(i)
+                yield {'payload': {'run_uuid': str(i)}, 'id': i}
+        def fetchall(self):
+            raise AssertionError('History must not be buffered')
+    class Connection:
+        def execute(self, *args): return self
+        def fetchone(self): return {'name': None}
+        def cursor(self, name): return Cursor()
+    rows = g.load_collaborations(Connection(), 42)
+    assert consumed == []
+    assert next(rows)['id'] == 0
+    assert consumed == [0]
+    assert next(rows)['id'] == 1
+    assert consumed == [0, 1]
+    rows.close()

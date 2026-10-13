@@ -258,6 +258,17 @@ def worker(provider, dsn, url, stop=None):
                 connection.close()
 
 
+def consume_loop(provider, dsn, url, stop):
+    """Use the production reconnect path for transient quorum-queue startup races."""
+    while not stop.is_set():
+        try:
+            worker(provider, dsn, url, stop)
+        except Exception as exc:
+            print(json.dumps({'event': 'collaboration_worker_error', 'provider': provider,
+                              'error_type': type(exc).__name__}), flush=True)
+            stop.wait(1)
+
+
 def main():
     import argparse
     import signal
@@ -268,13 +279,7 @@ def main():
     stop = Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
-    while not stop.is_set():
-        try:
-            worker(args.provider, os.environ['DATABASE_URL'], os.environ['RABBITMQ_URL'], stop)
-        except Exception as exc:
-            print(json.dumps({'event': 'collaboration_worker_error', 'provider': args.provider,
-                              'error_type': type(exc).__name__}), flush=True)
-            stop.wait(1)
+    consume_loop(args.provider, os.environ['DATABASE_URL'], os.environ['RABBITMQ_URL'], stop)
 
 
 def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, priors=(), refresh=False):
@@ -299,8 +304,8 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
                          'proposals': [{k: r.get(k) for k in ('provider', 'status', 'output')} for r in result.get('proposals', [])]})
         for card in result.get('search_results', []):
             identifier = collaboration.candidate_id(card['url'])
-            evidence = core.candidate_evidence(row['item_name'], core.retailer_domain(row['store_name']),
-                                              card['title'], card['url'], card['snippet'])
+            evidence = core.candidate_receipt_evidence(row['item_name'], core.retailer_domain(row['store_name']),
+                                              card['title'], card['url'], card['snippet'], bundle['sources'])
             support = [s['id'] for s in bundle['sources'] if s['kind'] in {'ocr_pass', 'ocr_consensus', 'ocr_layout'} and
                        core.candidate_score(s['text'], core.retailer_domain(row['store_name']), card['title'], card['url'], card['snippet']) >= threshold]
             rebuilt = {**card, 'id': identifier, 'evidence': evidence, 'confidence': evidence['confidence'], 'ocr_support': support}
@@ -341,19 +346,17 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
         errors.append({'stage': 'exchange_image', 'error_type': 'ReceiptImageEvidenceChanged'})
     min_families = min(2, len({p.provider for p in profiles}))
     # The literal-search quota is a discovery limit, not missing receipt evidence.
-    # Recover it only after every provider reviews the complete source bundle and
-    # agrees on an eligible, cited retailer product. Real search failures remain blocking.
+    # Once every final review completes with the full source bundle, reaching a
+    # planned discovery quota is a warning even if the reviewers abstain. It
+    # never supplies product evidence or agreement. Real failures remain blocking.
     budget_errors = [e for e in errors if e.get('stage') == 'ocr_alternative_search'
                      and e.get('error_type') == 'HypothesisBudgetExceeded']
     remaining_errors = [e for e in errors if e not in budget_errors]
-    decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, remaining_errors, complete,
-                                        min_provider_families=min_families)
-    arithmetic_verified = all(bundle['validations'].get(key) == 'pass' for key in ('receipt_arithmetic', 'item_arithmetic'))
-    recovered_errors = budget_errors if decision['disposition'] == 'recommended' and arithmetic_verified else []
+    reviews_complete = len(reviews) == len(profiles) and all(r['status'] == 'success' for r in reviews)
+    recovered_errors = budget_errors if complete and reviews_complete and not remaining_errors else []
     blocking_errors = remaining_errors if recovered_errors else errors
-    if not recovered_errors:
-        decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete,
-                                            min_provider_families=min_families)
+    decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, blocking_errors, complete,
+                                        min_provider_families=min_families)
     if any(bundle['validations'].get(key) != 'pass' for key in ('receipt_arithmetic', 'item_arithmetic')):
         decision['disposition'] = 'review'
         decision['reasons'].append('receipt_arithmetic_not_verified')
