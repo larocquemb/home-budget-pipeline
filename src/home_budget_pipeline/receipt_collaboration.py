@@ -71,6 +71,7 @@ six. Return the requested JSON with a short reason explaining the expansions.
 '''
 
 IMAGE_TOKEN_RESERVE = 4096
+MAX_REVIEW_CANDIDATES = 32
 
 
 def prompt_observation(source):
@@ -295,8 +296,10 @@ def thinking_only_truncation(result):
 
 def descriptive_token_evidence(reading, merchant, result):
     """Brand overlap alone cannot explain the receipt's product/style tokens."""
+    # This selects discovery clues, not eligible product identities. Snippets
+    # may guide a new search; final scoring below uses only title and URL.
     evidence = core.candidate_evidence(reading, core.retailer_domain(merchant),
-        result.title, result.url, result.snippet)
+        result.title + ' ' + result.snippet, result.url)
     original_tokens = re.findall(r'[a-z0-9]+', reading.lower())
     brand_token = original_tokens[0] if original_tokens else None
     # Scoring drops short/noise tokens. Remove the actual leading token only if
@@ -757,7 +760,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     # Brand indexes, store pages and recipes are discovery context, not selectable products.
     candidates = [card for card in cards.values() if card['evidence']['product_page'] and
         card['confidence'] >= threshold and card['ocr_support'] and
-        all(t['kind'] != 'unmatched' for t in card['evidence']['tokens'])][:8]
+        all(t['kind'] != 'unmatched' for t in card['evidence']['tokens'])][:MAX_REVIEW_CANDIDATES]
     candidate_ids = {c['id'] for c in candidates}
     peer_proposals = [{key: value for key, value in p.items() if key in {'profile', 'provider', 'model', 'status', 'output'}} for p in proposals]
     expansion_summaries = [{'profile': e['profile'], 'target_reading': e['target_reading'],

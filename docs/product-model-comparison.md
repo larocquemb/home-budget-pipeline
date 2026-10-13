@@ -71,6 +71,8 @@ Recorded package units match despite spacing (`1KG` and `1 kg`), and recorded
 percentages must match. Slash contractions (`S/Berry` and strawberry) and exact
 consonant abbreviations (`Rstrnt` and restaurant) weigh 0.9. Conflicting or missing
 recorded package sizes and percentages remain unmatched.
+Snippets remain discovery context; they cannot supply missing identity tokens
+when the product title and URL describe a different product.
 Recipes, brand listings and categories score zero. It no longer matches `Pic`
 inside `spice`. Normal enrichment also uses this scorer and rechecks cached
 candidates against the original receipt text before accepting them.

@@ -313,7 +313,7 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
                 cards[identifier] = rebuilt
     eligible = [c for c in cards.values() if c['evidence']['product_page'] and c['confidence'] >= threshold
                 and c['ocr_support'] and all(t['kind'] != 'unmatched' for t in c['evidence']['tokens'])]
-    candidates = sorted(eligible, key=lambda c: (-c['confidence'], c['id']))[:8]
+    candidates = sorted(eligible, key=lambda c: (-c['confidence'], c['id']))[:collaboration.MAX_REVIEW_CANDIDATES]
     if len(eligible) > len(candidates):
         errors.append({'stage': 'pooled_evidence', 'error_type': 'CandidateContextTruncated'})
     exchange = dispatcher.round('exchange', profiles, {**inputs, 'candidates': candidates, 'findings': findings}, context)

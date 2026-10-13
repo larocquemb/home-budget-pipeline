@@ -86,6 +86,27 @@ def test_peer_review_does_not_repeat_receipt_ids_for_each_candidate(monkeypatch)
     assert result['exchange_coverage']['included_sources'] == len(data['sources'])
 
 
+@pytest.mark.parametrize('alternatives,expected', [(16, 'recommended'), (40, 'review')])
+def test_compare_more_than_eight_candidates_and_report_true_overflow(alternatives, expected):
+    class Alternatives(Dispatch):
+        def round(self, stage, profiles, payload, context):
+            results = super().round(stage, profiles, payload, context)
+            if stage == 'independent':
+                results[0]['search_results'] += [
+                    {'url': URL + f'-size-{i}', 'title': TITLE, 'snippet': '', 'query': 'salsa'}
+                    for i in range(alternatives)]
+            return results
+    dispatch = Alternatives()
+    result = queue.collaborate_item(dispatch, {'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
+        bundle(), PROFILES, .85, {'run_uuid': str(uuid4()), 'item_id': 1})
+    assert result['decision']['disposition'] == expected
+    if expected == 'recommended':
+        assert len(dispatch.calls[1][2]['candidates']) == alternatives + 1
+        assert not result['blocking_errors']
+    else:
+        assert any(e['error_type'] == 'CandidateContextTruncated' for e in result['blocking_errors'])
+
+
 def test_every_provider_independently_returns_then_reconsiders_shared_findings():
     dispatch = Dispatch()
     payload = queue.collaborate_item(dispatch, {'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},

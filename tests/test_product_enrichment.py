@@ -41,6 +41,13 @@ def test_conflicting_or_missing_recorded_package_values_are_blocking(item, title
     assert any(e['kind'] == 'unmatched' for e in result['tokens'])
 
 
+def test_related_product_in_search_snippet_does_not_supply_missing_identity():
+    result = product_enrichment.candidate_evidence('Pepsi Zero', 'sobeys.com', 'Pepsi Diet Soda',
+        'https://sobeys.com/products/pepsi-diet-soda', 'Also available: Pepsi Zero Sugar')
+    assert result['confidence'] < .85
+    assert result['tokens'][1]['kind'] == 'unmatched'
+
+
 def test_discovery_learns_expansions_from_accepted_prior_matches():
     prior = {'id': 7, 'merchant_key': 'sobeys.com', 'status': 'accepted', 'confidence': .95,
              'receipt_text_norm': 'oep pic med',

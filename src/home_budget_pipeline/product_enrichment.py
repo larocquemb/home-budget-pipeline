@@ -170,7 +170,9 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
     product_page = any(marker in path for marker in PRODUCT_PATH_MARKERS.get(domain, ()))
     if re.search(r"/(brand|brands|category|categories|recipes)(/|$)", path):
         product_page = False
-    source_text = evidence_text(f"{title} {urllib.parse.unquote(path)} {snippet}")
+    # Search snippets may describe related products. Product identity must be
+    # supported by the retailer title or product URL, not neighbouring promotions.
+    source_text = evidence_text(f"{title} {urllib.parse.unquote(path)}")
     source_words = set(evidence_words(source_text))
     barcode = BARCODE_RE.search(item_name or "")
     if barcode and barcode.group(0) in source_words:
