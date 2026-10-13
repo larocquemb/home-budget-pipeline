@@ -116,7 +116,7 @@ def test_ollama_structured_chat_observes_gpu_memory(monkeypatch):
     def urlopen(request, timeout):
         calls.append((request, timeout))
         if isinstance(request, str):
-            return Response({"models": [{"name": "qwen3:30b", "size_vram": 18000000000}]})
+            return Response({"models": [{"name": "qwen3.8:27b", "size_vram": 18000000000}]})
         return Response({"message": {"content": '{"queries":["Yard bags"]}'},
                          "prompt_eval_count": 42, "eval_count": 12,
                          "total_duration": 3000000000, "load_duration": 1000000000,
@@ -124,6 +124,7 @@ def test_ollama_structured_chat_observes_gpu_memory(monkeypatch):
     monkeypatch.setattr(comparison.urllib.request, "urlopen", urlopen)
     result = comparison.generate("qwen", "same prompt")
     request = json.loads(calls[0][0].data)
+    assert request["model"] == "qwen3.8:27b"
     assert request["format"] == comparison.QUERY_SCHEMA
     assert request["messages"][0]["content"] == "same prompt"
     assert request["stream"] is False and request["think"] is False

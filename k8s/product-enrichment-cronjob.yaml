@@ -62,7 +62,7 @@ spec:
                 - name: OLLAMA_CONTEXT_TOKENS
                   value: "4096"
                 - name: OLLAMA_PRODUCT_MODEL
-                  value: qwen3:30b
+                  value: qwen3.8:27b
                 - name: COMPARISON_TIMEOUT_SECONDS
                   value: "180"
                 - name: DATABASE_URL

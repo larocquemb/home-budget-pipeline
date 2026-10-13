@@ -142,12 +142,13 @@ def test_missing_or_invalid_response_fields_do_not_mask_truncation(message):
 
 def test_qwen_defaults_leave_room_for_reasoning_without_increasing_paid_budget(monkeypatch):
     for key in ('RECEIPT_MODEL_PROFILES', 'COLLAB_CONTEXT_TOKENS', 'COLLAB_OUTPUT_TOKENS',
-                'QWEN_CONTEXT_TOKENS', 'QWEN_OUTPUT_TOKENS'):
+                'QWEN_CONTEXT_TOKENS', 'QWEN_OUTPUT_TOKENS', 'OLLAMA_COLLAB_MODELS'):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv('OPENAI_API_KEY', 'test')
     enabled, _ = providers.profiles()
     qwen = next(p for p in enabled if p.provider == 'qwen')
     openai = next(p for p in enabled if p.provider == 'openai')
+    assert qwen.model == 'qwen3.8:27b' and qwen.vision is True
     assert (qwen.context_tokens, qwen.output_tokens) == (32768, 8192)
     assert (openai.context_tokens, openai.output_tokens) == (16384, 2048)
     monkeypatch.setenv('QWEN_OUTPUT_TOKENS', '16384')
@@ -170,7 +171,8 @@ def test_production_configmap_preserves_qwen_budget_over_shared_defaults(monkeyp
     openai = next(p for p in enabled if p.provider == 'openai')
     assert (qwen.context_tokens, qwen.output_tokens) == (32768, 8192)
     assert (openai.context_tokens, openai.output_tokens) == (16384, 2048)
-    assert qwen.model == 'qwen3-vl-receipts:30b-instruct'
+    assert qwen.model == 'qwen3.8:27b'
+    assert qwen.vision is True
 
 
 def test_prefix_task_uses_bounded_exploration_sampling(monkeypatch):
