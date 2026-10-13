@@ -119,3 +119,13 @@ def test_workers_are_provider_isolated_and_use_gitops_image():
         assert all(k in {'BRAVE_SEARCH_API_KEY', provider.upper() + '_API_KEY'} for k in env if k.endswith('_API_KEY'))
         assert container['volumeMounts'][0]['readOnly'] is True
         assert container['image'] == 'ghcr.io/larocquemb/home-budget-pipeline'
+
+
+def test_peer_agreement_cannot_bypass_missing_arithmetic_verification():
+    evidence = bundle()
+    evidence['validations']['item_arithmetic'] = 'not_checkable'
+    payload = queue.collaborate_item(Dispatch(), {'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
+        evidence, PROFILES, .85, {'run_uuid': str(uuid4()), 'item_id': 1})
+    assert payload['decision']['disposition'] == 'review'
+    assert 'receipt_arithmetic_not_verified' in payload['decision']['reasons']
+    assert not payload['blocking_errors']

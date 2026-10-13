@@ -336,6 +336,9 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
         errors.append({'stage': 'exchange_image', 'error_type': 'ReceiptImageEvidenceChanged'})
     decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete,
                                         min_provider_families=min(2, len({p.provider for p in profiles})))
+    if any(bundle['validations'].get(key) != 'pass' for key in ('receipt_arithmetic', 'item_arithmetic')):
+        decision['disposition'] = 'review'
+        decision['reasons'].append('receipt_arithmetic_not_verified')
     decision['review_policy'] = {'mode': 'rabbitmq_independent_then_exchange', 'skipped_profiles': [], 'fallback_reasons': []}
     payload = {**context, 'prompt_version': 'receipt-collaboration-v16-queued', 'scoring_version': 'receipt-evidence-v2',
         'evidence_bundle': deepcopy(bundle), 'decision': decision, 'reviews': reviews,
