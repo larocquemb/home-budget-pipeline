@@ -159,7 +159,10 @@ def collaboration(graph, receipt, item, payload, skipped=(), completed_at=None, 
             invocation_scope = (*scope, profile, phase, *invocation['descriptive_tokens'])
         if queued:
             invocation_scope = (*invocation_scope, invocation['collaboration_round'])
-        i = graph.node('ModelInvocation', invocation_scope, f"{profile}: {phase}", **{**invocation, 'run_uuid': payload['run_uuid']})
+        i = graph.node('ModelInvocation', invocation_scope, f"{profile}: {phase}", **{
+            'prompt_version': invocation_payload.get('prompt_version'),
+            'scoring_version': invocation_payload.get('scoring_version'),
+            **invocation, 'run_uuid': payload['run_uuid']})
         if queued:
             round_name = invocation['collaboration_round']
             graph.edge(round_nodes[round_name], 'HAS_INVOCATION', i)

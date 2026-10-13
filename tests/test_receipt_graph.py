@@ -321,6 +321,21 @@ def test_queued_graph_keeps_initial_abstention_exchange_and_revision_distinct():
     assert any(e['kind'] == 'REVISES' for e in story['edges'])
 
 
+def test_invocation_versions_come_from_the_recorded_round_payload():
+    data = queued_evidence()
+    payload = data['collaborations'][0]['payload']
+    payload['scoring_version'] = 'coordinator-score'
+    payload['prompt_version'] = 'exchange-template'
+    for initial in payload['independent_results']:
+        initial.update(scoring_version='worker-score', prompt_version='independent-template')
+    graph = g.build(data)
+    for node in graph['nodes']:
+        if node['kind'] == 'ModelInvocation':
+            phase = node['properties']['collaboration_round']
+            assert node['properties']['scoring_version'] == ('worker-score' if phase == 'independent' else 'coordinator-score')
+            assert node['properties']['prompt_version'] == ('independent-template' if phase == 'independent' else 'exchange-template')
+
+
 def test_queued_task_errors_are_projected_without_inventing_model_review():
     data = queued_evidence()
     p = data['collaborations'][0]['payload']
