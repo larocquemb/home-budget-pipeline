@@ -318,6 +318,7 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
                 cards[identifier] = rebuilt
     eligible = [c for c in cards.values() if c['evidence']['product_page'] and c['confidence'] >= threshold
                 and c['ocr_support'] and all(t['kind'] != 'unmatched' for t in c['evidence']['tokens'])]
+    eligible_ids = {c['id'] for c in eligible}
     candidates = sorted(eligible, key=lambda c: (-c['confidence'], c['id']))[:collaboration.MAX_REVIEW_CANDIDATES]
     if len(eligible) > len(candidates):
         errors.append({'stage': 'pooled_evidence', 'error_type': 'CandidateContextTruncated'})
@@ -349,11 +350,15 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
     # Once every final review completes with the full source bundle, reaching a
     # planned discovery quota is a warning even if the reviewers abstain. It
     # never supplies product evidence or agreement. Real failures remain blocking.
-    budget_errors = [e for e in errors if e.get('stage') == 'ocr_alternative_search'
-                     and e.get('error_type') == 'HypothesisBudgetExceeded']
-    remaining_errors = [e for e in errors if e not in budget_errors]
+    # Conflicting titles on irrelevant, ineligible search hits are likewise
+    # discovery warnings; conflicts on any eligible product remain blocking.
+    discovery_warnings = [e for e in errors if (
+        e.get('stage') == 'ocr_alternative_search' and e.get('error_type') == 'HypothesisBudgetExceeded') or (
+        e.get('stage') == 'pooled_evidence' and e.get('error_type') == 'ConflictingRetailerTitle'
+        and e.get('candidate_id') not in eligible_ids)]
+    remaining_errors = [e for e in errors if e not in discovery_warnings]
     reviews_complete = len(reviews) == len(profiles) and all(r['status'] == 'success' for r in reviews)
-    recovered_errors = budget_errors if complete and reviews_complete and not remaining_errors else []
+    recovered_errors = discovery_warnings if complete and reviews_complete and not remaining_errors else []
     blocking_errors = remaining_errors if recovered_errors else errors
     decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, blocking_errors, complete,
                                         min_provider_families=min_families)
