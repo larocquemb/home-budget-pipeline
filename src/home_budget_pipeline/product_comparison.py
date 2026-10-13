@@ -255,7 +255,7 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                        "item_name": row["item_name"], "merchant": row["store_name"],
                        "receipt": row["receipt_filename"] or row["source_reference"],
                        "receipt_id": row["receipt_id"],
-                       "threshold": threshold, "scoring_version": "receipt-evidence-v2"}
+                       "threshold": threshold, "scoring_version": core.SCORING_VERSION}
             search_cache = {}
             query_cache.context = context
             query_cache.observations.clear()

@@ -62,17 +62,21 @@ shared baseline and its own proposed searches, never the other provider's new
 candidates. `candidate_origin`, `baseline_confidence` and `confidence_gain` show
 whether a model improved on the baseline; ties can simply preserve that baseline.
 
-Scoring version `receipt-evidence-v2` records per-token evidence: exact words
+Scoring version `receipt-evidence-v3` records per-token evidence: exact words
 weigh 1, word beginnings 0.9, brand initials 1, a single C/O OCR ambiguity in
 brand initials 0.95, and sauce/salsa category synonyms 0.85. It averages these
 weights; any unmatched meaningful token caps the score at 0.84. It requires a
 retailer product page and at least two meaningful tokens, or an exact barcode.
+Recorded package units match despite spacing (`1KG` and `1 kg`), and recorded
+percentages must match. Slash contractions (`S/Berry` and strawberry) and exact
+consonant abbreviations (`Rstrnt` and restaurant) weigh 0.9. Conflicting or missing
+recorded package sizes and percentages remain unmatched.
 Recipes, brand listings and categories score zero. It no longer matches `Pic`
 inside `spice`. Normal enrichment also uses this scorer and rechecks cached
 candidates against the original receipt text before accepting them.
 
 Confidence remains a lexical evidence heuristic, **not a calibrated probability
-of correctness**. It does not verify package size or purchase identity. Review
+of correctness**. Matching printed values does not establish purchase identity. Review
 URLs, titles, snippets and the `evidence.tokens` explanation alongside scores.
 Prompt version `product-queries-v3` adds the shared Brave context; filter by run
 UUID when comparing experiments rather than mixing scores from earlier versions.
