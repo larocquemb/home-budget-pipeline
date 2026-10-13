@@ -145,6 +145,10 @@ class Dispatcher:
         # provider is dispatched before the coordinator waits for a result.
         for task_id, profile in zip(ids, profiles):
             notification(self.channel, queue_name(profile.provider), task_id)
+        from . import product_comparison as comparison
+        comparison.emit('enrichment_collaboration_tasks_dispatched', {**context, 'stage': stage,
+            'tasks': [{'task_id': str(task_id), 'profile': p.name, 'provider': p.provider}
+                      for task_id, p in zip(ids, profiles)]})
         end = time.monotonic() + timeout
         while True:
             results = self.store.results(cohort)
@@ -155,6 +159,8 @@ class Dispatcher:
                 self.channel.basic_ack(method.delivery_tag)
             else:
                 self.connection.sleep(.2)
+        comparison.emit('enrichment_collaboration_round_completed', {**context, 'stage': stage,
+            'expected_tasks': len(ids), 'completed_tasks': len(results)})
         return [results.get(str(task_id), {'status': 'error', 'error_type': 'TimeoutError'}) for task_id in ids]
 
 
