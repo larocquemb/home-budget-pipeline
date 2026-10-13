@@ -268,6 +268,12 @@ discovery, then a parallel review of pooled findings. `PAID_FALLBACK=1` enrolls
 configured paid providers in both rounds; otherwise only Qwen participates. `COMPARE=1` is a separate mode that calls OpenAI
 and Qwen for paired comparison; choose one mode per run.
 
+OCR retrieval excludes coordinate tables and weakly related neighbouring lines.
+The literal OCR search quota stays visible in provenance, but can be recovered
+when every enabled provider reviews all retained observations and agrees on a
+cited, eligible retailer product with verified receipt arithmetic. Failed search
+requests, missing evidence and model disagreement still require review.
+
 Brave results are cached in PostgreSQL across items and jobs, and rescored for
 each item. Positive results expire after 90 days; empty results after one hour.
 Normal enrichment and collaboration skip accepted items before applying `LIMIT`.

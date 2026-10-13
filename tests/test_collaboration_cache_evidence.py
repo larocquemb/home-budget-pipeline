@@ -6,6 +6,22 @@ import pytest
 from home_budget_pipeline import receipt_shared_evidence as shared
 
 
+def test_item_retrieval_excludes_neighbour_and_flattened_geometry():
+    text = '\n'.join(['Pie Filling S/Berry $6.49 C', 'Licorice S/Berry $3.49 C',
+                      'Pie Fill ng S/Berry $6.49 C',
+                      'Pie Filling S/Berry ' + '4 1 3 7 2 0 111 1238 194 44 ' * 20])
+    lines = shared.relevant_lines(text, 'Pie Filling S/Berry', 'sobeys.com')
+    assert [line['line_number'] for line in lines] == [1, 3]
+    assert all(line['row_association'] == 'unverified' for line in lines)
+
+
+def test_retrieval_keeps_conflicting_brand_letters_and_prices():
+    lines = shared.relevant_lines('Cep Pic Med $6.49 C\nOep Pic Med $6.49 C\nGep Pic Med $6.49 C',
+                                  'Cep Pic Med', 'sobeys.com')
+    assert len(lines) == 3
+    assert all('$6.49' in line['text'] for line in lines)
+
+
 def cache(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME_BUDGET_OCR_CACHE', str(tmp_path))
     monkeypatch.setenv('OCR_ARTIFACT_URI_PREFIX', 'pvc://receipt-ocr')

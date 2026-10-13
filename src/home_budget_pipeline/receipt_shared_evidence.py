@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -96,9 +97,14 @@ def relevant_lines(text: str, item: str, domain: str, limit=3) -> list[dict]:
     ranked = []
     normalized = core.normalized_cache_item_name(item)
     for index, line in enumerate((text or '').splitlines()):
-        score = max(SequenceMatcher(None, normalized, core.normalized_cache_item_name(line)).ratio(),
+        # Geometry passes contain TSV coordinates, not receipt transcriptions.
+        # A token anywhere in a flattened table must not turn it into an item line.
+        if len(line) > max(160, len(item) * 4) or len(re.findall(r'\b\d+\b', line)) > 8:
+            continue
+        reading = re.sub(r'\s+\$?\d+[.,]\d{2}(?:\s+[A-Za-z])?\s*$', '', line).strip()
+        score = max(SequenceMatcher(None, normalized, core.normalized_cache_item_name(reading)).ratio(),
             core.candidate_score(item, domain, line, f'https://{domain}/products/evidence') if domain == 'sobeys.com' else 0)
-        if score >= .5:
+        if score >= .65:
             ranked.append({'line_number': index + 1, 'text': line[:500], 'retrieval_score': round(score, 4),
                            'row_association': 'unverified', 'association_method': 'text_similarity'})
     return sorted(ranked, key=lambda line: (-line['retrieval_score'], line['line_number']))[:limit]
@@ -134,7 +140,7 @@ def load(conn, row: dict) -> dict:
     pass_summaries = []
     for p in passes:
         pass_id = f"pass:{p['run_uuid']}:{p['pass_id']}"
-        lines = relevant_lines(p['extracted_text'], row['item_name'], domain) if p['status'] == 'success' else []
+        lines = relevant_lines(p['extracted_text'], row['item_name'], domain) if p['status'] == 'success' and p['variant'] != 'geometry' else []
         pass_summaries.append({'id': pass_id, 'engine': p['engine'], 'status': p['status'],
                               'seconds': str(p['seconds']) if p['seconds'] is not None else None,
                               'matching_lines': len(lines), 'quality': p.get('quality') or {},

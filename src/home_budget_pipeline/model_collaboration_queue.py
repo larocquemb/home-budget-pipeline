@@ -185,7 +185,7 @@ claims are hypotheses, not new receipt evidence or independent verification.
 Select a retailer_results candidate and its exact title, cite its product ID and
 supporting receipt observation IDs, or abstain with all product fields null.\n''' + json.dumps({
         'receipt_item': task['row'], 'ocr_evidence': packed,
-        'receipt_checks': bundle['validations'], 'retailer_results': selectable,
+        'receipt_checks': bundle['validations'], 'retailer_results': [collaboration.prompt_candidate(c) for c in selectable],
         'independent_findings': task['findings'], 'attached_images': image_metadata}, default=str)
     review = collaboration.review_with_citations(profile, text,
         sources | {c['id'] for c in selectable} | {i['id'] for i in images}, selectable, images, task['context'])
@@ -339,8 +339,21 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
             image_sets.append(result['images'])
     if image_sets and any(images != image_sets[0] for images in image_sets):
         errors.append({'stage': 'exchange_image', 'error_type': 'ReceiptImageEvidenceChanged'})
-    decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete,
-                                        min_provider_families=min(2, len({p.provider for p in profiles})))
+    min_families = min(2, len({p.provider for p in profiles}))
+    # The literal-search quota is a discovery limit, not missing receipt evidence.
+    # Recover it only after every provider reviews the complete source bundle and
+    # agrees on an eligible, cited retailer product. Real search failures remain blocking.
+    budget_errors = [e for e in errors if e.get('stage') == 'ocr_alternative_search'
+                     and e.get('error_type') == 'HypothesisBudgetExceeded']
+    remaining_errors = [e for e in errors if e not in budget_errors]
+    decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, remaining_errors, complete,
+                                        min_provider_families=min_families)
+    arithmetic_verified = all(bundle['validations'].get(key) == 'pass' for key in ('receipt_arithmetic', 'item_arithmetic'))
+    recovered_errors = budget_errors if decision['disposition'] == 'recommended' and arithmetic_verified else []
+    blocking_errors = remaining_errors if recovered_errors else errors
+    if not recovered_errors:
+        decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete,
+                                            min_provider_families=min_families)
     if any(bundle['validations'].get(key) != 'pass' for key in ('receipt_arithmetic', 'item_arithmetic')):
         decision['disposition'] = 'review'
         decision['reasons'].append('receipt_arithmetic_not_verified')
@@ -349,7 +362,7 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
         'evidence_bundle': deepcopy(bundle), 'decision': decision, 'reviews': reviews,
         'independent_results': independent, 'independent_findings': findings,
         'candidates': candidates, 'search_results': list(cards.values()), 'available_candidates': len(cards),
-        'errors': errors, 'blocking_errors': errors, 'recovered_errors': [],
+        'errors': errors, 'blocking_errors': blocking_errors, 'recovered_errors': recovered_errors,
         'images': image_sets[0] if image_sets else [], 'image_errors': [e for e in errors if 'image' in e['stage']],
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'item_seconds': round(time.monotonic() - started, 3),
@@ -358,5 +371,5 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
     for key in ('expansions', 'descriptor_expansions', 'proposals', 'search_queries', 'brave_cache', 'learned_searches'):
         payload[key] = [entry for result in independent for entry in result.get(key, [])]
     comparison.emit('enrichment_collaboration_decision', {**context, **decision,
-        'item_seconds': payload['item_seconds'], 'blocking_error_count': len(errors), 'available_candidates': len(cards)})
+        'item_seconds': payload['item_seconds'], 'blocking_error_count': len(blocking_errors), 'available_candidates': len(cards)})
     return payload
