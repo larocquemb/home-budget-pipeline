@@ -322,17 +322,38 @@ Brave searches those proposals; round two exposes every provider's proposal and
 the ranked product candidates to every reviewer. Responses cannot cite unseen
 sources or invent candidate IDs.
 
-Collaboration tries Qwen first for discovery and review. A valid Qwen review can
-produce a `recommended` result without an OpenAI call when original receipt scoring
-reaches the threshold, a retailer product page and supporting OCR observation are
-explicitly cited, both item and receipt arithmetic pass, required images are
-available, and all relevant evidence is included without search or model errors.
-Otherwise additional configured providers review the evidence and agreement across
-at least two provider families is required; existing evidence checks still apply.
-Qwen variants count as one family. Disagreements, abstentions, errors and weak
-citations stay in `review`. Recommendations **do not overwrite** item names,
-prices, totals, accepted products or product caches. This is evidence gathering
-and reconciliation for review, not an automatic correction policy.
+Production collaboration uses two RabbitMQ rounds. Every enabled provider gets
+its own discovery and review task against the same immutable receipt/OCR snapshot.
+The coordinator publishes all tasks before waiting; provider workers run
+independently, with Qwen inference on Arsene. After all tasks finish (or time
+out), the coordinator pools retailer results and each provider's findings,
+including abstentions, and dispatches a second review to every participant.
+Each model can revise its first review after comparing the collected evidence.
+There is no Qwen-first short-circuit in the queued path.
+
+The final decision requires original receipt/product evidence and agreement
+across two provider families when multiple families participate. Qwen variants
+count as one family. A Qwen-only run can recommend a supported candidate with
+one family. Errors, truncated evidence, disagreement and weak citations remain
+in `review`. Peer assertions never become receipt observations; they cannot
+create evidence or increase the heuristic score. Both rounds and dissent remain
+in the append-only run record. Recommendations do not overwrite canonical items.
+
+The four `model-worker-*` Deployments consume provider-specific durable quorum
+queues with prefetch one. RabbitMQ messages carry task IDs; PostgreSQL retains
+inputs and results in `enrichment.model_collaboration_tasks`. Workers commit
+results before confirmed completion publication and ACK. Duplicate deliveries
+reuse committed results; interrupted tasks have a bounded retry budget, and
+late/missing workers become incomplete results after a 900-second round deadline
+(`COLLAB_TASK_TIMEOUT_SECONDS`, 30–3600 seconds). Broker heartbeats continue
+while inference runs. Tasks/results contain no provider API keys. Each worker
+receives only its own provider credential plus the existing Brave key.
+
+`COLLABORATION_TRANSPORT=rabbitmq` is the production/default transport and
+requires `RABBITMQ_URL`. Explicit `inline` retains the old workflow for offline
+fixtures and legacy comparisons; there is no silent fallback when the broker is
+unavailable. Informational evaluation currently calls the legacy inline path;
+it does not evaluate queue scheduling or the new evidence-exchange round.
 
 The new managed `receipt-model-profiles` ConfigMap supplies cloud model IDs and
 Qwen budgets. OpenAI uses the existing key/model setting. Anthropic and Gemini
@@ -390,16 +411,12 @@ an unresolved expansion is recorded rather than accepted as a product fact.
 Expanded queries are pooled and deduplicated for Brave verification, with scores
 still calculated against the original receipt item. Only product pages can be
 selected in the final review; brand indexes and store pages remain discovery
-evidence. Calls run sequentially, so ambiguous items take more time and model
-usage when discovery remains unresolved. Brave checks expansions as they arrive;
-once a strong match is found, remaining expansions and the shared proposal round
-are skipped. Qwen reviews the pooled evidence first. Paid models are disabled by default for collaboration, including discovery and
-review. Set `PAID_FALLBACK=1` to opt into paid fallback when local recommendation
-checks are not satisfied. If literal Brave results
-already supply a supported product page, discovery model calls are skipped too.
-The decision records `review_policy.skipped_profiles` and `fallback_reasons` so
-paid-model use or omission can be inspected in logs and the graph. `enrichment_collaboration_discovery` records the
-stop reason, expansion call count and whether the proposal round was skipped.
+evidence. Within each independent worker task, discovery steps can depend on
+previous search results. Different providers run concurrently. Strong matches
+can skip additional discovery within that provider's task, but cannot skip
+another participant or the shared evidence-exchange round. Paid providers are
+disabled by default. `PAID_FALLBACK=1` enrolls every configured paid provider in
+both queue rounds, rather than waiting for Qwen to fail first.
 
 Qwen receives the JSON schema in its prompt as well as Ollama's `format` argument.
 Review schemas restrict citations to supplied source IDs and request at most six.
@@ -636,7 +653,7 @@ Production collaboration uses Qwen, receipt images/OCR and Brave without calling
 OpenAI, Anthropic or Gemini. Skipped paid profiles are recorded with
 `paid_fallback_disabled`. A local-only run requires at least one Qwen profile;
 insufficient evidence remains in review without changing the accepted product.
-Explicit opt-in restores paid discovery and review fallback:
+Explicit opt-in enrolls configured paid providers alongside Qwen:
 
 ```sh
 make enrich-products COLLABORATE=1 LIMIT=1 PAID_FALLBACK=1

@@ -430,6 +430,7 @@ def test_collaboration_persists_only_evidence_and_run_summary(monkeypatch, capsy
     monkeypatch.setattr(shared, 'load', lambda *a: bundle())
     monkeypatch.setattr(collab, 'collaborate_item', lambda *a: {
         'decision': {'disposition': 'review'}, 'errors': [{'stage': 'expansion'}], 'blocking_errors': [], 'item_seconds': 2.5})
+    monkeypatch.setenv('COLLABORATION_TRANSPORT', 'inline')
     stats = collab.run(dsn='unused', api_key='unused', limit=1, threshold=.85, write_db=True)
     mutations = [sql for sql, _ in calls if not sql.lstrip().startswith('SELECT')]
     assert len(mutations) == 2 and all('INSERT INTO enrichment.receipt_collaboration' in sql for sql in mutations)

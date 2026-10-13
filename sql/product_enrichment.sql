@@ -66,6 +66,15 @@ CREATE TABLE IF NOT EXISTS enrichment.receipt_collaboration_runs (
     completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS enrichment.model_collaboration_tasks (
+    id UUID PRIMARY KEY, cohort UUID NOT NULL, provider TEXT NOT NULL,
+    input JSONB NOT NULL, result JSONB, attempts INTEGER NOT NULL DEFAULT 0,
+    deadline TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS model_collaboration_tasks_cohort_idx
+ON enrichment.model_collaboration_tasks(cohort);
+
 -- Authoritative lineage survives graph outages and RabbitMQ acknowledgements.
 CREATE SCHEMA IF NOT EXISTS lineage;
 CREATE TABLE IF NOT EXISTS lineage.receipt_events (

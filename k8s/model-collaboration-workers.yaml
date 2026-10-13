@@ -1,0 +1,390 @@
+# Independent provider consumers; inference remains on Arsene for Qwen.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-worker-qwen
+  namespace: home-budget
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-worker
+      provider: qwen
+  template:
+    metadata:
+      labels:
+        app: model-worker
+        provider: qwen
+    spec:
+      terminationGracePeriodSeconds: 900
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: model-worker
+        image: ghcr.io/larocquemb/home-budget-pipeline
+        imagePullPolicy: IfNotPresent
+        command:
+        - home-budget-model-worker
+        args:
+        - --provider
+        - qwen
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        env:
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: HOME_BUDGET_RECEIPTS_ROOT
+          value: /data/receipts/raw/scanned/inbox
+        - name: HOME_BUDGET_OCR_CACHE
+          valueFrom:
+            configMapKeyRef:
+              name: receipt-runtime-config
+              key: HOME_BUDGET_OCR_CACHE
+        - name: OCR_ARTIFACT_URI_PREFIX
+          value: pvc://home-budget/receipts/derived/ocr-cache
+        - name: OLLAMA_BASE_URL
+          value: http://192.168.2.201:11434
+        - name: OLLAMA_GPU_METRICS_URL
+          value: http://192.168.2.201:11435/gpu
+        - name: GPU_SAMPLE_INTERVAL_SECONDS
+          value: '1'
+        - name: OLLAMA_CONTEXT_TOKENS
+          value: '4096'
+        - name: OLLAMA_PRODUCT_MODEL
+          value: qwen3.8:27b
+        - name: COMPARISON_TIMEOUT_SECONDS
+          value: '180'
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: DATABASE_URL
+        - name: BRAVE_SEARCH_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: brave-search-api
+              key: BRAVE_SEARCH_API_KEY
+              optional: true
+        - name: RABBITMQ_URL
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-secret
+              key: RABBITMQ_URL
+        - name: COLLABORATION_TRANSPORT
+          value: rabbitmq
+        envFrom:
+        - configMapRef:
+            name: receipt-model-profiles
+            optional: true
+        volumeMounts:
+        - name: receipt-data
+          mountPath: /data
+          readOnly: true
+      volumes:
+      - name: receipt-data
+        persistentVolumeClaim:
+          claimName: home-budget-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-worker-openai
+  namespace: home-budget
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-worker
+      provider: openai
+  template:
+    metadata:
+      labels:
+        app: model-worker
+        provider: openai
+    spec:
+      terminationGracePeriodSeconds: 900
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: model-worker
+        image: ghcr.io/larocquemb/home-budget-pipeline
+        imagePullPolicy: IfNotPresent
+        command:
+        - home-budget-model-worker
+        args:
+        - --provider
+        - openai
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        env:
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: HOME_BUDGET_RECEIPTS_ROOT
+          value: /data/receipts/raw/scanned/inbox
+        - name: HOME_BUDGET_OCR_CACHE
+          valueFrom:
+            configMapKeyRef:
+              name: receipt-runtime-config
+              key: HOME_BUDGET_OCR_CACHE
+        - name: OCR_ARTIFACT_URI_PREFIX
+          value: pvc://home-budget/receipts/derived/ocr-cache
+        - name: OLLAMA_BASE_URL
+          value: http://192.168.2.201:11434
+        - name: OLLAMA_GPU_METRICS_URL
+          value: http://192.168.2.201:11435/gpu
+        - name: GPU_SAMPLE_INTERVAL_SECONDS
+          value: '1'
+        - name: OLLAMA_CONTEXT_TOKENS
+          value: '4096'
+        - name: OLLAMA_PRODUCT_MODEL
+          value: qwen3.8:27b
+        - name: COMPARISON_TIMEOUT_SECONDS
+          value: '180'
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: DATABASE_URL
+        - name: BRAVE_SEARCH_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: brave-search-api
+              key: BRAVE_SEARCH_API_KEY
+              optional: true
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-api
+              key: OPENAI_API_KEY
+              optional: true
+        - name: RABBITMQ_URL
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-secret
+              key: RABBITMQ_URL
+        - name: COLLABORATION_TRANSPORT
+          value: rabbitmq
+        envFrom:
+        - configMapRef:
+            name: receipt-model-profiles
+            optional: true
+        volumeMounts:
+        - name: receipt-data
+          mountPath: /data
+          readOnly: true
+      volumes:
+      - name: receipt-data
+        persistentVolumeClaim:
+          claimName: home-budget-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-worker-anthropic
+  namespace: home-budget
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-worker
+      provider: anthropic
+  template:
+    metadata:
+      labels:
+        app: model-worker
+        provider: anthropic
+    spec:
+      terminationGracePeriodSeconds: 900
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: model-worker
+        image: ghcr.io/larocquemb/home-budget-pipeline
+        imagePullPolicy: IfNotPresent
+        command:
+        - home-budget-model-worker
+        args:
+        - --provider
+        - anthropic
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        env:
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: HOME_BUDGET_RECEIPTS_ROOT
+          value: /data/receipts/raw/scanned/inbox
+        - name: HOME_BUDGET_OCR_CACHE
+          valueFrom:
+            configMapKeyRef:
+              name: receipt-runtime-config
+              key: HOME_BUDGET_OCR_CACHE
+        - name: OCR_ARTIFACT_URI_PREFIX
+          value: pvc://home-budget/receipts/derived/ocr-cache
+        - name: OLLAMA_BASE_URL
+          value: http://192.168.2.201:11434
+        - name: OLLAMA_GPU_METRICS_URL
+          value: http://192.168.2.201:11435/gpu
+        - name: GPU_SAMPLE_INTERVAL_SECONDS
+          value: '1'
+        - name: OLLAMA_CONTEXT_TOKENS
+          value: '4096'
+        - name: OLLAMA_PRODUCT_MODEL
+          value: qwen3.8:27b
+        - name: COMPARISON_TIMEOUT_SECONDS
+          value: '180'
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: DATABASE_URL
+        - name: BRAVE_SEARCH_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: brave-search-api
+              key: BRAVE_SEARCH_API_KEY
+              optional: true
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: anthropic-api
+              key: ANTHROPIC_API_KEY
+              optional: true
+        - name: RABBITMQ_URL
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-secret
+              key: RABBITMQ_URL
+        - name: COLLABORATION_TRANSPORT
+          value: rabbitmq
+        envFrom:
+        - configMapRef:
+            name: receipt-model-profiles
+            optional: true
+        volumeMounts:
+        - name: receipt-data
+          mountPath: /data
+          readOnly: true
+      volumes:
+      - name: receipt-data
+        persistentVolumeClaim:
+          claimName: home-budget-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-worker-gemini
+  namespace: home-budget
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-worker
+      provider: gemini
+  template:
+    metadata:
+      labels:
+        app: model-worker
+        provider: gemini
+    spec:
+      terminationGracePeriodSeconds: 900
+      imagePullSecrets:
+      - name: ghcr-secret
+      containers:
+      - name: model-worker
+        image: ghcr.io/larocquemb/home-budget-pipeline
+        imagePullPolicy: IfNotPresent
+        command:
+        - home-budget-model-worker
+        args:
+        - --provider
+        - gemini
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        env:
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: HOME_BUDGET_RECEIPTS_ROOT
+          value: /data/receipts/raw/scanned/inbox
+        - name: HOME_BUDGET_OCR_CACHE
+          valueFrom:
+            configMapKeyRef:
+              name: receipt-runtime-config
+              key: HOME_BUDGET_OCR_CACHE
+        - name: OCR_ARTIFACT_URI_PREFIX
+          value: pvc://home-budget/receipts/derived/ocr-cache
+        - name: OLLAMA_BASE_URL
+          value: http://192.168.2.201:11434
+        - name: OLLAMA_GPU_METRICS_URL
+          value: http://192.168.2.201:11435/gpu
+        - name: GPU_SAMPLE_INTERVAL_SECONDS
+          value: '1'
+        - name: OLLAMA_CONTEXT_TOKENS
+          value: '4096'
+        - name: OLLAMA_PRODUCT_MODEL
+          value: qwen3.8:27b
+        - name: COMPARISON_TIMEOUT_SECONDS
+          value: '180'
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: DATABASE_URL
+        - name: BRAVE_SEARCH_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: brave-search-api
+              key: BRAVE_SEARCH_API_KEY
+              optional: true
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini-api
+              key: GEMINI_API_KEY
+              optional: true
+        - name: RABBITMQ_URL
+          valueFrom:
+            secretKeyRef:
+              name: rabbitmq-secret
+              key: RABBITMQ_URL
+        - name: COLLABORATION_TRANSPORT
+          value: rabbitmq
+        envFrom:
+        - configMapRef:
+            name: receipt-model-profiles
+            optional: true
+        volumeMounts:
+        - name: receipt-data
+          mountPath: /data
+          readOnly: true
+      volumes:
+      - name: receipt-data
+        persistentVolumeClaim:
+          claimName: home-budget-data

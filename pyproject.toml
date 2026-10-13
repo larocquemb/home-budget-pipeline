@@ -25,6 +25,7 @@ dependencies = [
 ]
 
 [project.scripts]
+home-budget-model-worker = "home_budget_pipeline.model_collaboration_queue:main"
 ledger = "home_budget_pipeline.cli:main"
 brownrook = "home_budget_pipeline.cli:main"
 home-budget-scan = "home_budget_pipeline.receipts.parallel_ingest:main"
