@@ -39,8 +39,9 @@ def test_provider_tasks_overlap_and_duplicate_delivery_reuses_committed_result(s
         for stage in ('independent', 'exchange'):
             results = dispatcher.round(stage, profiles, {}, context)
             assert {r['provider'] for r in results} == {'qwen', 'openai'}
-        assert dispatcher.round('independent', profiles, {}, context) == [
-            {'status': 'success', 'provider': 'qwen'}, {'status': 'success', 'provider': 'openai'}]
+            assert all(r['task_provenance']['worker_identity']['worker_host'] for r in results)
+            if stage == 'independent': initial_results = results
+        assert dispatcher.round('independent', profiles, {}, context) == initial_results
         stop.wait(.5)
         assert len(calls) == 4
         assert not failures

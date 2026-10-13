@@ -18,7 +18,7 @@ from ..product_labels import product_name
 PERSPECTIVES = {
     'story': None,
     'lineage': None,
-    'topology': {'Receipt', 'Message', 'MessageEvent', 'BrokerRoute', 'ResultMessage', 'ProcessingAttempt', 'AttemptEvent', 'Worker', 'Node', 'OCRRun', 'OCRPass', 'OCRMethod', 'Model', 'ModelInvocation', 'Provider', 'GPU', 'InferenceHost', 'ExtractionResult', 'Guardrail', 'Decision', 'ProductAcceptance', 'Collaboration', 'PostgreSQLRecord'},
+    'topology': {'ModelTask', 'CollaborationRound', 'EvidenceExchange', 'Receipt', 'Message', 'MessageEvent', 'BrokerRoute', 'ResultMessage', 'ProcessingAttempt', 'AttemptEvent', 'Worker', 'Node', 'OCRRun', 'OCRPass', 'OCRMethod', 'Model', 'ModelInvocation', 'Provider', 'GPU', 'InferenceHost', 'ExtractionResult', 'Guardrail', 'Decision', 'ProductAcceptance', 'Collaboration', 'PostgreSQLRecord'},
     'domain': {'Receipt', 'CanonicalReceipt', 'Merchant', 'Item', 'Category', 'ProductPage', 'SearchResult', 'Decision', 'ProductAcceptance', 'Collaboration'},
 }
 
@@ -113,7 +113,7 @@ def processing_story(result, item_id='', run_id=''):
         return {**info, 'nodes': [], 'edges': [], 'path_ids': []}
     ids = {chosen['id'], selected_item}
     # Follow only run-owned outputs and explicitly recorded supporting entities.
-    follow = {'USES_EVIDENCE', 'HAS_IMAGE_REFERENCE', 'CONSIDERS', 'SEARCHED', 'HAS_INVOCATION',
+    follow = {'HAS_ROUND', 'DISPATCHED', 'ROUTED_TO', 'HAS_EXCHANGE', 'SUPPLIED_TO', 'USES_EVIDENCE', 'HAS_IMAGE_REFERENCE', 'CONSIDERS', 'SEARCHED', 'HAS_INVOCATION',
               'RESULTED_IN', 'SKIPPED', 'PRODUCED', 'USES_MODEL', 'BELONGS_TO', 'OBSERVED_GPU',
               'LOCATED_ON', 'REFERENCES', 'RETURNED', 'EVALUATED', 'EXECUTED_BY', 'RUNS_ON',
               'ACCEPTED_AS', 'UPDATED', 'PERSISTED_AS'}
@@ -134,7 +134,7 @@ def processing_story(result, item_id='', run_id=''):
     path = {n for n in ids if nodes[n]['kind'] == 'Decision'}
     path.update(e['target'] for e in scoped if e['kind'] in {'RECOMMENDS', 'ACCEPTED_AS'})
     provenance = {'SUPPORTS', 'CITES', 'SELECTS', 'INFORMS', 'PRODUCED', 'RETURNED',
-                  'PROPOSED_SEARCH', 'DERIVED_FROM'}
+                  'PROPOSED_SEARCH', 'DERIVED_FROM', 'SHARED_IN', 'SUPPLIED_TO', 'HAS_INVOCATION'}
     changed = True
     while changed:
         before = len(path)

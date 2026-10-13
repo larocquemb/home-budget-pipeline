@@ -93,6 +93,7 @@ class Store:
             if task['result'] is None:
                 attempts = task['attempts']
                 self.conn.execute('UPDATE enrichment.model_collaboration_tasks SET attempts=attempts+1 WHERE id=%s', (task_id,))
+                started_at = datetime.now(timezone.utc).isoformat()
                 try:
                     if datetime.now(timezone.utc) >= task['deadline']:
                         raise TimeoutError('Task deadline expired')
@@ -103,6 +104,9 @@ class Store:
                         raise TimeoutError('Task completed after deadline')
                 except Exception as exc:
                     result = {'status': 'error', 'error_type': type(exc).__name__}
+                result['task_provenance'] = {'task_id': str(task_id), 'stage': task['input'].get('stage'),
+                    'started_at': started_at, 'worker_identity': {'worker_host': socket.gethostname(),
+                    'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')}}
                 self.conn.execute('''UPDATE enrichment.model_collaboration_tasks
                     SET result=%s,completed_at=NOW() WHERE id=%s''', (Jsonb(result), task_id))
             return reply
@@ -186,6 +190,7 @@ supporting receipt observation IDs, or abstain with all product fields null.\n''
     review = collaboration.review_with_citations(profile, text,
         sources | {c['id'] for c in selectable} | {i['id'] for i in images}, selectable, images, task['context'])
     review['exchange_coverage'] = coverage
+    review['prompt_source_ids'] = sorted(sources)
     review['images'] = image_metadata
     review['image_errors'] = image_errors
     return review

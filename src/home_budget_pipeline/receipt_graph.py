@@ -9,9 +9,10 @@ import hashlib
 import json
 import os
 import re
+from uuid import UUID, uuid5
 from urllib.parse import urlencode
 
-VERSION = 5
+VERSION = 6
 
 
 def encoded(value):
@@ -64,7 +65,7 @@ def worker(graph, parent, identity):
             graph.edge(w, 'RUNS_ON', n)
 
 
-def collaboration(graph, receipt, item, payload, skipped=(), completed_at=None, sequence=None):
+def collaboration(graph, receipt, item, payload, skipped=(), completed_at=None, sequence=None, queued_tasks=()):
     scope = (payload['run_uuid'], payload['item_id'])
     run = graph.node('Collaboration', scope, 'Shared evidence', run_uuid=payload['run_uuid'], completed_at=completed_at, sequence=sequence,
                      item_seconds=payload.get('item_seconds'), prompt_version=payload.get('prompt_version'),
@@ -118,14 +119,59 @@ def collaboration(graph, receipt, item, payload, skipped=(), completed_at=None, 
             graph.edge(query, 'LEARNED_FROM', match)
             page = graph.node('ProductPage', prior['product_url'], prior['product_url'], url=prior['product_url'])
             graph.edge(match, 'REFERENCES', page)
-    proposals = []
-    for invocation in payload.get('descriptor_expansions', []) + payload.get('expansions', []) + payload.get('proposals', []) + payload.get('reviews', []):
+    queued = 'independent_results' in payload
+    task_nodes, round_nodes = {}, {}
+    if queued:
+        for phase, label in [('independent', 'Independent model findings'), ('exchange', 'Shared evidence review')]:
+            round_nodes[phase] = graph.node('CollaborationRound', (*scope, phase), label,
+                                           collaboration_round=phase, run_uuid=scope[0])
+            graph.edge(run, 'HAS_ROUND', round_nodes[phase])
+        for task in queued_tasks:
+            phase, profile = task['stage'], task['profile']['name']
+            if phase not in round_nodes:
+                continue
+            provenance = task.get('task_provenance') or {}
+            t = graph.node('ModelTask', str(task['id']), f'{profile}: {phase} task', task_id=str(task['id']),
+                cohort=str(task['cohort']), collaboration_round=phase, profile=profile, provider=task['provider'],
+                status=task['status'], error_type=task.get('error_type'), attempts=task['attempts'], created_at=task['created_at'],
+                completed_at=task['completed_at'], deadline=task['deadline'], run_uuid=scope[0],
+                started_at=provenance.get('started_at'), worker_recorded=bool(provenance.get('worker_identity')))
+            task_nodes[phase, profile] = t
+            graph.edge(round_nodes[phase], 'DISPATCHED', t)
+            route = graph.node('BrokerRoute', task['queue'], task['queue'], route=task['queue'])
+            graph.edge(t, 'ROUTED_TO', route)
+            worker(graph, t, provenance.get('worker_identity', {}))
+        frames = []
+        for result in payload['independent_results']:
+            for key in ('descriptor_expansions', 'expansions', 'proposals', 'reviews'):
+                frames.extend(({**r, 'collaboration_round': 'independent'}, result) for r in result.get(key, []))
+        frames.extend(({**r, 'collaboration_round': 'exchange'}, payload)
+                      for r in payload.get('reviews', []) if r.get('stage'))
+    else:
+        frames = [(r, payload) for r in payload.get('descriptor_expansions', []) + payload.get('expansions', []) +
+                  payload.get('proposals', []) + payload.get('reviews', [])]
+    proposals, shared_proposals, initial_reviews, final_reviews, exchange_invocations = [], [], {}, {}, []
+    for invocation, invocation_payload in frames:
         phase = invocation['stage']
         profile = invocation['profile']
         invocation_scope = (*scope, profile, phase, invocation['target_reading']) if phase == 'expansion' else (*scope, profile, phase)
         if phase == 'descriptive_expansion':
             invocation_scope = (*scope, profile, phase, *invocation['descriptive_tokens'])
+        if queued:
+            invocation_scope = (*invocation_scope, invocation['collaboration_round'])
         i = graph.node('ModelInvocation', invocation_scope, f"{profile}: {phase}", **{**invocation, 'run_uuid': payload['run_uuid']})
+        if queued:
+            round_name = invocation['collaboration_round']
+            graph.edge(round_nodes[round_name], 'HAS_INVOCATION', i)
+            if (round_name, profile) in task_nodes:
+                graph.edge(task_nodes[round_name, profile], 'HAS_INVOCATION', i)
+            identity = invocation.get('task_provenance', {}).get('worker_identity', {})
+            if round_name == 'independent':
+                identity = identity or invocation_payload.get('worker_identity', {})
+                if (round_name, profile) in task_nodes:
+                    worker(graph, task_nodes[round_name, profile], identity)
+                    graph.nodes[task_nodes[round_name, profile]]['properties']['worker_recorded'] = bool(identity)
+            worker(graph, i, identity)
         model = graph.node('Model', (invocation['provider'], invocation['model'], invocation.get('model_digest')), invocation['model'],
                            provider=invocation['provider'], model=invocation['model'], digest=invocation.get('model_digest'))
         family = graph.node('Provider', invocation['provider'], invocation['provider'])
@@ -144,8 +190,19 @@ def collaboration(graph, receipt, item, payload, skipped=(), completed_at=None, 
         outcome = graph.node('Proposal' if phase in {'proposal', 'expansion', 'descriptive_expansion'} else 'ModelReview', invocation_scope,
                              (output.get('candidate_title') if valid else None) or output.get('reading') or output.get('reason') or
                              next(iter(output.get('queries', [])), invocation['status']),
-                             status=invocation['status'], valid=valid, output=output)
+                             status=invocation['status'], valid=valid, output=output, profile=profile,
+                             collaboration_round=invocation.get('collaboration_round'), provider=invocation['provider'])
         graph.edge(i, 'PRODUCED', outcome)
+        if phase == 'review':
+            if queued and invocation['collaboration_round'] == 'independent':
+                initial_reviews[profile] = outcome
+            else:
+                final_reviews[profile] = outcome
+                if queued:
+                    exchange_invocations.append((profile, i, outcome))
+        if queued:
+            label = ('Initial review' if invocation['collaboration_round'] == 'independent' else 'Shared review') if phase == 'review' else phase
+            graph.nodes[outcome]['label'] = f"{profile}: {label} — " + graph.nodes[outcome]['label']
         for source_id in invocation.get('derived_source_ids', []):
             if source_id in citations:
                 graph.edge(outcome, 'DERIVED_FROM', citations[source_id])
@@ -168,25 +225,47 @@ def collaboration(graph, receipt, item, payload, skipped=(), completed_at=None, 
             graph.edge(outcome, 'SELECTS', citations[selected])
         if phase in {'proposal', 'expansion', 'descriptive_expansion'}:
             proposals.append(outcome)
+            if queued and phase == 'proposal' and valid:
+                shared_proposals.append(outcome)
         else:
             for peer in proposals:
-                graph.edge(i, 'CONSIDERED_PROPOSAL', peer)
+                if (not queued or (invocation['collaboration_round'] == 'independent' and
+                                   graph.nodes[peer]['properties'].get('profile') == profile) or
+                                   (invocation['collaboration_round'] == 'exchange' and peer in shared_proposals)):
+                    graph.edge(i, 'CONSIDERED_PROPOSAL', peer)
         for source in bundle.get('sources', []):
             # Prompt inclusion is bounded; do not claim every stored observation was seen.
-            received = [] if phase == 'descriptive_expansion' else invocation.get('input_source_ids', []) if phase == 'expansion' else payload.get('prompt_source_ids', [])
+            received = [] if phase == 'descriptive_expansion' else invocation.get('input_source_ids', []) if phase == 'expansion' else invocation.get('prompt_source_ids', invocation_payload.get('prompt_source_ids', []))
             if source['id'] in received:
                 graph.edge(i, 'RECEIVED', citations[source['id']])
         if invocation.get('image_count', 0) > 0:
-            for image in payload.get('images', [])[:invocation['image_count']]:
+            for image in invocation_payload.get('images', [])[:invocation['image_count']]:
                 graph.edge(i, 'RECEIVED', citations[image['id']])
+    if queued:
+        exchange = graph.node('EvidenceExchange', scope, 'Compare independent findings', run_uuid=scope[0])
+        graph.edge(run, 'HAS_EXCHANGE', exchange)
+        shared_outcomes = [n for n in initial_reviews.values() if graph.nodes[n]['properties']['valid']] + shared_proposals
+        for outcome in shared_outcomes:
+            graph.edge(outcome, 'SHARED_IN', exchange)
+        for profile, invocation, outcome in exchange_invocations:
+            graph.edge(exchange, 'SUPPLIED_TO', invocation)
+            for initial in initial_reviews.values():
+                if graph.nodes[initial]['properties']['valid']:
+                    graph.edge(invocation, 'CONSIDERED_REVIEW', initial)
+            if profile in initial_reviews:
+                initial = initial_reviews[profile]
+                before = json.loads(graph.nodes[initial]['properties']['output']).get('candidate_id')
+                after = json.loads(graph.nodes[outcome]['properties']['output']).get('candidate_id')
+                revised = graph.nodes[initial]['properties']['valid'] and graph.nodes[outcome]['properties']['valid'] and before != after
+                graph.edge(outcome, 'REVISES' if revised else 'FOLLOWS', initial)
     for profile in skipped:
         n = graph.node('SkippedProvider', (*scope, encoded(profile)), 'Unavailable provider', **profile)
         graph.edge(run, 'SKIPPED', n)
     decision = payload['decision']
     d = graph.node('Decision', scope, decision['disposition'], **decision)
     graph.edge(run, 'RESULTED_IN', d)
-    for review in payload.get('reviews', []):
-        graph.edge(graph.nodes[identifier('ModelReview', (*scope, review['profile'], review['stage']))]['id'], 'INFORMS', d)
+    for review in final_reviews.values():
+        graph.edge(review, 'INFORMS', d)
     for name, result in bundle.get('validations', {}).items():
         guard = graph.node('Guardrail', (*scope, name), name, status=result)
         graph.edge(d, 'EVALUATED', guard)
@@ -271,7 +350,7 @@ def build(data):
     for row in data.get('collaborations', []):
         p = row['payload']
         if p['item_id'] in items:
-            collaboration(graph, receipt, items[p['item_id']], p, row.get('summary', {}).get('skipped_profiles', []), row.get('completed_at'), row.get('id'))
+            collaboration(graph, receipt, items[p['item_id']], p, row.get('summary', {}).get('skipped_profiles', []), row.get('completed_at'), row.get('id'), row.get('queued_tasks', []))
     for event in data.get('events', []):
         e = event['payload']
         if e.get('event') == 'receipt_item_refreshed':
@@ -310,6 +389,23 @@ def load(conn, sha):
     result_events = conn.execute('SELECT * FROM budget.ocr_result_events WHERE source_sha256=%s ORDER BY persisted_at,message_id', (sha,)).fetchall()
     items = conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=%s ORDER BY id', (expense['id'],)).fetchall() if expense else []
     collaborations = conn.execute('SELECT c.payload,c.completed_at,c.id,COALESCE(r.summary,\'{}\'::jsonb) AS summary FROM enrichment.receipt_collaborations c LEFT JOIN enrichment.receipt_collaboration_runs r USING(run_uuid) JOIN budget.expense_items i ON i.id=c.expense_item_id WHERE i.expense_pk=%s ORDER BY c.completed_at,c.id', (expense['id'],)).fetchall() if expense else []
+    cohorts = {}
+    for row in collaborations:
+        p = row['payload']
+        if 'independent_results' in p:
+            row['queued_tasks'] = []
+            for phase in ('independent', 'exchange'):
+                cohort = uuid5(UUID(p['run_uuid']), f"{p['item_id']}:{phase}")
+                cohorts[cohort] = row
+    if cohorts and conn.execute("SELECT to_regclass('enrichment.model_collaboration_tasks') AS name").fetchone()['name']:
+        tasks = conn.execute('''SELECT id,cohort,provider,attempts,deadline,created_at,completed_at,
+            input->>'stage' AS stage,input->'profile' AS profile,input->>'reply' AS reply,
+            result->'task_provenance' AS task_provenance,result->>'error_type' AS error_type,
+            CASE WHEN result IS NULL THEN 'pending' WHEN result->>'status'='error' THEN 'error' ELSE 'completed' END AS status
+            FROM enrichment.model_collaboration_tasks WHERE cohort=ANY(%s) ORDER BY created_at,id''', (list(cohorts),)).fetchall()
+        for task in tasks:
+            task['queue'] = task.pop('reply').split('.results.')[0] + '.' + task['provider']
+            cohorts[task['cohort']]['queued_tasks'].append(task)
     return {'receipt': receipt, 'expense': expense, 'items': items, 'ocr_runs': runs, 'ocr_passes': passes, 'events': events,
             'result_events': result_events, 'collaborations': collaborations}
 

@@ -270,3 +270,80 @@ def test_only_recorded_human_acceptance_connects_recommendation_to_canonical_upd
     assert acceptance['id'] in story['path_ids']
     assert {'ACCEPTED_AS', 'UPDATED', 'PERSISTED_AS'} <= {e['kind'] for e in story['edges']}
     assert not any(n['kind'] == 'ProductAcceptance' for n in g.build(evidence())['nodes'])
+
+
+def queued_evidence():
+    data = evidence()
+    row = data['collaborations'][0]
+    p = row['payload']
+    p['proposals'] = []
+    p['independent_results'] = []
+    row['queued_tasks'] = []
+    for final in p['reviews']:
+        initial = deepcopy(final)
+        if final['provider'] == 'qwen':
+            initial['output'] = {'candidate_id': None, 'candidate_title': None, 'product_source_id': None,
+                                 'source_ids': [p['evidence_bundle']['sources'][0]['id']], 'reason': 'Brand uncertain'}
+        identity = {'worker_host': final['provider'] + '-worker', 'worker_node': 'arsene'}
+        p['independent_results'].append({'reviews': [initial], 'worker_identity': identity,
+            'prompt_source_ids': p['prompt_source_ids'], 'images': p['images']})
+        for phase in ('independent', 'exchange'):
+            row['queued_tasks'].append({'id': final['provider'] + '-' + phase, 'cohort': phase,
+                'profile': {'name': final['profile']}, 'provider': final['provider'], 'stage': phase,
+                'status': 'completed', 'attempts': 1, 'created_at': 'before', 'completed_at': 'after',
+                'deadline': 'later', 'queue': 'receipt-models.v1.' + final['provider'],
+                'task_provenance': {'worker_identity': identity} if phase == 'independent' else None})
+    return data
+
+
+def test_queued_graph_keeps_initial_abstention_exchange_and_revision_distinct():
+    data = queued_evidence()
+    result = g.build(data)
+    nodes = {n['id']: n for n in result['nodes']}
+    reviews = [n for n in nodes.values() if n['kind'] == 'ModelReview']
+    assert len(reviews) == 4 and len({n['id'] for n in reviews}) == 4
+    initial = next(n for n in reviews if n['properties']['profile'] == 'qwen' and n['properties']['collaboration_round'] == 'independent')
+    final = next(n for n in reviews if n['properties']['profile'] == 'qwen' and n['properties']['collaboration_round'] == 'exchange')
+    assert json.loads(initial['properties']['output'])['candidate_id'] is None
+    assert json.loads(final['properties']['output'])['candidate_id'] == 'product:1'
+    assert any(e['kind'] == 'REVISES' and e['source'] == final['id'] and e['target'] == initial['id'] for e in result['edges'])
+    assert not any(e['kind'] == 'INFORMS' and e['source'] == initial['id'] for e in result['edges'])
+    assert len([e for e in result['edges'] if e['kind'] == 'CONSIDERED_REVIEW']) == 4
+    assert len([n for n in nodes.values() if n['kind'] == 'ModelTask']) == 4
+    assert all(e['source'] in nodes and e['target'] in nodes for e in result['edges'])
+    tasks = [n for n in nodes.values() if n['kind'] == 'ModelTask']
+    for task in tasks:
+        execution = [e for e in result['edges'] if e['source'] == task['id'] and e['kind'] == 'EXECUTED_BY']
+        assert bool(execution) == (task['properties']['collaboration_round'] == 'independent')
+    assert g.build(data) == result
+    story = web.processing_story(result)
+    assert {n['id'] for n in story['nodes']} >= {n['id'] for n in reviews + tasks}
+    assert any(e['kind'] == 'REVISES' for e in story['edges'])
+
+
+def test_queued_task_errors_are_projected_without_inventing_model_review():
+    data = queued_evidence()
+    p = data['collaborations'][0]['payload']
+    p['independent_results'][1] = {'status': 'error', 'error_type': 'TimeoutError'}
+    p['reviews'][1] = {k: v for k, v in p['reviews'][1].items() if k != 'stage'}
+    p['reviews'][1].update(status='error', error_type='TimeoutError', output=None)
+    data['collaborations'][0]['queued_tasks'][2]['status'] = 'error'
+    result = g.build(data)
+    assert not any(e['kind'] == 'REVISES' for e in result['edges'])
+    assert len([n for n in result['nodes'] if n['kind'] == 'ModelReview']) == 2
+
+
+def test_independent_proposals_are_only_shared_after_the_exchange_barrier():
+    data = queued_evidence()
+    for result in data['collaborations'][0]['payload']['independent_results']:
+        review = result['reviews'][0]
+        result['proposals'] = [{**review, 'stage': 'proposal', 'output': {'reading': 'Picante Medium',
+            'queries': ['picante medium'], 'source_ids': ['pass:ocr-1:1:line:1'], 'reason': 'hypothesis'}}]
+    graph = g.build(data)
+    nodes = {n['id']: n for n in graph['nodes']}
+    for edge in graph['edges']:
+        if edge['kind'] == 'CONSIDERED_PROPOSAL':
+            invocation, proposal = nodes[edge['source']], nodes[edge['target']]
+            if invocation['properties']['collaboration_round'] == 'independent':
+                assert invocation['properties']['profile'] == proposal['properties']['profile']
+    assert len([e for e in graph['edges'] if e['kind'] == 'SHARED_IN']) == 4

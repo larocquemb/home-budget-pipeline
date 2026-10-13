@@ -273,3 +273,22 @@ collaborations. New retrieval metadata and model prompts retain this uncertainty
 Product-based corrections remain separate from observed OCR. Exact row attribution
 requires an explicitly retained item-to-source-position mapping; text similarity,
 matching amounts or pass line order alone do not establish it.
+
+### Queued model collaboration provenance
+
+Graph projection version 6 separates independent and evidence-exchange rounds.
+`CollaborationRound` dispatches `ModelTask` entities with durable task/cohort IDs,
+provider queue, attempts and recorded timestamps. Tasks connect to their model
+invocations and recorded workers. Initial reviews, including abstentions, stay
+distinct from final reviews. An `EvidenceExchange` links shared initial findings
+to the final reviewers; final reviews `REVISES` or `FOLLOWS` their own initial
+review. Only final reviews inform the reconciled decision. Peer assertions never
+become OCR observations or independent evidence.
+
+The Processing story shows independent work and shared review separately. Select
+a task or review to inspect its properties, citations and recorded relationships.
+Older runs are rebuilt from saved PostgreSQL task/result records. Historical
+exchange worker identity or exact prompt inclusion can remain unknown when it
+was not recorded; the projector does not infer it from another round. New worker
+results record task ID, start time, worker identity and exact exchange source IDs.
+Failed or expired tasks remain task failures rather than fabricated model calls.

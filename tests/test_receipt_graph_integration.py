@@ -65,3 +65,27 @@ def test_real_neo4j_atomic_replay_and_out_of_order_snapshot():
         finally:
             session.run('MATCH (n:ReceiptFlowEntity) WHERE n.id IN $ids DETACH DELETE n', ids=[a,b]).consume()
             session.run('MATCH (s:ReceiptSnapshot {sha:$sha}) DETACH DELETE s', sha=sha).consume()
+
+
+def test_postgres_graph_load_scopes_queued_tasks_and_omits_task_inputs(pg_conn):
+    from psycopg.types.json import Jsonb
+    from uuid import uuid5
+    from home_budget_pipeline.receipt_graph import load, build
+    sha, run_id = uuid.uuid4().hex * 2, uuid.uuid4()
+    pg_conn.execute('INSERT INTO ingest.receipts(source_sha256,source_reference) VALUES (%s,%s)', (sha, 'queue-provenance.pdf'))
+    expense = pg_conn.execute("INSERT INTO budget.expenses(source,order_id,store_name,receipt_filename,expense_total) VALUES ('scanned',%s,'Sobeys','queue-provenance.pdf',1) RETURNING id", (str(run_id),)).fetchone()['id']
+    item = pg_conn.execute("INSERT INTO budget.expense_items(expense_pk,item_name) VALUES (%s,'Item') RETURNING id", (expense,)).fetchone()['id']
+    pg_conn.execute("INSERT INTO budget.receipt_evidence(expense_pk,evidence_type,source_reference,source_sha256,is_primary_source) VALUES (%s,'scanned','queue-provenance.pdf',%s,true)", (expense, sha))
+    payload = {'run_uuid': str(run_id), 'item_id': item, 'independent_results': [], 'reviews': [], 'decision': {'disposition': 'review'}}
+    pg_conn.execute('INSERT INTO enrichment.receipt_collaborations(run_uuid,expense_item_id,payload) VALUES (%s,%s,%s)', (run_id, item, Jsonb(payload)))
+    for current in (True, False):
+        cohort = uuid5(run_id, f'{item if current else item+1}:independent')
+        pg_conn.execute('''INSERT INTO enrichment.model_collaboration_tasks(id,cohort,provider,input,deadline)
+            VALUES (%s,%s,'qwen',%s,NOW()+interval '1 hour')''', (uuid.uuid4(), cohort, Jsonb({
+            'stage': 'independent', 'profile': {'name': 'qwen'}, 'reply': 'receipt-models.v1.results.' + str(cohort),
+            'unused_private_input': 'DO-NOT-PROJECT'})))
+    data = load(pg_conn, sha)
+    assert len(data['collaborations'][0]['queued_tasks']) == 1
+    graph = build(data)
+    assert len([n for n in graph['nodes'] if n['kind'] == 'ModelTask']) == 1
+    assert 'DO-NOT-PROJECT' not in json.dumps(graph)
