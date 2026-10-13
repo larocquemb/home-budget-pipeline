@@ -274,6 +274,8 @@ enabled provider completes review of all retained observations. Uncertain review
 remain saved for review, while recommendations still require cited, eligible
 retailer evidence, agreement and verified receipt arithmetic. Failed search
 requests, missing evidence and model disagreement still require review.
+Different captured titles for ineligible search hits remain recorded as warnings;
+conflicting titles for eligible product evidence still block recommendations.
 
 Brave results are cached in PostgreSQL across items and jobs, and rescored for
 each item. Positive results expire after 90 days; empty results after one hour.

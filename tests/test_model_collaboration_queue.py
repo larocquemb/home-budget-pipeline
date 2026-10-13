@@ -107,6 +107,24 @@ def test_quota_stays_blocking_if_final_review_is_incomplete(failure):
     assert any(e['error_type'] == 'HypothesisBudgetExceeded' for e in payload['blocking_errors'])
 
 
+@pytest.mark.parametrize('eligible,expected', [(False, 'recommended'), (True, 'review')])
+def test_title_conflicts_are_blocking_only_for_eligible_product_evidence(eligible, expected):
+    class Conflicts(Dispatch):
+        def round(self, stage, profiles, payload, context):
+            results = super().round(stage, profiles, payload, context)
+            if stage == 'independent':
+                url = URL if eligible else 'https://sobeys.com/products/unrelated-pie'
+                for i, result in enumerate(results):
+                    result['search_results'].append({'url': url, 'title': ('Buy ' if i else '') +
+                        (TITLE if eligible else 'Lemon Pie Filling'), 'snippet': '', 'query': 'related result'})
+            return results
+    result = queue.collaborate_item(Conflicts(), {'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
+        bundle(), PROFILES, .85, {'run_uuid': str(uuid4()), 'item_id': 1})
+    assert result['decision']['disposition'] == expected
+    assert bool(result['blocking_errors']) == eligible
+    assert any(e['error_type'] == 'ConflictingRetailerTitle' for e in result['errors'])
+
+
 def test_peer_review_does_not_repeat_receipt_ids_for_each_candidate(monkeypatch):
     data = bundle()
     data['sources'] += [{'id': f'pass:{i}', 'kind': 'ocr_pass', 'engine': 'tesseract', 'text': 'Oep Pic Med'}
