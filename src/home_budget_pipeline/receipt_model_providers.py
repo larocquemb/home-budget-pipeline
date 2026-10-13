@@ -59,7 +59,7 @@ def profiles() -> tuple[list[Profile], list[dict]]:
             model = os.getenv(key, '').strip()
             if model:
                 selected.append(Profile(provider, provider, model, **budgets, vision=True))
-        models = os.getenv('OLLAMA_COLLAB_MODELS', 'qwen3:30b').split(',')
+        models = os.getenv('OLLAMA_COLLAB_MODELS', 'qwen3.8:27b').split(',')
         qwen_budgets = {
             'context_tokens': int(os.getenv('QWEN_CONTEXT_TOKENS', '').strip() or os.getenv('COLLAB_CONTEXT_TOKENS', '32768')),
             'output_tokens': int(os.getenv('QWEN_OUTPUT_TOKENS', '').strip() or os.getenv('COLLAB_OUTPUT_TOKENS', '8192')),
@@ -67,7 +67,7 @@ def profiles() -> tuple[list[Profile], list[dict]]:
         for index, model in enumerate(dict.fromkeys(m.strip() for m in models if m.strip())):
             selected.append(Profile(f'qwen-{index + 1}', 'qwen', model,
                 **qwen_budgets,
-                vision='vl' in model.lower()))
+                vision='vl' in model.lower() or model.lower().startswith('qwen3.8:')))
     if len(selected) > 8 or len({p.name for p in selected}) != len(selected):
         raise ValueError('Profiles must have unique names and at most eight entries')
     enabled, skipped = [], []

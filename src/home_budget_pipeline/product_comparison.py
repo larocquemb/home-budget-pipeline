@@ -68,7 +68,7 @@ def _generate_once(provider: str, text: str, *, model: str | None = None) -> dic
         return {"queries": parse_queries(response.output_text), "model": model,
                 "input_tokens": getattr(usage, "input_tokens", None),
                 "output_tokens": getattr(usage, "output_tokens", None)}
-    model = model or os.getenv("OLLAMA_PRODUCT_MODEL", "qwen3:30b")
+    model = model or os.getenv("OLLAMA_PRODUCT_MODEL", "qwen3.8:27b")
     base = os.getenv("OLLAMA_BASE_URL", "http://192.168.2.201:11434").rstrip("/")
     request = urllib.request.Request(
         base + "/api/chat",
@@ -141,7 +141,7 @@ def evaluate(provider: str, item: str, merchant: str, api_key: str,
     started = time.monotonic()
     result = {"provider": provider, "model": model or os.getenv(
         "AI_PRODUCT_MODEL" if provider == "openai" else "OLLAMA_PRODUCT_MODEL",
-        "gpt-5.6-terra" if provider == "openai" else "qwen3:30b"),
+        "gpt-5.6-terra" if provider == "openai" else "qwen3.8:27b"),
         "status": "error", "confidence": None, "accepted": False}
     sampler = GpuSampler(emit, {**(context or {}), "provider": provider}) if provider == "qwen" and context else None
     try:

@@ -90,7 +90,7 @@ workflow. The existing database PreSync upgrade creates the comparison and run-s
 the managed `product-enrichment` CronJob supplies the application image and
 database, OpenAI and Brave secret references. It remains suspended, so comparisons
 run only when requested. The OpenAI model uses the existing `AI_PRODUCT_MODEL`
-setting/default. Qwen uses `OLLAMA_PRODUCT_MODEL=qwen3:30b` and
+setting/default. Qwen uses `OLLAMA_PRODUCT_MODEL=qwen3.8:27b` and
 `OLLAMA_BASE_URL=http://192.168.2.201:11434` from the CronJob manifest.
 
 Apply the Grafana dashboard from this repository on your Mac:
@@ -291,21 +291,17 @@ Vision profiles also receive up to two receipt page images, verified against the
 source SHA-256 and read from the mounted receipt inbox. Text-only Qwen sees the
 OCR evidence. Models propose readings and search queries with source citations.
 
-The production collaboration profile uses `qwen3-vl-receipts:30b-instruct` so Qwen receives the
-same page images as OpenAI. Before syncing this profile, install the model on
-Arsene (set `OLLAMA_HOST` to the managed service address):
+The default product and receipt collaboration model is `qwen3.8:27b` on Arsene.
+It supports vision and receives the same receipt page images as OpenAI. To
+install the default model on another managed host:
 
 ```sh
-OLLAMA_HOST=http://192.168.2.201:11434 ollama pull qwen3-vl:30b-a3b-instruct-q4_K_M
-make ollama-gitops-check
-make ollama-gitops-apply
+OLLAMA_HOST=http://192.168.2.201:11434 ollama pull qwen3.8:27b
 ```
 
-The host role creates `qwen3-vl-receipts:30b-instruct` from these installed weights
-with a managed ChatML template and stop tokens; it does not download or duplicate
-the weights. The installed upstream tag was observed with `{{ .Prompt }}` as
-its template. The managed alias is tested through the standard chat API with
-both text and receipt images.
+The previous `qwen3-vl-receipts:30b-instruct` alias remains available for explicit
+selection and evaluation baselines. The host role maintains its ChatML template
+and stop tokens from the installed `qwen3-vl:30b-a3b-instruct-q4_K_M` weights.
 
 Large scanned PDFs up to 128 MiB are hash-verified in a stream and rendered
 without loading the entire source into a Python byte buffer. Uploaded evidence
