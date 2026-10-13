@@ -1,7 +1,7 @@
 """Two-round receipt evidence collaboration; recommendations never overwrite facts."""
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import nullcontext, ExitStack
 from copy import deepcopy
 from dataclasses import asdict, replace
 import hashlib
@@ -832,7 +832,7 @@ def run(*, dsn, api_key, limit, threshold, write_db, item_ids=()):
     receipt_timings = {}
     from .brave_query_cache import BraveQueryCache, refresh_requested
     refresh = refresh_requested()
-    with psycopg.connect(dsn, row_factory=dict_row) as conn, BraveQueryCache(dsn, refresh=refresh) as query_cache:
+    with ExitStack() as stack, psycopg.connect(dsn, row_factory=dict_row) as conn, BraveQueryCache(dsn, refresh=refresh) as query_cache:
         rows = conn.execute('''SELECT i.id, i.item_name, i.unit_qty, i.unit_cost, i.line_total,
             e.id AS receipt_id, e.store_name, e.receipt_filename, e.source_reference,
             e.receipt_item_subtotal,e.receipt_gst,e.receipt_pst,e.receipt_discount_total,e.expense_total,e.total_recon_diff,
@@ -845,6 +845,13 @@ def run(*, dsn, api_key, limit, threshold, write_db, item_ids=()):
             ORDER BY i.id LIMIT %s''',
             ([f'%{name}%' for name in core.RETAILER_DOMAINS], not item_ids, list(item_ids), refresh, limit)).fetchall()
         conn.commit()
+        transport = os.getenv('COLLABORATION_TRANSPORT', 'rabbitmq')
+        if transport not in {'rabbitmq', 'inline'}:
+            raise ValueError('Unknown collaboration transport')
+        if transport == 'rabbitmq' and rows:
+            from . import model_collaboration_queue as queued
+            dispatcher = queued.Dispatcher(dsn, os.getenv('RABBITMQ_URL', ''))
+            stack.callback(dispatcher.close)
         for row in rows:
             context = {'run_uuid': run_id, 'receipt_id': row['receipt_id'], 'item_id': row['id'],
                 'item_name': row['item_name'], 'receipt': row['receipt_filename'] or row['source_reference']}
@@ -853,8 +860,15 @@ def run(*, dsn, api_key, limit, threshold, write_db, item_ids=()):
             bundle = shared.load(conn, row)
             priors = core.accepted_search_priors(conn, row['store_name'])
             conn.commit()
-            payload = collaborate_item(row, bundle, profiles, api_key, threshold, context, priors)
-            payload['brave_cache'] = list(query_cache.observations)
+            if transport == 'rabbitmq':
+                payload = queued.collaborate_item(dispatcher, row, bundle, profiles, threshold, context, priors, refresh)
+                stats.setdefault('brave_api_requests', 0)
+                stats.setdefault('brave_cache_hits', 0)
+                stats['brave_api_requests'] += payload['brave_api_requests']
+                stats['brave_cache_hits'] += payload['brave_cache_hits']
+            else:
+                payload = collaborate_item(row, bundle, profiles, api_key, threshold, context, priors)
+                payload['brave_cache'] = list(query_cache.observations)
             if write_db:
                 conn.execute('INSERT INTO enrichment.receipt_collaborations (run_uuid,expense_item_id,payload) VALUES (%s,%s,%s)',
                              (run_id, row['id'], Jsonb(payload)))
@@ -872,8 +886,8 @@ def run(*, dsn, api_key, limit, threshold, write_db, item_ids=()):
             timing['complete_receipt'] = timing['selected_items'] == timing['receipt_item_count']
             comparison.emit('enrichment_receipt_timing', timing)
         stats['receipts'] = list(receipt_timings.values())
-        stats['brave_api_requests'] = query_cache.requests
-        stats['brave_cache_hits'] = query_cache.hits
+        stats['brave_api_requests'] = stats.get('brave_api_requests', 0) + query_cache.requests
+        stats['brave_cache_hits'] = stats.get('brave_cache_hits', 0) + query_cache.hits
         stats['refresh'] = refresh
         if write_db:
             conn.execute('INSERT INTO enrichment.receipt_collaboration_runs (run_uuid,summary) VALUES (%s,%s)', (run_id, Jsonb(stats)))

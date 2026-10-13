@@ -13,6 +13,7 @@ resources:
   - receipt-processor-cronjob.yaml
   - product-enrichment-cronjob.yaml
   - receipt-model-profiles.yaml
+  - model-collaboration-workers.yaml
   - external-log-reader-rbac.yaml
 
 patches:

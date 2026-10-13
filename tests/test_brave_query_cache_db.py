@@ -92,6 +92,7 @@ def test_cache_key_includes_request_semantics_and_contains_no_api_secret():
 
 
 def test_collaboration_skips_accepted_items_before_limit_and_explicit_refresh_includes_them(receipt, monkeypatch):
+    monkeypatch.setenv('COLLABORATION_TRANSPORT', 'inline')
     from home_budget_pipeline import receipt_collaboration as collab
     from home_budget_pipeline.receipt_model_providers import Profile
     service,_,_,items,_,_ = receipt

@@ -263,8 +263,9 @@ make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf'
 Here `DRY_RUN=1` validates the Kubernetes Job without creating it or calling
 providers. The real collaboration saves proposals, search evidence and a
 recommendation for review; it does not accept a product automatically. Production
-collaboration uses local Qwen first and leaves paid model fallback disabled unless
-`PAID_FALLBACK=1` is supplied. `COMPARE=1` is a separate mode that calls OpenAI
+collaboration dispatches enabled providers through RabbitMQ for independent
+discovery, then a parallel review of pooled findings. `PAID_FALLBACK=1` enrolls
+configured paid providers in both rounds; otherwise only Qwen participates. `COMPARE=1` is a separate mode that calls OpenAI
 and Qwen for paired comparison; choose one mode per run.
 
 Brave results are cached in PostgreSQL across items and jobs, and rescored for

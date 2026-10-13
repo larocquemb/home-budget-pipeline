@@ -72,7 +72,7 @@ fi
 kube create -f "$work_dir/prepared.json"
 echo "Started Job/$job in $context/$namespace (COMPARE=$compare COLLABORATE=$collaborate LIMIT=$limit)."
 [[ "$compare" != 1 ]] || echo 'Runs OpenAI and Qwen plus Brave searches; records comparisons without changing accepted products.'
-[[ "$collaborate" != 1 ]] || echo 'Shares OCR, receipt images and Brave evidence across configured models; stores proposals and review decisions without changing accepted products.'
+[[ "$collaborate" != 1 ]] || echo 'Dispatches enabled models through RabbitMQ for independent discovery and a shared evidence-exchange review; stores results without changing accepted products.'
 pod=""
 for ((attempt=0; attempt<60; attempt++)); do
   pod="$(kube get pods -l "job-name=$job" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
