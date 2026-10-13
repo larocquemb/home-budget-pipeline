@@ -366,7 +366,7 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
         decision['disposition'] = 'review'
         decision['reasons'].append('receipt_arithmetic_not_verified')
     decision['review_policy'] = {'mode': 'rabbitmq_independent_then_exchange', 'skipped_profiles': [], 'fallback_reasons': []}
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v17-queued', 'scoring_version': core.SCORING_VERSION,
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v18-queued', 'scoring_version': core.SCORING_VERSION,
         'evidence_bundle': deepcopy(bundle), 'decision': decision, 'reviews': reviews,
         'independent_results': independent, 'independent_findings': findings,
         'candidates': candidates, 'search_results': list(cards.values()), 'available_candidates': len(cards),

@@ -225,8 +225,8 @@ def call(profile, stage, text, sources, candidates, images, context, candidate_t
                 queries = raw_output.get('queries') if isinstance(raw_output, dict) else None
                 pattern = schema['properties']['queries']['items']['pattern']
                 if (not isinstance(raw_output, dict) or set(raw_output) != {'queries'} or
-                    not isinstance(queries, list) or len(queries) != 3 or
-                    any(not isinstance(q, str) or not re.fullmatch(pattern, q) for q in queries)):
+                    not isinstance(queries, list) or not 0 <= len(queries) <= 3 or
+                    any(not isinstance(q, str) or len(q) > 160 or not re.fullmatch(pattern, q) for q in queries)):
                     raise ValueError('Invalid descriptive prefix expansion')
                 output = raw_output
             else:
@@ -247,7 +247,7 @@ def call(profile, stage, text, sources, candidates, images, context, candidate_t
     return result
 
 
-def expand_descriptive_prefixes(hypotheses, profiles, context):
+def expand_descriptive_prefixes(hypotheses, profiles, context, merchant=None):
     """One bounded lexical task per distinct suffix; proposals are never proof."""
     profile = next((p for p in profiles if p.provider == 'qwen'), None)
     if profile is None:
@@ -259,16 +259,19 @@ def expand_descriptive_prefixes(hypotheses, profiles, context):
         if not 2 <= len(tokens) <= 3 or tokens in seen:
             continue
         seen.add(tokens)
-        pattern = '^' + ' '.join(re.escape(t) + ('[a-z]+' if len(t) <= 4 else '[a-z]*') for t in tokens) + '$'
-        schema = {'type': 'object', 'properties': {'queries': {'type': 'array', 'minItems': 3,
-            'maxItems': 3, 'items': {'type': 'string', 'pattern': pattern}}},
+        pattern = '^[a-z]+(?: [a-z]+){1,7}$'
+        schema = {'type': 'object', 'properties': {'queries': {'type': 'array', 'minItems': 0,
+            'maxItems': 3, 'items': {'type': 'string', 'maxLength': 160, 'pattern': pattern}}},
             'required': ['queries'], 'additionalProperties': False}
-        text = (f"Expand grocery receipt descriptor prefixes {' '.join(tokens).upper()} into three possible full-word search phrases. "
-            "The first prefix describes a food flavour or style; the last describes size or heat intensity. "
-            f"Each phrase must use {' and '.join('a longer lowercase word beginning ' + t for t in tokens)}. "
-            "Prefer common food flavour/style and size/heat adjectives. Do not add brands, prices, quantities, "
-            "package sizes or unrelated product categories. These are unverified hypotheses for web search, "
-            "not confirmed products. Return only JSON.")
+        text = ("Expand the receipt descriptors into up to three possible full-word grocery search phrases. "
+            "Tokens may already be full words, omit internal vowels/consonants, or contain OCR word splits; "
+            "the expanded word need not start with the literal OCR fragment. Preserve every meaningful "
+            "descriptor and negation in the complete reading. Use product, flavour, style and size meanings "
+            "appropriate to the merchant; do not assume the last token always denotes heat intensity. "
+            "Do not add brands, prices, quantities, package sizes or unrelated product categories. "
+            "These are unverified search hypotheses, never product evidence. Use lowercase words separated "
+            "by spaces. If no defensible expansion is possible, return queries=[]. Return only JSON.\n" +
+            json.dumps({'merchant': merchant, 'receipt_reading': h['reading'], 'descriptors': tokens}))
         result = call(profile, 'descriptive_expansion', text, set(), set(), [], context, schema_override=schema)
         result['descriptive_tokens'] = list(tokens)
         result['derived_source_ids'] = h['source_ids']
@@ -599,7 +602,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
             core.candidate_score(s['text'], core.retailer_domain(row['store_name']), result.title, result.url, result.snippet) >= threshold
             for s in bundle['sources'])
     verified_literal = any(p.provider == 'qwen' for p in profiles) and any(verified_product(r) for _, r in baseline)
-    descriptor_expansions = [] if verified_literal else expand_descriptive_prefixes(prompt_hypotheses, profiles, context)
+    descriptor_expansions = [] if verified_literal else expand_descriptive_prefixes(prompt_hypotheses, profiles, context, row['store_name'])
     for expansion in descriptor_expansions:
         if expansion['status'] != 'success':
             errors.append({'stage': 'descriptive_expansion', 'profile': expansion['profile'], 'error_type': expansion.get('error_type')})
@@ -800,7 +803,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     decision = reconcile(candidates, reviews, bundle['validations'], threshold, blocking, complete_context, min_provider_families=min_families)
     decision['recovered_discovery_errors'] = recovered
     decision['review_policy'] = review_policy
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v15', 'scoring_version': core.SCORING_VERSION,
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v16', 'scoring_version': core.SCORING_VERSION,
         'evidence_bundle': bundle, 'prompt_coverage': coverage, 'prompt_source_ids': sorted(known_sources),
         'worker_identity': {'worker_host': socket.gethostname(), 'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME')},
         'images': image_metadata, 'image_errors': image_errors, 'learned_searches': learned,

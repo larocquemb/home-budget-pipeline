@@ -18,8 +18,8 @@ def test_prefix_discovery_verifies_live_recorded_queries_before_review(monkeypat
     def request(profile, text, schema, images):
         if set(schema['properties']) == {'queries'}:
             calls.append('prefix')
-            assert images == [] and 'PIC MED' in text
-            assert schema['properties']['queries']['items']['pattern'] == '^pic[a-z]+ med[a-z]+$'
+            assert images == [] and 'Cep Pic Med' in text
+            assert schema['properties']['queries']['minItems'] == 0
             return {'output': {'queries': ['picante medium', 'pictorial medium', 'piccolo medium']}}
         calls.append('review')
         assert images and TITLE in text
@@ -51,7 +51,7 @@ def test_prefix_discovery_verifies_live_recorded_queries_before_review(monkeypat
     assert 'site:sobeys.com pictorial medium' not in queries
 
 
-@pytest.mark.parametrize('query', ['pic med', 'plain rice pasta medium', 'cep picante medium', 'piquant medium'])
+@pytest.mark.parametrize('query', ['picante', 'picante 650 ml', 'site:sobeys.com picante medium', 'Picante medium', 'x' * 170 + ' medium'])
 def test_prefix_schema_is_revalidated_locally(monkeypatch, query):
     monkeypatch.setattr(p, 'request', lambda *args: {'output': {'queries': [query] * 3}})
     result = c.expand_descriptive_prefixes([{'reading': 'ep Pic Med', 'source_ids': [SOURCE]}],
