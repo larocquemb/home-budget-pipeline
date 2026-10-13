@@ -8,7 +8,7 @@ data:
   ANTHROPIC_RECEIPT_MODEL: claude-sonnet-4-6
   GEMINI_RECEIPT_MODEL: gemini-3.8-flash
   OLLAMA_COLLAB_MODELS: qwen3.8:27b
-  COLLAB_CONTEXT_TOKENS: "16384"
+  COLLAB_CONTEXT_TOKENS: "32768"
   COLLAB_OUTPUT_TOKENS: "2048"
   # Ollama thinking and its answer share the output budget; keep paid budgets separate.
   QWEN_CONTEXT_TOKENS: "32768"

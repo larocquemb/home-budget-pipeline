@@ -1,5 +1,6 @@
 import inspect
 import json
+import pytest
 from types import SimpleNamespace
 
 from home_budget_pipeline import product_enrichment
@@ -10,6 +11,41 @@ from home_budget_pipeline.product_enrichment import (
     product_query,
     retailer_domain,
 )
+
+
+@pytest.mark.parametrize('item,title', [
+    ('Comp Quick Oats 1KG', 'Compliments Quick Oats 1 kg'),
+    ('Milk Chocolate 1L', 'Milk Chocolate 1 l'),
+    ('Juice Orange 1.5L', 'Juice Orange 1.5 l'),
+    ('Pie Filling S/Berry', 'Strawberry Pie Filling'),
+    ('Chips Rstrnt Sty', 'Chips Restaurant Style'),
+    ('Cottage Cheese 1%MF', 'Cottage Cheese 1%'),
+])
+def test_recorded_units_and_abbreviations_match_retailer_text(item, title):
+    result = product_enrichment.candidate_evidence(item, 'sobeys.com', title, 'https://sobeys.com/products/example')
+    assert result['confidence'] >= .85
+    assert all(e['kind'] != 'unmatched' for e in result['tokens'])
+
+
+@pytest.mark.parametrize('item,title', [
+    ('Comp Quick Oats 1KG', 'Compliments Quick Oats 709 g'),
+    ('Milk Chocolate 1L', 'Milk Chocolate 2 l'),
+    ('Juice Orange 1.5L', 'Juice Orange 5 l'),
+    ('Pie Filling S/Berry', 'Blueberry Pie Filling'),
+    ('Cottage Cheese 1%MF', 'Cottage Cheese 2%'),
+    ('Cottage Cheese 1%MF', 'Cottage Cheese'),
+])
+def test_conflicting_or_missing_recorded_package_values_are_blocking(item, title):
+    result = product_enrichment.candidate_evidence(item, 'sobeys.com', title, 'https://sobeys.com/products/example')
+    assert result['confidence'] < .85
+    assert any(e['kind'] == 'unmatched' for e in result['tokens'])
+
+
+def test_related_product_in_search_snippet_does_not_supply_missing_identity():
+    result = product_enrichment.candidate_evidence('Pepsi Zero', 'sobeys.com', 'Pepsi Diet Soda',
+        'https://sobeys.com/products/pepsi-diet-soda', 'Also available: Pepsi Zero Sugar')
+    assert result['confidence'] < .85
+    assert result['tokens'][1]['kind'] == 'unmatched'
 
 
 def test_discovery_learns_expansions_from_accepted_prior_matches():

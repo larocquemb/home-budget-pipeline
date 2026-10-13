@@ -313,7 +313,7 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
                 cards[identifier] = rebuilt
     eligible = [c for c in cards.values() if c['evidence']['product_page'] and c['confidence'] >= threshold
                 and c['ocr_support'] and all(t['kind'] != 'unmatched' for t in c['evidence']['tokens'])]
-    candidates = sorted(eligible, key=lambda c: (-c['confidence'], c['id']))[:8]
+    candidates = sorted(eligible, key=lambda c: (-c['confidence'], c['id']))[:collaboration.MAX_REVIEW_CANDIDATES]
     if len(eligible) > len(candidates):
         errors.append({'stage': 'pooled_evidence', 'error_type': 'CandidateContextTruncated'})
     exchange = dispatcher.round('exchange', profiles, {**inputs, 'candidates': candidates, 'findings': findings}, context)
@@ -358,7 +358,7 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
         decision['disposition'] = 'review'
         decision['reasons'].append('receipt_arithmetic_not_verified')
     decision['review_policy'] = {'mode': 'rabbitmq_independent_then_exchange', 'skipped_profiles': [], 'fallback_reasons': []}
-    payload = {**context, 'prompt_version': 'receipt-collaboration-v16-queued', 'scoring_version': 'receipt-evidence-v2',
+    payload = {**context, 'prompt_version': 'receipt-collaboration-v17-queued', 'scoring_version': core.SCORING_VERSION,
         'evidence_bundle': deepcopy(bundle), 'decision': decision, 'reviews': reviews,
         'independent_results': independent, 'independent_findings': findings,
         'candidates': candidates, 'search_results': list(cards.values()), 'available_candidates': len(cards),

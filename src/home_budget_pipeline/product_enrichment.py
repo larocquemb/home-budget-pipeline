@@ -10,9 +10,11 @@ import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Optional
 
 LOG = logging.getLogger(__name__)
+SCORING_VERSION = 'receipt-evidence-v3'
 
 RETAILER_DOMAINS = {
     "costco": "costco.ca",
@@ -149,6 +151,16 @@ def scoped_search_query(expansion: str, merchant: str) -> Optional[str]:
     return f'site:{domain} {terms}' if domain and terms else None
 
 
+def evidence_text(text: str) -> str:
+    """Normalize spacing in recorded package units without dropping their values."""
+    return re.sub(r'\b(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l|lb|oz)\b',
+                  lambda m: m[1].replace(',', '.') + m[2], text.lower())
+
+
+def evidence_words(text: str) -> list[str]:
+    return re.findall(r'\d+(?:\.\d+)?(?:kg|g|ml|l|lb|oz)\b|[a-z0-9]+', text)
+
+
 def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippet: str = "") -> dict:
     """Explain lexical evidence; proposals themselves never increase this score."""
     hostname = (urllib.parse.urlparse(url).hostname or "").lower()
@@ -158,14 +170,20 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
     product_page = any(marker in path for marker in PRODUCT_PATH_MARKERS.get(domain, ()))
     if re.search(r"/(brand|brands|category|categories|recipes)(/|$)", path):
         product_page = False
-    source_words = set(re.findall(r"[a-z0-9]+", f"{title} {urllib.parse.unquote(path)} {snippet}".lower()))
+    # Search snippets may describe related products. Product identity must be
+    # supported by the retailer title or product URL, not neighbouring promotions.
+    source_text = evidence_text(f"{title} {urllib.parse.unquote(path)}")
+    source_words = set(evidence_words(source_text))
     barcode = BARCODE_RE.search(item_name or "")
     if barcode and barcode.group(0) in source_words:
         return {"confidence": 1.0 if product_page else 0.0, "product_page": product_page,
                 "reason": "exact_barcode", "tokens": []}
+    item_text = evidence_text(item_name)
+    compounds = {a + b: (a, b) for a, b in re.findall(r'\b([a-z])/([a-z]{3,})\b', item_text)}
+    item_text = re.sub(r'\b([a-z])/([a-z]{3,})\b', r'\1\2', item_text)
     tokens = list(dict.fromkeys(
-        t for t in re.findall(r"[a-z0-9]+", item_name.lower())
-        if len(t) >= 3 and not t.isdigit() and t not in NOISE_TOKENS
+        t for t in evidence_words(item_text)
+        if (len(t) >= 3 or re.fullmatch(r'\d+(?:\.\d+)?(?:kg|g|ml|l|lb|oz)', t)) and not t.isdigit() and t not in NOISE_TOKENS
     ))
     title_words = re.findall(r"[a-z0-9]+", title.lower())
     while title_words and title_words[0] in {"buy", "shop", "purchase"}:
@@ -186,11 +204,27 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
             prefixes = sorted(word for word in source_words if word.startswith(token) and word != token)
             if prefixes:
                 weight, kind, matched = .9, "token_prefix", prefixes[0]
+        if weight == 0 and token in compounds:
+            initial, suffix = compounds[token]
+            matches = sorted(w for w in source_words if w.startswith(initial) and w.endswith(suffix))
+            if matches:
+                weight, kind, matched = .9, "compound_abbreviation", matches[0]
+        if weight == 0 and len(token) >= 4 and not re.search(r'[aeiou0-9]', token):
+            matches = sorted(w for w in source_words if re.sub(r'[aeiou]', '', w) == token)
+            if matches:
+                weight, kind, matched = .9, "consonant_abbreviation", matches[0]
         if weight == 0:
             synonyms = {"sauce": {"salsa"}, "salsa": {"sauce"}}.get(token, set()) & source_words
             if synonyms:
                 weight, kind, matched = .85, "category_synonym", sorted(synonyms)[0]
         evidence.append({"token": token, "kind": kind, "matched": matched, "weight": weight})
+    # Fat percentages used to vanish because they were numeric tokens. A
+    # retailer's otherwise matching product must retain the recorded percentage.
+    for percent in dict.fromkeys(re.findall(r'\b(\d+(?:[.,]\d+)?)\s*%', item_name)):
+        value = Decimal(percent.replace(',', '.'))
+        found = any(Decimal(p.replace(',', '.')) == value for p in re.findall(r'\b(\d+(?:[.,]\d+)?)\s*%', source_text))
+        evidence.append({'token': percent + '%', 'kind': 'exact_percentage' if found else 'unmatched',
+                         'matched': percent + '%' if found else None, 'weight': 1.0 if found else 0.0})
     # At least two meaningful tokens are needed without an exact barcode.
     score = sum(e["weight"] for e in evidence) / len(evidence) if len(evidence) >= 2 else 0.0
     if any(e["kind"] == "unmatched" for e in evidence):
