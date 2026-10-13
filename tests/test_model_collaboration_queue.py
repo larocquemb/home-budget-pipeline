@@ -49,6 +49,43 @@ class Dispatch:
         return [review(p, not (self.abstain and i == 0)) for i, p in enumerate(profiles)]
 
 
+@pytest.mark.parametrize('error,abstain,expected', [
+    ('HypothesisBudgetExceeded', False, 'recommended'),
+    ('HypothesisBudgetExceeded', True, 'review'),
+    ('HTTPError', False, 'review'),
+])
+def test_search_quota_recovers_only_after_complete_cited_agreement(error, abstain, expected):
+    class Limited(Dispatch):
+        def round(self, stage, profiles, payload, context):
+            results = super().round(stage, profiles, payload, context)
+            if stage == 'independent':
+                results[0]['blocking_errors'] = [{'stage': 'ocr_alternative_search', 'error_type': error}]
+            return results
+    payload = queue.collaborate_item(Limited(abstain=abstain), {'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
+        bundle(), PROFILES, .85, {'run_uuid': str(uuid4()), 'item_id': 1})
+    assert payload['decision']['disposition'] == expected
+    assert len(payload['errors']) == 1
+    assert bool(payload['recovered_errors']) == (expected == 'recommended')
+
+
+def test_peer_review_does_not_repeat_receipt_ids_for_each_candidate(monkeypatch):
+    data = bundle()
+    data['sources'] += [{'id': f'pass:{i}', 'kind': 'ocr_pass', 'engine': 'tesseract', 'text': 'Oep Pic Med'}
+                        for i in range(45)]
+    candidate = {'id': collaboration.candidate_id(URL), 'title': TITLE, 'url': URL,
+                 'ocr_support': [s['id'] for s in data['sources']]}
+    monkeypatch.setattr(queue.shared, 'render_images', lambda _: ([IMAGE], []))
+    def request(profile, text, schema, images):
+        assert '"ocr_support"' not in text
+        assert text.count('pass:44') == 1
+        return {'output': review(profile)['output']}
+    monkeypatch.setattr(providers, 'request', request)
+    result = queue.peer_review({'profile': asdict(PROFILES[1]), 'bundle': data, 'candidates': [candidate] * 8,
+                               'findings': [], 'row': {'item_name': 'Cep Pic Med'}, 'context': {}})
+    assert result['status'] == 'success'
+    assert result['exchange_coverage']['included_sources'] == len(data['sources'])
+
+
 def test_every_provider_independently_returns_then_reconsiders_shared_findings():
     dispatch = Dispatch()
     payload = queue.collaborate_item(dispatch, {'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},

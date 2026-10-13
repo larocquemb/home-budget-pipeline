@@ -94,6 +94,11 @@ def candidate_id(url):
     return 'product:' + hashlib.sha256(url.encode()).hexdigest()[:16]
 
 
+def prompt_candidate(candidate):
+    """Keep retailer evidence in prompts; receipt support IDs already occur in OCR evidence."""
+    return {k: v for k, v in candidate.items() if k != 'ocr_support'}
+
+
 def reading_hypotheses(sources, merchant):
     """Keep distinct retrieved readings separate, without counting repeated passes."""
     grouped = {}
@@ -766,7 +771,7 @@ def collaborate_item(row, bundle, profiles, api_key, threshold, context, prior_m
     for index, profile in enumerate(profiles):
         visible_images = images if profile.vision else []
         text = INSTRUCTIONS + 'Round 2: review ALL proposals, reading hypotheses and candidates. Choose a product: ID and its exact candidate_title from retailer_results or null; use the retailer title for the product identity and explanation, never an unverified brand expansion; receipt observation IDs are never product candidates. Set product_source_id to the same product ID as candidate_id, and cite supporting receipt observations in source_ids. When abstaining, all three product fields must be null. Explain conflicting readings and any disagreement.\n' + json.dumps(
-            {**review_evidence, 'retailer_results': candidates, 'peer_proposals': peer_proposals,
+            {**review_evidence, 'retailer_results': [prompt_candidate(c) for c in candidates], 'peer_proposals': peer_proposals,
              'expansion_hypotheses': expansion_summaries,
              'attached_images': [{k: v for k, v in i.items() if k != 'data'} for i in visible_images]}, default=str, separators=(',', ':'))
         reviews.append(review_with_citations(profile, text, known_sources | candidate_ids | {i['id'] for i in visible_images},
