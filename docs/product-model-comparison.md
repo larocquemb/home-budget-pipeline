@@ -62,7 +62,7 @@ shared baseline and its own proposed searches, never the other provider's new
 candidates. `candidate_origin`, `baseline_confidence` and `confidence_gain` show
 whether a model improved on the baseline; ties can simply preserve that baseline.
 
-Scoring version `receipt-evidence-v3` records per-token evidence: exact words
+Scoring version `receipt-evidence-v4` records per-token evidence: exact words
 weigh 1, word beginnings 0.9, brand initials 1, a single C/O OCR ambiguity in
 brand initials 0.95, and sauce/salsa category synonyms 0.85. It averages these
 weights; any unmatched meaningful token caps the score at 0.84. It requires a
@@ -73,6 +73,11 @@ consonant abbreviations (`Rstrnt` and restaurant) weigh 0.9. Conflicting or miss
 recorded package sizes and percentages remain unmatched.
 Snippets remain discovery context; they cannot supply missing identity tokens
 when the product title and URL describe a different product.
+Collaboration can resolve one known OCR glyph ambiguity, such as `Lin` versus
+`Lim`, only when a closely related retained OCR observation records the alternate
+reading. That token weighs 0.85 and saves its original spelling, observed spelling
+and source IDs. Model proposals cannot supply that correction, and printed
+package sizes or percentages cannot be changed by this path.
 Recipes, brand listings and categories score zero. It no longer matches `Pic`
 inside `spice`. Normal enrichment also uses this scorer and rechecks cached
 candidates against the original receipt text before accepting them.

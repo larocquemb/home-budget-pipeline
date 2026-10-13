@@ -258,6 +258,17 @@ def worker(provider, dsn, url, stop=None):
                 connection.close()
 
 
+def consume_loop(provider, dsn, url, stop):
+    """Use the production reconnect path for transient quorum-queue startup races."""
+    while not stop.is_set():
+        try:
+            worker(provider, dsn, url, stop)
+        except Exception as exc:
+            print(json.dumps({'event': 'collaboration_worker_error', 'provider': provider,
+                              'error_type': type(exc).__name__}), flush=True)
+            stop.wait(1)
+
+
 def main():
     import argparse
     import signal
@@ -268,13 +279,7 @@ def main():
     stop = Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
-    while not stop.is_set():
-        try:
-            worker(args.provider, os.environ['DATABASE_URL'], os.environ['RABBITMQ_URL'], stop)
-        except Exception as exc:
-            print(json.dumps({'event': 'collaboration_worker_error', 'provider': args.provider,
-                              'error_type': type(exc).__name__}), flush=True)
-            stop.wait(1)
+    consume_loop(args.provider, os.environ['DATABASE_URL'], os.environ['RABBITMQ_URL'], stop)
 
 
 def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, priors=(), refresh=False):
@@ -299,8 +304,8 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
                          'proposals': [{k: r.get(k) for k in ('provider', 'status', 'output')} for r in result.get('proposals', [])]})
         for card in result.get('search_results', []):
             identifier = collaboration.candidate_id(card['url'])
-            evidence = core.candidate_evidence(row['item_name'], core.retailer_domain(row['store_name']),
-                                              card['title'], card['url'], card['snippet'])
+            evidence = core.candidate_receipt_evidence(row['item_name'], core.retailer_domain(row['store_name']),
+                                              card['title'], card['url'], card['snippet'], bundle['sources'])
             support = [s['id'] for s in bundle['sources'] if s['kind'] in {'ocr_pass', 'ocr_consensus', 'ocr_layout'} and
                        core.candidate_score(s['text'], core.retailer_domain(row['store_name']), card['title'], card['url'], card['snippet']) >= threshold]
             rebuilt = {**card, 'id': identifier, 'evidence': evidence, 'confidence': evidence['confidence'], 'ocr_support': support}

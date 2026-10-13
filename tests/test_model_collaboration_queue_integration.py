@@ -29,7 +29,7 @@ def test_provider_tasks_overlap_and_duplicate_delivery_reuses_committed_result(s
         return {'status': 'success', 'provider': task['profile']['provider']}
     monkeypatch.setattr(queue, 'execute_task', handler)
     def worker(provider):
-        try: queue.worker(provider, dsn, url, stop)
+        try: queue.consume_loop(provider, dsn, url, stop)
         except Exception as exc: failures.append(exc)
     threads = [Thread(target=worker, args=(p,), daemon=True) for p in ('qwen', 'openai')]
     for thread in threads: thread.start()

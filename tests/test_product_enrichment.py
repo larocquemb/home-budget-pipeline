@@ -48,6 +48,36 @@ def test_related_product_in_search_snippet_does_not_supply_missing_identity():
     assert result['tokens'][1]['kind'] == 'unmatched'
 
 
+def test_single_glyph_correction_requires_recorded_related_ocr():
+    args = ('Chips Rstrnt Sty Lin', 'sobeys.com', 'Tostitos Chips Restaurant Style Hint of Lime',
+            'https://sobeys.com/products/tostitos-chips-restaurant-style-hint-of-lime', '')
+    source = {'id': 'ocr:lim', 'kind': 'ocr_pass', 'text': 'Chips Rstrnt Sty Lim $5.29 BC'}
+    assert product_enrichment.candidate_receipt_evidence(*args, [])['confidence'] < .85
+    evidence = product_enrichment.candidate_receipt_evidence(*args, [source])
+    assert evidence['confidence'] == .9125
+    corrected = evidence['tokens'][-1]
+    assert corrected['token'] == 'lin' and corrected['observed_token'] == 'lim'
+    assert corrected['source_ids'] == ['ocr:lim']
+    assert corrected['kind'] == 'observed_ocr_glyph'
+    for invalid in ({**source, 'kind': 'model_proposal'}, {**source, 'text': 'Chips Lime'}):
+        assert product_enrichment.candidate_receipt_evidence(*args, [invalid])['confidence'] < .85
+
+
+def test_observed_ocr_cannot_change_recorded_package_size():
+    evidence = product_enrichment.candidate_receipt_evidence('Comp Quick Oats 1KG', 'sobeys.com',
+        'Compliments Quick Oats 2 kg', 'https://sobeys.com/products/compliments-quick-oats-2-kg', '',
+        [{'id': 'ocr:2kg', 'kind': 'ocr_pass', 'text': 'Comp Quick Oats 2KG'}])
+    assert evidence['confidence'] < .85
+    assert evidence['tokens'][-1]['kind'] == 'unmatched'
+
+
+def test_price_and_two_letter_tax_marker_do_not_create_new_product_queries():
+    assert product_query('Chips Rstrnt Sty Lim $5.29 BC', 'Sobeys') == 'site:sobeys.com Chips Rstrnt Sty Lim'
+    assert product_query('Comp Quick Oats 1.00 KG', 'Sobeys') == 'site:sobeys.com Comp Quick Oats 1.00 KG'
+    assert candidate_score('Comp Quick Oats 1.00 KG', 'sobeys.com', 'Compliments Quick Oats 1 kg',
+                           'https://sobeys.com/products/compliments-quick-oats-1-kg') >= .85
+
+
 def test_discovery_learns_expansions_from_accepted_prior_matches():
     prior = {'id': 7, 'merchant_key': 'sobeys.com', 'status': 'accepted', 'confidence': .95,
              'receipt_text_norm': 'oep pic med',

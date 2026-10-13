@@ -20,6 +20,23 @@ PROFILES = [providers.Profile('qwen', 'qwen', 'qwen3.8:27b', 32768, 8192, True),
 IMAGE = {'id': 'image:1', 'sha256': 'same', 'data': 'test'}
 
 
+def test_consumer_reconnects_after_transient_broker_failure(monkeypatch, capsys):
+    class Stop:
+        done = False
+        def is_set(self): return self.done
+        def wait(self, seconds): return self.done
+    stop, calls = Stop(), []
+    def worker(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError('private connection detail')
+        stop.done = True
+    monkeypatch.setattr(queue, 'worker', worker)
+    queue.consume_loop('qwen', 'db', 'broker', stop)
+    assert len(calls) == 2
+    assert 'private connection detail' not in capsys.readouterr().out
+
+
 def bundle():
     return {'sources': [{'id': 'item:canonical', 'kind': 'canonical_item', 'text': 'Cep Pic Med'},
                         {'id': SOURCE, 'kind': 'ocr_pass', 'engine': 'tesseract', 'text': 'Oep Pic Med'}],

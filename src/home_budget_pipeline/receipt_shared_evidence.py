@@ -101,7 +101,7 @@ def relevant_lines(text: str, item: str, domain: str, limit=3) -> list[dict]:
         # A token anywhere in a flattened table must not turn it into an item line.
         if len(line) > max(160, len(item) * 4) or len(re.findall(r'\b\d+\b', line)) > 8:
             continue
-        reading = re.sub(r'\s+\$?\d+[.,]\d{2}(?:\s+[A-Za-z])?\s*$', '', line).strip()
+        reading = core.RECEIPT_SUFFIX_RE.sub('', line).strip()
         score = max(SequenceMatcher(None, normalized, core.normalized_cache_item_name(reading)).ratio(),
             core.candidate_score(item, domain, line, f'https://{domain}/products/evidence') if domain == 'sobeys.com' else 0)
         if score >= .65:
