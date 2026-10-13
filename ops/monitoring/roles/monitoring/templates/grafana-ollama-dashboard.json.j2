@@ -83,7 +83,7 @@
                       "spec": {
                         "expr": "ollama_api_up{host=\"arsene\",service=\"ollama\"}",
                         "editorMode": "code",
-                        "legendFormat": "Ollama API",
+                        "legendFormat": "{% raw %}{{workload}}{% endraw %} Ollama API",
                         "range": false,
                         "instant": true
                       }
@@ -147,7 +147,7 @@
                       "spec": {
                         "expr": "rate(ollama_service_cpu_seconds_total{host=\"arsene\",service=\"ollama\"}[$__rate_interval])",
                         "editorMode": "code",
-                        "legendFormat": "Service and runners",
+                        "legendFormat": "{% raw %}{{workload}}{% endraw %} service and runners",
                         "range": true,
                         "instant": false
                       }
@@ -211,7 +211,7 @@
                       "spec": {
                         "expr": "ollama_service_memory_bytes{host=\"arsene\",service=\"ollama\"}",
                         "editorMode": "code",
-                        "legendFormat": "Cgroup RAM including cache",
+                        "legendFormat": "{% raw %}{{workload}}{% endraw %} Cgroup RAM including cache",
                         "range": true,
                         "instant": false
                       }
@@ -233,7 +233,7 @@
                       "spec": {
                         "expr": "ollama_service_swap_bytes{host=\"arsene\",service=\"ollama\"}",
                         "editorMode": "code",
-                        "legendFormat": "Swap",
+                        "legendFormat": "{% raw %}{{workload}}{% endraw %} Swap",
                         "range": true,
                         "instant": false
                       }
@@ -764,7 +764,7 @@
                       "spec": {
                         "expr": "ollama_model_size{host=\"arsene\",service=\"ollama\"}",
                         "editorMode": "code",
-                        "legendFormat": "{% raw %}{{model}}{% endraw %} total",
+                        "legendFormat": "{% raw %}{{model}} {{workload}}{% endraw %} total",
                         "range": true,
                         "instant": false
                       }
@@ -786,7 +786,7 @@
                       "spec": {
                         "expr": "ollama_model_size_vram{host=\"arsene\",service=\"ollama\"}",
                         "editorMode": "code",
-                        "legendFormat": "{% raw %}{{model}}{% endraw %} GPU",
+                        "legendFormat": "{% raw %}{{model}} {{workload}}{% endraw %} GPU",
                         "range": true,
                         "instant": false
                       }
@@ -850,7 +850,7 @@
                       "spec": {
                         "expr": "ollama_service_collector_success{host=\"arsene\",service=\"ollama\"}",
                         "editorMode": "code",
-                        "legendFormat": "Cgroup",
+                        "legendFormat": "{% raw %}{{workload}}{% endraw %} Cgroup",
                         "range": false,
                         "instant": true
                       }
@@ -957,7 +957,7 @@
                         "name": "{{ monitoring_grafana_datasource_uid }}"
                       },
                       "spec": {
-                        "expr": "{host=\"arsene\",service=\"ollama\",collection=\"host-journal\"}",
+                        "expr": "{host=\"arsene\",service=~\"ollama|ollama-development\",collection=\"host-journal\"}",
                         "queryType": "range",
                         "editorMode": "code",
                         "maxLines": 1000

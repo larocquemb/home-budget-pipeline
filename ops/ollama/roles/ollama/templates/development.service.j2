@@ -1,0 +1,29 @@
+# Managed by Git + Ansible. Independent GPU service for local development.
+[Unit]
+Description=Development Ollama RTX 3090 inference
+After=network-online.target ollama-access.service
+Requires=ollama-access.service
+Wants=network-online.target
+
+[Service]
+User={{ ollama_service_user.stdout }}
+ExecStart={{ ollama_binary }} serve
+Environment="OLLAMA_HOST={{ ollama_listen_address }}:{{ ollama_development_port }}"
+Environment="OLLAMA_MODELS={{ ollama_models_directory }}"
+Environment="OLLAMA_MAX_LOADED_MODELS=1"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_NOPRUNE=true"
+Environment="OLLAMA_DEBUG=INFO"
+Environment="OLLAMA_DEBUG_LOG_REQUESTS=false"
+Environment="CUDA_VISIBLE_DEVICES=0"
+Environment="OLLAMA_VULKAN=0"
+CPUAccounting=yes
+MemoryAccounting=yes
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

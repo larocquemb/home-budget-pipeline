@@ -1,0 +1,13 @@
+# Replace only this dedicated table, preserving K3s and Jupyter rules.
+add table inet ollama_access
+flush table inet ollama_access
+table inet ollama_access {
+    chain input {
+        type filter hook input priority -10; policy accept;
+        iifname "lo" tcp dport { {{ ollama_port }}, {{ ollama_development_port }}, {{ ollama_gpu_telemetry_port }} } accept
+{% for source in ollama_allowed_sources %}
+        ip saddr {{ source }} tcp dport { {{ ollama_port }}, {{ ollama_development_port }}, {{ ollama_gpu_telemetry_port }} } accept
+{% endfor %}
+        tcp dport { {{ ollama_port }}, {{ ollama_development_port }}, {{ ollama_gpu_telemetry_port }} } reject with tcp reset
+    }
+}

@@ -1,0 +1,168 @@
+# Production CPU and development RTX 3090 (KAN-135)
+
+Ollama runs natively on Arsene under systemd, managed by Git + Ansible.
+Production keeps its existing service and URL. Development gets a new service;
+no production Kubernetes endpoint changes or inference gateway are needed.
+
+| Workload | Native service | Endpoint |
+|---|---|---|
+| Production | `ollama.service` | `http://192.168.2.201:11434` |
+| Local development and Jupyter | `ollama-development.service` | `http://192.168.2.201:11436` |
+| Shared read-only host telemetry | `ollama-gpu-telemetry.service` | `http://192.168.2.201:11435/metrics` |
+
+Production has CUDA/ROCm/Vulkan disabled and `PrivateDevices=true`, preventing
+access to GPU devices. CPU affinity initially uses logical processors 0–7,
+with a six-core CPU-time quota, low CPU scheduling weight, 32 GiB memory-high,
+40 GiB memory-max, and no service swap. These are starting limits to validate,
+not a guarantee of isolated memory bandwidth. Development selects CUDA device 0.
+Both services allow one loaded model and one parallel request.
+
+The existing model store `/home/ollama/models` is preserved and shared.
+The development service owns model download/create/update operations;
+production mounts the model directory read-only. Automatic pruning is disabled
+in both services. Do not delete or replace model blobs while either service uses
+them. Changing the receipt model remains a separate reviewed change.
+
+The dedicated `ollama_access` nftables table permits LAN `192.168.2.0/24`,
+VPN `10.6.0.0/24`, K3s pod network `10.42.0.0/16`, and loopback on the three
+ports; other sources are rejected. It preserves K3s and Jupyter firewall tables.
+The API is unauthenticated and stays private. Existing LAN/VPN trust is required.
+
+## Rollout
+
+1. Review and merge the pipeline PR. From the checked-out main branch:
+
+   ```sh
+   make ollama-gitops-syntax
+   make ollama-gitops-check
+   ```
+
+2. Finish active inference before applying: production restarts to unload GPU
+   runners and enforce CPU-only execution. Saved models and receipt data are
+   retained. Apply from the LAN/VPN controller using the existing monitoring
+   credentials and PKI configuration:
+
+   ```sh
+   make ollama-gitops-apply
+   make monitoring-gitops-check
+   make monitoring-gitops-apply
+   ```
+
+3. Update each development checkout's ignored `.env.dev`, preserving all other
+   credentials and settings:
+
+   ```sh
+   make ollama-dev-config
+   set -a
+   source .env.dev
+   set +a
+   ollama list
+   ```
+
+   Restart existing local worker processes after sourcing the new settings.
+   Existing shells and processes may retain the old exported URL. `.env.dev.example`
+   supplies the new GPU URL for fresh checkouts. Production caller settings stay
+   unchanged. On Arsene use `OLLAMA_HOST=http://192.168.2.201:11436 ollama pull MODEL`
+   for explicit model installation; the playbook does not download weights.
+
+4. Review and merge the infrastructure PR, issue the Brownrook CA Jupyter leaf,
+   and run its documented Jupyter Ansible playbook. It changes Jupyter's Ollama
+   URL to 11436 and adds the internal HTTPS alias, retaining the public route.
+   Save notebooks before applying; restart existing kernels afterward.
+
+## Verify hardware placement and actual receipt latency
+
+From a client, `/api/tags` checks both services without loading a model:
+
+```sh
+curl --fail http://192.168.2.201:11434/api/tags
+curl --fail http://192.168.2.201:11436/api/tags
+```
+
+Run a bounded comparison using a receipt PNG/JPEG (render PDFs first):
+
+```sh
+.venv/bin/python scripts/benchmark_ollama_split.py \
+  --image /path/to/sobeys.png --repeats 2 --concurrent
+```
+
+The default receipt vision model is `qwen3-vl-receipts:30b-instruct`.
+For production-equivalent prompt, model, and context/output settings, replay a
+saved Ollama `/api/chat` request instead:
+
+```sh
+.venv/bin/python scripts/benchmark_ollama_split.py \
+  --request-json /private/path/receipt-request.json --repeats 2 --concurrent
+```
+
+The report saves private model responses and loaded-model allocations under
+`.model-evals/`; never commit or publish receipt data. It requires CPU placement
+on production and GPU placement on development. It measures the inference call,
+not the complete receipt job. Review cold load and warm repeats separately.
+Run the actual receipt job afterward and inspect its existing queue/retry history,
+whole-job duration, and structured application measurements.
+
+**The benchmark's 900-second HTTP timeout does not change production's existing
+180-second provider timeout.** Verify actual receipt calls fit that limit. If
+CPU latency exceeds it, review a separate timeout/concurrency change before
+normal production scheduling resumes. Do not infer vision-model performance
+from an unrelated 27B text-generation benchmark. Financial/model-quality
+results remain informational; there is no new CI accuracy gate.
+
+On Arsene verify isolation directly:
+
+```sh
+systemctl is-active ollama ollama-development ollama-gpu-telemetry alloy
+systemctl show ollama -p PrivateDevices -p CPUAffinity -p CPUQuotaPerSecUSec -p MemoryMax
+OLLAMA_HOST=http://192.168.2.201:11434 ollama ps
+OLLAMA_HOST=http://192.168.2.201:11436 ollama ps
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+sudo journalctl -u ollama -u ollama-development -n 100 --no-pager
+```
+
+Confirm production runners never appear in NVIDIA's process inventory while
+CPU inference is active. Check cgroup membership of GPU PIDs if needed. The
+benchmark's placement check supplements this; it does not prove all processes
+on the host have no GPU access. Jupyter CUDA smoke tests are in brownrook-infra.
+
+## Monitoring
+
+The helper emits service and model metrics with `workload="production"` or
+`workload="development"`. The existing monitoring scrape remains on port 11435.
+Host CPU/RAM and NVIDIA measurements remain host-wide, including Jupyter.
+The Arsene Ollama Grafana dashboard distinguishes both service/model series.
+
+```promql
+rate(ollama_service_cpu_seconds_total{host="arsene",workload="production"}[5m])
+ollama_service_memory_bytes{host="arsene",workload="development"}
+ollama_model_size_vram{host="arsene",workload="production"}
+ollama_api_up{host="arsene"}
+```
+
+Loki collects both native services with distinct environment labels:
+
+```logql
+{host="arsene",service="ollama",environment="production"}
+{host="arsene",service="ollama-development",environment="development"}
+```
+
+Logs include server request events, failures, and request timing where emitted
+by Ollama; the helper does not synthesize token throughput or request histograms.
+Use the benchmark/application comparison reports for latency and throughput,
+and existing RabbitMQ monitoring for backlog. Local journals remain available.
+
+## Rollback and recovery
+
+Revert the native service changes in Git, review/merge, and reapply to restore
+production GPU execution on its unchanged 11434 endpoint. Explicitly stop and
+disable `ollama-development` before that rollback so its GPU runner cannot
+compete with production. A reverted role does not automatically remove a unit
+created by an earlier revision. Keep 11436 unused until development resumes.
+Revert Jupyter's endpoint and the client `.env.dev` URLs to 11434 at the same time.
+Retain model files and data. For an emergency, stop the development service,
+restore the previously reviewed `listen.conf`, and reconcile the corresponding
+Git rollback promptly; do not leave a persistent manual configuration fork.
+
+Notebook CUDA experiments still share the 3090 with development Ollama. Unload
+idle development models before a large PyTorch experiment. CPU production also
+uses shared host RAM, CPU, and storage, so monitor concurrent pressure.

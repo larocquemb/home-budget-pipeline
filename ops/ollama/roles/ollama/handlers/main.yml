@@ -18,3 +18,17 @@
     name: alloy
     daemon_reload: true
     state: restarted
+
+- name: Restart Ollama access
+  when: not ansible_check_mode
+  ansible.builtin.systemd_service:
+    name: ollama-access
+    daemon_reload: true
+    state: restarted
+
+- name: Restart Ollama development
+  when: not ansible_check_mode
+  ansible.builtin.systemd_service:
+    name: ollama-development
+    daemon_reload: true
+    state: restarted

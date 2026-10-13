@@ -1,0 +1,72 @@
+---
+- name: Require a nonroot shared service account and distinct endpoints
+  ansible.builtin.assert:
+    that:
+      - ollama_service_user.stdout | length > 0
+      - ollama_service_user.stdout != 'root'
+      - ([ollama_port, ollama_development_port, ollama_gpu_telemetry_port] | unique | length) == 3
+      - ollama_models_directory is match('^/[A-Za-z0-9_./-]+$')
+      - ollama_binary is match('^/[A-Za-z0-9_./-]+$')
+
+- name: Verify the shared model directory exists
+  ansible.builtin.stat:
+    path: "{{ ollama_models_directory }}"
+  register: ollama_models_stat
+
+- name: Preserve the existing downloaded model store
+  ansible.builtin.assert:
+    that:
+      - ollama_models_stat.stat.isdir | default(false)
+    fail_msg: Set ollama_models_directory to the existing managed Ollama model store; this role never migrates or downloads weights.
+
+- name: Create the dedicated firewall directory
+  ansible.builtin.file:
+    path: /etc/nftables
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install validated private Ollama access rules
+  ansible.builtin.template:
+    src: ollama-access.nft.j2
+    dest: /etc/nftables/ollama-access.nft
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/nft --check --file %s
+  notify: Restart Ollama access
+
+- name: Install the dedicated access service
+  ansible.builtin.copy:
+    src: ollama-access.service
+    dest: /etc/systemd/system/ollama-access.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Ollama access
+
+- name: Install the independent development GPU service
+  ansible.builtin.template:
+    src: development.service.j2
+    dest: /etc/systemd/system/ollama-development.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Ollama development
+
+- name: Enable source restrictions before starting inference
+  ansible.builtin.systemd_service:
+    name: ollama-access
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Enable the development GPU service
+  ansible.builtin.systemd_service:
+    name: ollama-development
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not ansible_check_mode

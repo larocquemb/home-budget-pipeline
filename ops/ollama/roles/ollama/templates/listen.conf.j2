@@ -1,4 +1,8 @@
 # Managed by ops/ollama Ansible. Edit the inventory, then reconcile.
+[Unit]
+Requires=ollama-access.service
+After=ollama-access.service
+
 [Service]
 CPUAccounting=yes
 MemoryAccounting=yes
@@ -7,3 +11,21 @@ Environment="OLLAMA_MAX_LOADED_MODELS={{ ollama_max_loaded_models }}"
 Environment="OLLAMA_NUM_PARALLEL={{ ollama_num_parallel }}"
 Environment="OLLAMA_DEBUG=INFO"
 Environment="OLLAMA_DEBUG_LOG_REQUESTS=false"
+Environment="OLLAMA_MODELS={{ ollama_models_directory }}"
+Environment="OLLAMA_NOPRUNE=true"
+Environment="CUDA_VISIBLE_DEVICES=-1"
+Environment="ROCR_VISIBLE_DEVICES=-1"
+Environment="HIP_VISIBLE_DEVICES=-1"
+Environment="OLLAMA_VULKAN=0"
+Environment="GGML_VK_VISIBLE_DEVICES=-1"
+PrivateDevices=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadOnlyPaths={{ ollama_models_directory }}
+CPUAffinity={{ ollama_cpu_affinity }}
+CPUQuota={{ ollama_cpu_quota }}
+CPUWeight=20
+Nice=10
+MemoryHigh={{ ollama_cpu_memory_high }}
+MemoryMax={{ ollama_cpu_memory_max }}
+MemorySwapMax=0

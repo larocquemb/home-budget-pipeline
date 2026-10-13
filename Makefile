@@ -319,3 +319,7 @@ eval-enrichment:
 eval-rescore:
 	@test -n "$(REPORT)" || (echo "Usage: make eval-rescore REPORT=path/to/report.json" >&2; exit 2)
 	@PYTHONPATH=src $(PYTHON) -m home_budget_pipeline.model_evaluation --rescore "$(REPORT)" --cases "$(EVAL_CASES)" --output "$(EVAL_OUTPUT)"
+
+.PHONY: ollama-dev-config
+ollama-dev-config:
+	$(PYTHON) scripts/configure_development_ollama.py
