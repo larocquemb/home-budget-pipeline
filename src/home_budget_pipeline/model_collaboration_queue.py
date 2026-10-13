@@ -341,19 +341,17 @@ def collaborate_item(dispatcher, row, bundle, profiles, threshold, context, prio
         errors.append({'stage': 'exchange_image', 'error_type': 'ReceiptImageEvidenceChanged'})
     min_families = min(2, len({p.provider for p in profiles}))
     # The literal-search quota is a discovery limit, not missing receipt evidence.
-    # Recover it only after every provider reviews the complete source bundle and
-    # agrees on an eligible, cited retailer product. Real search failures remain blocking.
+    # Once every final review completes with the full source bundle, reaching a
+    # planned discovery quota is a warning even if the reviewers abstain. It
+    # never supplies product evidence or agreement. Real failures remain blocking.
     budget_errors = [e for e in errors if e.get('stage') == 'ocr_alternative_search'
                      and e.get('error_type') == 'HypothesisBudgetExceeded']
     remaining_errors = [e for e in errors if e not in budget_errors]
-    decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, remaining_errors, complete,
-                                        min_provider_families=min_families)
-    arithmetic_verified = all(bundle['validations'].get(key) == 'pass' for key in ('receipt_arithmetic', 'item_arithmetic'))
-    recovered_errors = budget_errors if decision['disposition'] == 'recommended' and arithmetic_verified else []
+    reviews_complete = len(reviews) == len(profiles) and all(r['status'] == 'success' for r in reviews)
+    recovered_errors = budget_errors if complete and reviews_complete and not remaining_errors else []
     blocking_errors = remaining_errors if recovered_errors else errors
-    if not recovered_errors:
-        decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, errors, complete,
-                                            min_provider_families=min_families)
+    decision = collaboration.reconcile(candidates, reviews, bundle['validations'], threshold, blocking_errors, complete,
+                                        min_provider_families=min_families)
     if any(bundle['validations'].get(key) != 'pass' for key in ('receipt_arithmetic', 'item_arithmetic')):
         decision['disposition'] = 'review'
         decision['reasons'].append('receipt_arithmetic_not_verified')

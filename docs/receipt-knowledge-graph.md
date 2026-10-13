@@ -84,6 +84,9 @@ Each `ReceiptSnapshot` contains the atomic graph used by the UI and `HAS_ENTITY`
 membership for bounded cross-receipt navigation. The projector reads a repeatable
 PostgreSQL snapshot, then commits all graph changes in a Neo4j transaction. A
 receipt lock and source-snapshot timestamp reject older racing snapshots.
+Collaboration history streams one saved payload at a time within that same
+PostgreSQL transaction. The projector retains all graph history without buffering
+every copy of a long receipt's shared evidence in memory.
 Replaying the authoritative history merges stable entity/relationship IDs and
 does not duplicate them. Retained entity relationships can include past domain
 correlations; use the current `ReceiptSnapshot.graph_json` for current canonical

@@ -85,6 +85,7 @@ def test_postgres_graph_load_scopes_queued_tasks_and_omits_task_inputs(pg_conn):
             'stage': 'independent', 'profile': {'name': 'qwen'}, 'reply': 'receipt-models.v1.results.' + str(cohort),
             'unused_private_input': 'DO-NOT-PROJECT'})))
     data = load(pg_conn, sha)
+    data['collaborations'] = list(data['collaborations'])
     assert len(data['collaborations'][0]['queued_tasks']) == 1
     graph = build(data)
     assert len([n for n in graph['nodes'] if n['kind'] == 'ModelTask']) == 1

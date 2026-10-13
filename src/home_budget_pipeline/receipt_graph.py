@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 import re
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 from urllib.parse import urlencode
 
 VERSION = 6
@@ -377,6 +377,38 @@ def build(data):
     return graph.export()
 
 
+def load_collaborations(conn, expense_id):
+    """Stream one payload at a time in the caller's consistent transaction."""
+    if expense_id is None:
+        return
+    task_table = conn.execute("SELECT to_regclass('enrichment.model_collaboration_tasks') AS name").fetchone()['name']
+    # The default client cursor buffers every JSON payload. Long receipts have
+    # hundreds of MB of repeated evidence; even a server cursor must fetch one
+    # row per batch to keep that history from exhausting the projector's memory.
+    with conn.cursor(name='receipt_graph_' + uuid4().hex) as cursor:
+        cursor.itersize = 1
+        cursor.execute('''SELECT c.payload,c.completed_at,c.id,COALESCE(r.summary,'{}'::jsonb) AS summary
+            FROM enrichment.receipt_collaborations c
+            LEFT JOIN enrichment.receipt_collaboration_runs r USING(run_uuid)
+            JOIN budget.expense_items i ON i.id=c.expense_item_id
+            WHERE i.expense_pk=%s ORDER BY c.completed_at,c.id''', (expense_id,))
+        for row in cursor:
+            p = row['payload']
+            if 'independent_results' in p:
+                row['queued_tasks'] = []
+                cohorts = [uuid5(UUID(p['run_uuid']), f"{p['item_id']}:{phase}") for phase in ('independent', 'exchange')]
+                if task_table:
+                    tasks = conn.execute('''SELECT id,cohort,provider,attempts,deadline,created_at,completed_at,
+                        input->>'stage' AS stage,input->'profile' AS profile,input->>'reply' AS reply,
+                        result->'task_provenance' AS task_provenance,result->>'error_type' AS error_type,
+                        CASE WHEN result IS NULL THEN 'pending' WHEN result->>'status'='error' THEN 'error' ELSE 'completed' END AS status
+                        FROM enrichment.model_collaboration_tasks WHERE cohort=ANY(%s) ORDER BY created_at,id''', (cohorts,)).fetchall()
+                    for task in tasks:
+                        task['queue'] = task.pop('reply').split('.results.')[0] + '.' + task['provider']
+                    row['queued_tasks'] = tasks
+            yield row
+
+
 def load(conn, sha):
     """Read one consistent authoritative snapshot; no graph or model calls."""
     receipt = conn.execute('SELECT r.*,s.status,s.attempts FROM ingest.receipts r LEFT JOIN ingest.receipt_processing_status s USING(source_sha256) WHERE r.source_sha256=%s', (sha,)).fetchone()
@@ -388,24 +420,7 @@ def load(conn, sha):
     events = conn.execute('SELECT * FROM lineage.receipt_events WHERE source_sha256=%s ORDER BY occurred_at,id', (sha,)).fetchall()
     result_events = conn.execute('SELECT * FROM budget.ocr_result_events WHERE source_sha256=%s ORDER BY persisted_at,message_id', (sha,)).fetchall()
     items = conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=%s ORDER BY id', (expense['id'],)).fetchall() if expense else []
-    collaborations = conn.execute('SELECT c.payload,c.completed_at,c.id,COALESCE(r.summary,\'{}\'::jsonb) AS summary FROM enrichment.receipt_collaborations c LEFT JOIN enrichment.receipt_collaboration_runs r USING(run_uuid) JOIN budget.expense_items i ON i.id=c.expense_item_id WHERE i.expense_pk=%s ORDER BY c.completed_at,c.id', (expense['id'],)).fetchall() if expense else []
-    cohorts = {}
-    for row in collaborations:
-        p = row['payload']
-        if 'independent_results' in p:
-            row['queued_tasks'] = []
-            for phase in ('independent', 'exchange'):
-                cohort = uuid5(UUID(p['run_uuid']), f"{p['item_id']}:{phase}")
-                cohorts[cohort] = row
-    if cohorts and conn.execute("SELECT to_regclass('enrichment.model_collaboration_tasks') AS name").fetchone()['name']:
-        tasks = conn.execute('''SELECT id,cohort,provider,attempts,deadline,created_at,completed_at,
-            input->>'stage' AS stage,input->'profile' AS profile,input->>'reply' AS reply,
-            result->'task_provenance' AS task_provenance,result->>'error_type' AS error_type,
-            CASE WHEN result IS NULL THEN 'pending' WHEN result->>'status'='error' THEN 'error' ELSE 'completed' END AS status
-            FROM enrichment.model_collaboration_tasks WHERE cohort=ANY(%s) ORDER BY created_at,id''', (list(cohorts),)).fetchall()
-        for task in tasks:
-            task['queue'] = task.pop('reply').split('.results.')[0] + '.' + task['provider']
-            cohorts[task['cohort']]['queued_tasks'].append(task)
+    collaborations = load_collaborations(conn, expense['id'] if expense else None)
     return {'receipt': receipt, 'expense': expense, 'items': items, 'ocr_runs': runs, 'ocr_passes': passes, 'events': events,
             'result_events': result_events, 'collaborations': collaborations}
 

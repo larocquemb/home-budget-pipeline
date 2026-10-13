@@ -54,7 +54,7 @@ class Dispatch:
     ('HypothesisBudgetExceeded', True, 'review'),
     ('HTTPError', False, 'review'),
 ])
-def test_search_quota_recovers_only_after_complete_cited_agreement(error, abstain, expected):
+def test_completed_review_retains_quota_warning_without_hiding_uncertainty(error, abstain, expected):
     class Limited(Dispatch):
         def round(self, stage, profiles, payload, context):
             results = super().round(stage, profiles, payload, context)
@@ -65,7 +65,29 @@ def test_search_quota_recovers_only_after_complete_cited_agreement(error, abstai
         bundle(), PROFILES, .85, {'run_uuid': str(uuid4()), 'item_id': 1})
     assert payload['decision']['disposition'] == expected
     assert len(payload['errors']) == 1
-    assert bool(payload['recovered_errors']) == (expected == 'recommended')
+    assert bool(payload['recovered_errors']) == (error == 'HypothesisBudgetExceeded')
+    assert bool(payload['blocking_errors']) == (error == 'HTTPError')
+    if abstain:
+        assert 'disagreement_or_abstention' in payload['decision']['reasons']
+
+
+@pytest.mark.parametrize('failure', ['missing_sources', 'failed_review'])
+def test_quota_stays_blocking_if_final_review_is_incomplete(failure):
+    class Incomplete(Dispatch):
+        def round(self, stage, profiles, payload, context):
+            results = super().round(stage, profiles, payload, context)
+            if stage == 'independent':
+                results[0]['blocking_errors'] = [{'stage': 'ocr_alternative_search', 'error_type': 'HypothesisBudgetExceeded'}]
+            elif failure == 'missing_sources':
+                results[0]['exchange_coverage']['included_sources'] = 1
+            else:
+                results[0] = {'status': 'error', 'error_type': 'TimeoutError'}
+            return results
+    payload = queue.collaborate_item(Incomplete(), {'item_name': 'Cep Pic Med', 'store_name': 'Sobeys'},
+        bundle(), PROFILES, .85, {'run_uuid': str(uuid4()), 'item_id': 1})
+    assert payload['decision']['disposition'] == 'review'
+    assert not payload['recovered_errors']
+    assert any(e['error_type'] == 'HypothesisBudgetExceeded' for e in payload['blocking_errors'])
 
 
 def test_peer_review_does_not_repeat_receipt_ids_for_each_candidate(monkeypatch):

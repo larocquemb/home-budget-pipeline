@@ -269,9 +269,10 @@ configured paid providers in both rounds; otherwise only Qwen participates. `COM
 and Qwen for paired comparison; choose one mode per run.
 
 OCR retrieval excludes coordinate tables and weakly related neighbouring lines.
-The literal OCR search quota stays visible in provenance, but can be recovered
-when every enabled provider reviews all retained observations and agrees on a
-cited, eligible retailer product with verified receipt arithmetic. Failed search
+The literal OCR search quota stays visible in provenance as a warning when every
+enabled provider completes review of all retained observations. Uncertain reviews
+remain saved for review, while recommendations still require cited, eligible
+retailer evidence, agreement and verified receipt arithmetic. Failed search
 requests, missing evidence and model disagreement still require review.
 
 Brave results are cached in PostgreSQL across items and jobs, and rescored for
