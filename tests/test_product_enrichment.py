@@ -78,6 +78,37 @@ def test_price_and_two_letter_tax_marker_do_not_create_new_product_queries():
                            'https://sobeys.com/products/compliments-quick-oats-1-kg') >= .85
 
 
+@pytest.mark.parametrize('item,title', [
+    ('Pretzels HoneyMus tar', 'Snyder Pretzel Sticks Honey Mustard Onion'),
+    ('Butter Sticks Unsltd', 'Butter Sticks Unsalted'),
+    ('Dill Pkls', 'Dill Pickles'),
+    ('Candy GMS Org', 'Organic Gummies Candy'),
+    ('Candy GMS Org', 'Maynards Candy Wine Gums Original'),
+    ('Gloves Cmfrt Med 1EA', 'Vileda Comfort Gloves Medium 1 pair'),
+    ('Cottage Cheese No Salt Added', 'Cottage Cheese No Salt Added'),
+])
+def test_abbreviations_splits_and_each_notation_keep_observed_meaning(item, title):
+    evidence = product_enrichment.candidate_evidence(item, 'sobeys.com', title, 'https://sobeys.com/products/example')
+    assert evidence['confidence'] >= .85
+    assert all(t['kind'] != 'unmatched' for t in evidence['tokens'])
+
+
+@pytest.mark.parametrize('item,title', [
+    ('Pretzels HoneyMus tar', 'Pretzel Sticks Sour Cream Onion'),
+    ('Butter Sticks Unsltd', 'Butter Sticks Salted'),
+    ('Candy GMS Org', 'Organic Candy'),
+    ('Candy GMS Org', 'Candy Wine Gums Orange'),
+    ('Gloves Cmfrt Med 3EA', 'Vileda Comfort Gloves Medium 1 pair'),
+    ('Cottage Cheese No Salt Added', 'Nordica Cottage Cheese Salt Added'),
+    ('Cottage Cheese No Salt Added', 'Cottage Cheese No Sugar Salt Added'),
+    ('Cottage Cheese No Salt No Sugar', 'Cottage Cheese No Salt Sugar Added'),
+])
+def test_split_matching_cannot_drop_flavour_count_or_qualifier(item, title):
+    evidence = product_enrichment.candidate_evidence(item, 'sobeys.com', title, 'https://sobeys.com/products/example')
+    assert evidence['confidence'] < .85
+    assert any(t['kind'] == 'unmatched' for t in evidence['tokens'])
+
+
 def test_discovery_learns_expansions_from_accepted_prior_matches():
     prior = {'id': 7, 'merchant_key': 'sobeys.com', 'status': 'accepted', 'confidence': .95,
              'receipt_text_norm': 'oep pic med',

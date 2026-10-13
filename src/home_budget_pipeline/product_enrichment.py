@@ -15,7 +15,7 @@ from difflib import SequenceMatcher
 from typing import Optional
 
 LOG = logging.getLogger(__name__)
-SCORING_VERSION = 'receipt-evidence-v4'
+SCORING_VERSION = 'receipt-evidence-v5'
 
 RETAILER_DOMAINS = {
     "costco": "costco.ca",
@@ -29,7 +29,7 @@ RETAILER_DOMAINS = {
 }
 BARCODE_RE = re.compile(r"\b\d{8,14}\b")
 RECEIPT_SUFFIX_RE = re.compile(r"\s+\$?\d+[.,]\d{2}\.?(?:\s+(?:BC|BR|GP|LP|FP|[ACBHT]))?\s*$|(?:\s+\d+[.,]\d{2})?\s+(?:GP|LP|FP|H|A|B|T)$", re.IGNORECASE)
-NOISE_TOKENS = {"acct", "cad", "each", "flash", "gp", "lp", "save", "upto"}
+NOISE_TOKENS = {"acct", "cad", "each", "1ea", "flash", "gp", "lp", "save", "upto"}
 PRODUCT_PATH_MARKERS = {
     "costco.ca": (".product.", "/product/"),
     "homedepot.ca": ("/product/",),
@@ -162,6 +162,44 @@ def evidence_words(text: str) -> list[str]:
     return re.findall(r'\d+(?:\.\d+)?(?:kg|g|ml|l|lb|oz)\b|[a-z0-9]+', text)
 
 
+def singular_forms(word: str) -> set[str]:
+    forms = {word}
+    if word.isalpha() and len(word) >= 4 and word.endswith('s') and not word.endswith('ss'):
+        forms.add(word[:-1])
+        if word.endswith('ies'):
+            forms.add(word[:-3] + 'y')
+        if word.endswith(('ches', 'shes', 'xes', 'zes', 'oes')):
+            forms.add(word[:-2])
+    return forms
+
+
+def consonant_match(token: str, word: str):
+    """Account for omitted vowels/repeated consonants while preserving printed letters."""
+    if not token.isalpha() or not word.isalpha() or token[0] != word[0]:
+        return None
+    letters = iter(word)
+    if not all(letter in letters for letter in token):
+        return None
+    reduced = lambda text: re.sub(r'(.)\1+', r'\1', re.sub(r'[aeiou]', '', text))
+    abbreviation, full = reduced(token), reduced(word)
+    if len(abbreviation) < 3:
+        # A short printed form may omit one vowel within the word's prefix:
+        # Org -> Orig(inal). Do not allow arbitrary missing letters or counts.
+        prefix = word[:len(token) + 1]
+        if len(token) >= 3 and len(prefix) == len(token) + 1 and any(
+            prefix[i] in 'aeiou' and prefix[:i] + prefix[i + 1:] == token for i in range(1, len(prefix))):
+            return 'vowel_contraction_prefix', .85
+        return None
+    if abbreviation == full:
+        return 'consonant_abbreviation', .9
+    if full.startswith(abbreviation):
+        return 'consonant_prefix', .85
+    if len(abbreviation) >= 4 and len(full) == len(abbreviation) + 1 and any(
+        full[:i] + full[i + 1:] == abbreviation for i in range(1, len(full) - 1)):
+        return 'consonant_contraction', .85
+    return None
+
+
 def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippet: str = "") -> dict:
     """Explain lexical evidence; proposals themselves never increase this score."""
     hostname = (urllib.parse.urlparse(url).hostname or "").lower()
@@ -182,10 +220,12 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
     item_text = evidence_text(item_name)
     compounds = {a + b: (a, b) for a, b in re.findall(r'\b([a-z])/([a-z]{3,})\b', item_text)}
     item_text = re.sub(r'\b([a-z])/([a-z]{3,})\b', r'\1\2', item_text)
-    tokens = list(dict.fromkeys(
-        t for t in evidence_words(item_text)
-        if (len(t) >= 3 or re.fullmatch(r'\d+(?:\.\d+)?(?:kg|g|ml|l|lb|oz)', t)) and not t.isdigit() and t not in NOISE_TOKENS
-    ))
+    tokens = []
+    for token in evidence_words(item_text):
+        if ((len(token) >= 3 or token == 'no' or re.fullmatch(r'\d+(?:\.\d+)?(?:kg|g|ml|l|lb|oz)', token))
+                and not token.isdigit() and token not in NOISE_TOKENS
+                and (token not in tokens or token in {'no', 'not', 'non'})):
+            tokens.append(token)
     title_words = re.findall(r"[a-z0-9]+", title.lower())
     while title_words and title_words[0] in {"buy", "shop", "purchase"}:
         title_words.pop(0)
@@ -194,6 +234,9 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
         weight, kind, matched = 0.0, "unmatched", None
         if token in source_words:
             weight, kind, matched = 1.0, "exact_token", token
+        elif token in {'no', 'not', 'non'}:
+            evidence.append({'token': token, 'kind': 'unmatched', 'matched': None, 'weight': 0.0})
+            continue
         elif index == 0 and 2 <= len(token) <= 5 and len(title_words) >= len(token):
             initialism = "".join(word[0] for word in title_words[:len(token)])
             differences = [(a, b) for a, b in zip(token, initialism) if a != b]
@@ -201,6 +244,11 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
                 weight, kind, matched = 1.0, "brand_initialism", initialism
             elif differences == [("c", "o")] or differences == [("o", "c")]:
                 weight, kind, matched = .95, "ocr_brand_initialism", initialism
+        if weight == 0:
+            inflections = sorted(word for word in source_words if token.isalpha() and word.isalpha()
+                                 and singular_forms(token).intersection(singular_forms(word)))
+            if inflections:
+                weight, kind, matched = .95, 'token_inflection', inflections[0]
         if weight == 0:
             prefixes = sorted(word for word in source_words if word.startswith(token) and word != token)
             if prefixes:
@@ -210,15 +258,39 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
             matches = sorted(w for w in source_words if w.startswith(initial) and w.endswith(suffix))
             if matches:
                 weight, kind, matched = .9, "compound_abbreviation", matches[0]
-        if weight == 0 and len(token) >= 4 and not re.search(r'[aeiou0-9]', token):
-            matches = sorted(w for w in source_words if re.sub(r'[aeiou]', '', w) == token)
+        if weight == 0:
+            matches = sorted(((-match[1], len(word), word, match[0]) for word in source_words
+                              if (match := consonant_match(token, word))))
             if matches:
-                weight, kind, matched = .9, "consonant_abbreviation", matches[0]
+                neg_weight, _, matched, kind = matches[0]
+                weight = -neg_weight
         if weight == 0:
             synonyms = {"sauce": {"salsa"}, "salsa": {"sauce"}}.get(token, set()) & source_words
             if synonyms:
                 weight, kind, matched = .85, "category_synonym", sorted(synonyms)[0]
         evidence.append({"token": token, "kind": kind, "matched": matched, "weight": weight})
+    # OCR can split a shortened word, such as HoneyMus tar. Match the complete
+    # printed span against one word or two adjacent retailer words; never drop a
+    # chunk or join numeric package values into a different quantity.
+    spans = {word: word for word in source_words}
+    for text in (title, urllib.parse.unquote(path)):
+        words = evidence_words(evidence_text(text))
+        for left, right in zip(words, words[1:]):
+            if left.isalpha() and right.isalpha():
+                spans[left + right] = left + ' ' + right
+    for left, right in zip(evidence, evidence[1:]):
+        joined = left['token'] + right['token']
+        if (left['kind'] != 'unmatched' and right['kind'] != 'unmatched') or not joined.isalpha() or len(joined) < 6:
+            continue
+        matches = sorted((span for span in spans if span.startswith(joined)), key=lambda s: (len(s), s))
+        if matches:
+            for token in (left, right):
+                token.update(kind='joined_token_prefix', matched=spans[matches[0]], weight=.9)
+    for qualifier, following in zip(evidence, evidence[1:]):
+        if qualifier['token'] in {'no', 'not', 'non'} and qualifier['kind'] != 'joined_token_prefix':
+            following_word = (following['matched'] or following['token']).split()[0]
+            if not any(span.startswith(qualifier['token'] + following_word) for span in spans):
+                qualifier.update(kind='unmatched', matched=None, weight=0.0)
     # Fat percentages used to vanish because they were numeric tokens. A
     # retailer's otherwise matching product must retain the recorded percentage.
     for percent in dict.fromkeys(re.findall(r'\b(\d+(?:[.,]\d+)?)\s*%', item_name)):

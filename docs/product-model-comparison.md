@@ -62,7 +62,7 @@ shared baseline and its own proposed searches, never the other provider's new
 candidates. `candidate_origin`, `baseline_confidence` and `confidence_gain` show
 whether a model improved on the baseline; ties can simply preserve that baseline.
 
-Scoring version `receipt-evidence-v4` records per-token evidence: exact words
+Scoring version `receipt-evidence-v5` records per-token evidence: exact words
 weigh 1, word beginnings 0.9, brand initials 1, a single C/O OCR ambiguity in
 brand initials 0.95, and sauce/salsa category synonyms 0.85. It averages these
 weights; any unmatched meaningful token caps the score at 0.84. It requires a
@@ -71,6 +71,13 @@ Recorded package units match despite spacing (`1KG` and `1 kg`), and recorded
 percentages must match. Slash contractions (`S/Berry` and strawberry) and exact
 consonant abbreviations (`Rstrnt` and restaurant) weigh 0.9. Conflicting or missing
 recorded package sizes and percentages remain unmatched.
+Singular/plural forms weigh 0.95. Consonant prefixes, a single omitted interior
+consonant, or one omitted vowel in a short word prefix weigh 0.85; all printed
+letters must remain in order. Adjacent OCR chunks such as `HoneyMus tar` can
+match `honey mustard` at 0.9 without dropping either chunk. `1EA` denotes one
+item sold each and stays in the receipt evidence rather than imposing a package
+dimension; other printed counts and dimensions remain binding. Negations such as
+`no salt` must apply to the same following descriptor in the retailer evidence.
 Snippets remain discovery context; they cannot supply missing identity tokens
 when the product title and URL describe a different product.
 Collaboration can resolve one known OCR glyph ambiguity, such as `Lin` versus
