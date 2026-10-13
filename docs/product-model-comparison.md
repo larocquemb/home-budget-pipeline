@@ -639,9 +639,11 @@ directly to Qwen review with the receipt images and OCR.
 
 When searches still lack a verified product, one small Qwen lexical task per
 distinct descriptor suffix (at most three) generates brand-free full-word
-hypotheses. Its JSON grammar preserves each descriptor prefix and excludes
-brands, prices and extra product words. The application validates that grammar
-again before searching. Sampling uses temperature 0.7, top-p 0.8, top-k 20 and
+hypotheses, or an empty list when no defensible expansion exists. The full reading
+and merchant context preserve descriptor meaning; expanded words need not start
+with literal OCR fragments, which may omit internal letters. The grammar bounds
+phrases to lowercase words and excludes numbers and punctuation. The application
+validates that grammar again before searching. Sampling uses temperature 0.7, top-p 0.8, top-k 20 and
 seed 42 for this task; final review retains temperature 0. The discovery log
 records `descriptive_expansion_calls` and `verified_descriptive_match`. These
 hypotheses remain unverified until a retailer product page passes original-item

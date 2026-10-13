@@ -87,6 +87,9 @@ receipt lock and source-snapshot timestamp reject older racing snapshots.
 Collaboration history streams one saved payload at a time within that same
 PostgreSQL transaction. The projector retains all graph history without buffering
 every copy of a long receipt's shared evidence in memory.
+Neo4j writes use bounded node and relationship batches inside the same atomic
+transaction. The projector has a 1 GiB memory ceiling for the complete snapshot
+of receipts with extensive collaboration history.
 Replaying the authoritative history merges stable entity/relationship IDs and
 does not duplicate them. Retained entity relationships can include past domain
 correlations; use the current `ReceiptSnapshot.graph_json` for current canonical

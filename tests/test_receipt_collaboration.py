@@ -9,6 +9,8 @@ import pytest
 from home_budget_pipeline import receipt_collaboration as collab
 from home_budget_pipeline import receipt_model_providers as providers
 from home_budget_pipeline import receipt_shared_evidence as shared
+
+DESCRIPTOR_EXPANSION = collab.expand_descriptive_prefixes
 from home_budget_pipeline import product_enrichment as core
 
 pytestmark = pytest.mark.usefixtures('offline_gpu_sampling')
@@ -125,6 +127,18 @@ def test_packing_preserves_duplicate_observations_and_reports_omissions():
     assert len(packed[0]['observations']) == 2
     _, coverage = collab.pack_sources(sources, 100)
     assert coverage['included_sources'] < 3
+
+
+@pytest.mark.parametrize('queries', [['wine gums original', 'organic gummy candy'], []])
+def test_descriptor_searches_can_expand_internal_abbreviations_or_abstain(monkeypatch, queries):
+    monkeypatch.setattr(providers, 'request', lambda profile, text, schema, images: {'output': {'queries': queries}})
+    result = DESCRIPTOR_EXPANSION(
+        [{'reading': 'Candy GMS Org', 'source_ids': [SOURCE]}],
+        [providers.Profile('qwen', 'qwen', 'test')], {}, 'Sobeys')
+    assert len(result) == 1
+    assert result[0]['status'] == 'success'
+    assert result[0]['output']['queries'] == queries
+    assert result[0]['derived_source_ids'] == [SOURCE]
 
 
 def test_model_prompt_retains_all_citations_without_repeating_artifact_metadata():

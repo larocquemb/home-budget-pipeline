@@ -440,8 +440,10 @@ def write(tx, sha, graph, observed_at):
     prior = tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time', sha=sha).single()
     if prior['time'] and prior['time'] > observed_at:
         return False
-    tx.run('UNWIND $nodes AS row MERGE (n:ReceiptFlowEntity {id:row.id}) SET n.kind=row.kind,n.label=row.label,n.properties_json=row.props',
-           nodes=[{**n, 'props': encoded(n['properties'])} for n in graph['nodes']]).consume()
+    for offset in range(0, len(graph['nodes']), 500):
+        tx.run('UNWIND $nodes AS row MERGE (n:ReceiptFlowEntity {id:row.id}) SET n.kind=row.kind,n.label=row.label,n.properties_json=row.props',
+               nodes=[{'id': n['id'], 'kind': n['kind'], 'label': n['label'], 'props': encoded(n['properties'])}
+                      for n in graph['nodes'][offset:offset + 500]]).consume()
     # Relationship types come exclusively from our validated graph builder.
     grouped = defaultdict(list)
     for edge in graph['edges']:
@@ -449,10 +451,12 @@ def write(tx, sha, graph, observed_at):
             raise ValueError('Invalid relationship type')
         grouped[edge['kind']].append(edge)
     tx.run('MATCH (s:ReceiptSnapshot {sha:$sha})-[r:HAS_ENTITY]->() DELETE r', sha=sha).consume()
-    tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) UNWIND $ids AS id MATCH (n:ReceiptFlowEntity {id:id}) MERGE (s)-[:HAS_ENTITY]->(n)',
-           sha=sha, ids=[n['id'] for n in graph['nodes']]).consume()
+    for offset in range(0, len(graph['nodes']), 500):
+        tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) UNWIND $ids AS id MATCH (n:ReceiptFlowEntity {id:id}) MERGE (s)-[:HAS_ENTITY]->(n)',
+               sha=sha, ids=[n['id'] for n in graph['nodes'][offset:offset + 500]]).consume()
     for kind, rows in grouped.items():
-        tx.run(f'UNWIND $rows AS row MATCH (a:ReceiptFlowEntity {{id:row.source}}),(b:ReceiptFlowEntity {{id:row.target}}) MERGE (a)-[r:{kind} {{id:row.id}}]->(b)', rows=rows).consume()
+        for offset in range(0, len(rows), 1000):
+            tx.run(f'UNWIND $rows AS row MATCH (a:ReceiptFlowEntity {{id:row.source}}),(b:ReceiptFlowEntity {{id:row.target}}) MERGE (a)-[r:{kind} {{id:row.id}}]->(b)', rows=rows[offset:offset + 1000]).consume()
     # UI reads the atomic snapshot, never a mix of current and historical states.
     tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) SET s.graph_json=$graph,s.observed_at=$time,s.version=$version,s.name=$name',
            sha=sha, graph=encoded(graph), time=observed_at, version=VERSION,

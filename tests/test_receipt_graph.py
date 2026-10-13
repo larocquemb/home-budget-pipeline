@@ -387,3 +387,30 @@ def test_collaboration_history_is_consumed_one_payload_at_a_time():
     assert next(rows)['id'] == 1
     assert consumed == [0, 1]
     rows.close()
+
+
+def test_large_graph_writes_bounded_parameters_and_keeps_complete_snapshot():
+    calls = []
+    class Result:
+        def consume(self): pass
+        def single(self): return {'time': None}
+    class Transaction:
+        def run(self, query, **params):
+            calls.append(params)
+            return Result()
+    nodes = [{'id': str(i), 'kind': 'Receipt' if i == 0 else 'Model', 'label': str(i),
+              'properties': {'value': i}} for i in range(1021)]
+    edges = [{'id': str(i), 'source': '0', 'target': '1', 'kind': 'USES_MODEL'} for i in range(2001)]
+    graph = {'version': g.VERSION, 'nodes': nodes, 'edges': edges}
+    assert g.write(Transaction(), 'sha', graph, 'now')
+    batches = [c['nodes'] for c in calls if 'nodes' in c]
+    assert max(map(len, batches)) <= 500
+    assert [n['id'] for batch in batches for n in batch] == [n['id'] for n in nodes]
+    assert all('properties' not in n for batch in batches for n in batch)
+    membership = [c['ids'] for c in calls if 'ids' in c]
+    assert max(map(len, membership)) <= 500
+    assert [i for batch in membership for i in batch] == [n['id'] for n in nodes]
+    relations = [c['rows'] for c in calls if 'rows' in c]
+    assert max(map(len, relations)) <= 1000
+    assert [e for batch in relations for e in batch] == edges
+    assert json.loads(next(c['graph'] for c in calls if 'graph' in c)) == graph
