@@ -748,16 +748,16 @@ class LedgerQueryService:
             )
             SELECT c.id,c.expense_item_id,c.run_uuid,c.completed_at,
                    jsonb_build_object(
-                       'decision', c.payload->'decision',
-                       'blocking_errors', c.payload->'blocking_errors',
+                       'decision', display.payload->'decision',
+                       'blocking_errors', display.payload->'blocking_errors',
                        'search_results', COALESCE((
                            SELECT jsonb_agg(jsonb_build_object('id',candidate->'id',
                                'title',candidate->'title','url',candidate->'url',
                                'evidence',candidate->'evidence'))
                            FROM (SELECT candidate FROM jsonb_array_elements(
-                               COALESCE(c.payload->'search_results','[]'::jsonb))
+                               COALESCE(display.payload->'search_results','[]'::jsonb))
                                WITH ORDINALITY AS results(candidate,position)
-                               WHERE candidate->>'id'=c.payload->'decision'->>'candidate_id'
+                               WHERE candidate->>'id'=display.payload->'decision'->>'candidate_id'
                                ORDER BY position LIMIT 1) selected
                        ),'[]'::jsonb),
                        'evidence_bundle', jsonb_build_object('sources', COALESCE((
@@ -768,12 +768,17 @@ class LedgerQueryService:
                                'line_number',source->'line_number','page_number',source->'page_number',
                                'evidence_id',source->'evidence_id'))
                            FROM jsonb_array_elements(COALESCE(
-                               c.payload->'evidence_bundle'->'sources','[]'::jsonb)) sources(source)
+                               display.payload->'evidence_bundle'->'sources','[]'::jsonb)) sources(source)
                            WHERE source->>'kind' IN ('ocr_pass','ocr_consensus')
                        ),'[]'::jsonb)),
-                       'reading_hypotheses', COALESCE(c.payload->'reading_hypotheses','[]'::jsonb)
+                       'reading_hypotheses', COALESCE(display.payload->'reading_hypotheses','[]'::jsonb)
                    ) AS payload,a.occurred_at AS accepted_at
               FROM latest c
+              -- Expand toasted JSON once per row; OFFSET prevents flattening
+              -- this projection into each field/candidate expression.
+              CROSS JOIN LATERAL (
+                  SELECT c.payload || '{}'::jsonb AS payload OFFSET 0
+              ) display
               LEFT JOIN LATERAL (
                   SELECT occurred_at FROM lineage.receipt_events
                    WHERE source_sha256=%s AND payload->>'event'='product_recommendation_accepted'
