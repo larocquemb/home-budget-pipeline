@@ -56,7 +56,7 @@ def read_models(base):
     return models[:16]
 
 
-def prometheus_metrics(cgroup, ollama_url):
+def prometheus_metrics(cgroup, ollama_url, development_cgroup=None, development_url=None):
     lines = []
     declared = set()
     def metric(name, value, description, kind='gauge', labels=None):
@@ -81,14 +81,18 @@ def prometheus_metrics(cgroup, ollama_url):
         metric('ollama_host_collector_success', 1, 'Host resource collection succeeded')
     except (OSError, ValueError, KeyError, IndexError):
         metric('ollama_host_collector_success', 0, 'Host resource collection succeeded')
-    try:
-        service = read_service(cgroup)
-        for key, value in service.items():
-            metric('ollama_service_' + key, value, 'Managed Ollama service including all child runners',
-                   'counter' if key.endswith('_total') else 'gauge')
-        metric('ollama_service_collector_success', 1, 'Service cgroup collection succeeded')
-    except (OSError, ValueError, KeyError):
-        metric('ollama_service_collector_success', 0, 'Service cgroup collection succeeded')
+    targets = [(cgroup, ollama_url, {'workload': 'production'} if development_url else None)]
+    if development_url:
+        targets.append((development_cgroup, development_url, {'workload': 'development'}))
+    for service_cgroup, _, labels in targets:
+        try:
+            service = read_service(service_cgroup)
+            for key, value in service.items():
+                metric('ollama_service_' + key, value, 'Managed service including all child runners',
+                       'counter' if key.endswith('_total') else 'gauge', labels)
+            metric('ollama_service_collector_success', 1, 'Service cgroup collection succeeded', labels=labels)
+        except (OSError, ValueError, KeyError):
+            metric('ollama_service_collector_success', 0, 'Service cgroup collection succeeded', labels=labels)
     try:
         gpus = read_gpus()
         for gpu in gpus:
@@ -99,26 +103,30 @@ def prometheus_metrics(cgroup, ollama_url):
         metric('ollama_gpu_collector_success', 1, 'NVIDIA GPU collection succeeded')
     except (OSError, subprocess.SubprocessError, ValueError):
         metric('ollama_gpu_collector_success', 0, 'NVIDIA GPU collection succeeded')
-    try:
-        models = read_models(ollama_url)
-        metric('ollama_loaded_models', len(models), 'Models loaded in the managed Ollama server')
-        for model in models:
-            labels = {'model': model.get('name', 'unknown')}
-            for field in ('size', 'size_vram', 'context_length'):
-                metric('ollama_model_' + field, model.get(field), 'Loaded model allocation from Ollama api/ps', labels=labels)
-        metric('ollama_api_up', 1, 'Managed Ollama inventory API is reachable')
-    except (OSError, ValueError, KeyError, TypeError):
-        metric('ollama_api_up', 0, 'Managed Ollama inventory API is reachable')
+    for _, endpoint, labels in targets:
+        try:
+            models = read_models(endpoint)
+            metric('ollama_loaded_models', len(models), 'Models loaded in the managed server', labels=labels)
+            for model in models:
+                model_labels = {**(labels or {}), 'model': model.get('name', 'unknown')}
+                for field in ('size', 'size_vram', 'context_length'):
+                    metric('ollama_model_' + field, model.get(field),
+                           'Loaded model allocation from Ollama api/ps', labels=model_labels)
+            metric('ollama_api_up', 1, 'Managed Ollama inventory API is reachable', labels=labels)
+        except (OSError, ValueError, KeyError, TypeError):
+            metric('ollama_api_up', 0, 'Managed Ollama inventory API is reachable', labels=labels)
     return '\n'.join(lines) + '\n'
 
 
 class Handler(BaseHTTPRequestHandler):
     cgroup = Path('/sys/fs/cgroup/system.slice/ollama.service')
     ollama_url = 'http://192.168.2.201:11434'
+    development_cgroup = None
+    development_url = None
 
     def do_GET(self):
         if self.path == '/metrics':
-            body = prometheus_metrics(self.cgroup, self.ollama_url).encode()
+            body = prometheus_metrics(self.cgroup, self.ollama_url, self.development_cgroup, self.development_url).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
@@ -151,6 +159,11 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=11435)
     parser.add_argument('--cgroup', type=Path, default=Handler.cgroup)
     parser.add_argument('--ollama-url', default=Handler.ollama_url)
+    parser.add_argument('--development-cgroup', type=Path)
+    parser.add_argument('--development-url')
     args = parser.parse_args()
+    if bool(args.development_url) != bool(args.development_cgroup):
+        parser.error('--development-url and --development-cgroup must be supplied together')
     Handler.cgroup, Handler.ollama_url = args.cgroup, args.ollama_url
+    Handler.development_cgroup, Handler.development_url = args.development_cgroup, args.development_url
     HTTPServer((args.host, args.port), Handler).serve_forever()

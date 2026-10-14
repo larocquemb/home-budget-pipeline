@@ -42,6 +42,9 @@
   changed_when: false
   check_mode: false
 
+- name: Configure isolated CPU inference and private access
+  ansible.builtin.import_tasks: split.yml
+
 - name: Create the host helper directory
   ansible.builtin.file:
     path: /usr/local/libexec
@@ -92,7 +95,7 @@
         ollama_firewall_rules: >-
           {{ ollama_firewall_rules + ['rule family="ipv4" source address="' + item.0
              + '" port port="' + (item.1 | string) + '" protocol="tcp" accept'] }}
-      loop: "{{ query('nested', ollama_allowed_sources, [ollama_port, ollama_gpu_telemetry_port]) }}"
+      loop: "{{ query('nested', ollama_allowed_sources, [ollama_port, ollama_development_port, ollama_gpu_telemetry_port]) }}"
 
     - name: Check persistent Ollama firewall rules
       ansible.builtin.command:
@@ -197,10 +200,16 @@
 - name: Confirm host service and GPU accounting are readable
   ansible.builtin.assert:
     that:
-      - "'ollama_service_collector_success 1' in ollama_metrics_api.content"
+      - >-
+        'ollama_service_collector_success{workload="development"} 1' in ollama_metrics_api.content
+      - >-
+        'ollama_service_collector_success{workload="production"} 1' in ollama_metrics_api.content
       - "'ollama_host_collector_success 1' in ollama_metrics_api.content"
       - "'ollama_gpu_collector_success 1' in ollama_metrics_api.content"
-      - "'ollama_api_up 1' in ollama_metrics_api.content"
+      - >-
+        'ollama_api_up{workload="development"} 1' in ollama_metrics_api.content
+      - >-
+        'ollama_api_up{workload="production"} 1' in ollama_metrics_api.content
     quiet: true
   when: not ansible_check_mode
 
@@ -250,7 +259,7 @@
 
 - name: Create the receipt model with its chat template
   ansible.builtin.uri:
-    url: "http://{{ ollama_listen_address }}:{{ ollama_port }}/api/create"
+    url: "http://{{ ollama_listen_address }}:{{ ollama_development_port }}/api/create"
     method: POST
     body_format: json
     body: "{{ lookup('ansible.builtin.file', role_path + '/files/receipt-model.json') }}"
@@ -270,3 +279,30 @@
     - ansible_check_mode
     - ollama_receipt_model_changed
   changed_when: true
+
+- name: Verify the development GPU inventory API
+  ansible.builtin.uri:
+    url: "http://{{ ollama_listen_address }}:{{ ollama_development_port }}/api/tags"
+    use_proxy: false
+    status_code: 200
+    return_content: true
+  register: ollama_development_api
+  retries: 10
+  delay: 2
+  until: ollama_development_api.status == 200
+  when: not ansible_check_mode
+
+- name: Refresh production inventory after model reconciliation
+  ansible.builtin.uri:
+    url: "http://{{ ollama_listen_address }}:{{ ollama_port }}/api/tags"
+    use_proxy: false
+    return_content: true
+  register: ollama_api
+  when: not ansible_check_mode
+
+- name: Confirm both services see the same downloaded models
+  ansible.builtin.assert:
+    that:
+      - (ollama_development_api.json.models | map(attribute='digest') | sort) == (ollama_api.json.models | map(attribute='digest') | sort)
+    quiet: true
+  when: not ansible_check_mode

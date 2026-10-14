@@ -73,3 +73,27 @@ def test_gpu_failure_preserves_service_metrics(tmp_path, monkeypatch):
     assert 'ollama_gpu_collector_success 0' in metrics
     assert 'ollama_service_memory_bytes 1024' in metrics
     assert 'ollama_loaded_models 0' in metrics
+
+
+def test_split_service_metrics_do_not_confuse_gpu_and_cpu(tmp_path, monkeypatch):
+    module = collector()
+    production = tmp_path / 'production'
+    development = tmp_path / 'development'
+    def service(path):
+        if path == production:
+            raise OSError('production stopped')
+        return {'cpu_seconds_total': 2, 'memory_bytes': 1024, 'swap_bytes': 0}
+    monkeypatch.setattr(module, 'read_service', service)
+    monkeypatch.setattr(module, 'read_gpus', lambda: [])
+    def models(url):
+        if url.endswith(':11434'):
+            raise OSError('production unreachable')
+        return [{'name': 'qwen', 'size': 100, 'size_vram': 80}]
+    monkeypatch.setattr(module, 'read_models', models)
+    metrics = module.prometheus_metrics(production, 'http://host:11434', development, 'http://host:11436')
+    assert 'ollama_api_up{workload="production"} 0' in metrics
+    assert 'ollama_api_up{workload="development"} 1' in metrics
+    assert 'ollama_service_collector_success{workload="production"} 0' in metrics
+    assert 'ollama_service_memory_bytes{workload="development"} 1024' in metrics
+    assert 'ollama_model_size_vram{workload="development",model="qwen"} 80' in metrics
+    assert metrics.count('# TYPE ollama_api_up gauge') == 1

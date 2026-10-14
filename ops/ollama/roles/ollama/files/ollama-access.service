@@ -1,0 +1,12 @@
+[Unit]
+Description=Private Ollama source restrictions
+Before=ollama.service ollama-development.service ollama-gpu-telemetry.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft --file /etc/nftables/ollama-access.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

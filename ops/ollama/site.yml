@@ -1,5 +1,5 @@
 ---
-- name: Configure the existing Ollama service for product comparisons
+- name: Configure production CPU and development GPU Ollama services
   hosts: ollama_hosts
   become: true
   roles:

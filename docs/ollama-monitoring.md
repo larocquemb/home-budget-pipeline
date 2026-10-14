@@ -1,7 +1,7 @@
 # Arsene Ollama monitoring
 
 Ollama stays a native systemd service on Arsene. Native Grafana Alloy forwards
-only `ollama.service` journal entries to the existing Loki server over mTLS.
+`ollama.service` and `ollama-development.service` journal entries to the existing Loki server over mTLS.
 No Kubernetes collector, ingress, or application deployment is needed for this
 monitoring path. Local `sudo journalctl -u ollama.service` remains available.
 
@@ -62,7 +62,7 @@ reports the installation but skips tasks that require its user and binary.
 
 The service log stream is labelled `host=arsene`, `service=ollama`,
 `collection=host-journal`, `environment=production`. It covers the managed
-service only, not Paul's separate terminal `ollama serve`. Startup environment
+services only, not Paul's separate terminal `ollama serve`. Startup environment
 dumps are dropped and credential patterns redacted. The journal reader starts
 with up to one hour of retained history and persists its cursor through restarts;
 Loki retention remains governed by the existing monitoring configuration.
@@ -110,3 +110,13 @@ Revert the monitoring configuration in Git and reapply. Set
 this does not stop an already-installed agent. To stop forwarding immediately,
 run `sudo systemctl disable --now alloy` on Arsene. The existing `/gpu` endpoint
 and local Ollama journal remain independent of forwarding.
+
+
+## Separate production and development services
+
+See [the CPU/GPU development runbook](ollama-cpu-gpu-development.md).
+Production retains port 11434; the new development GPU service uses 11436.
+Service/model metrics now include `workload="production"` or
+`workload="development"`. Development logs use `service="ollama-development"`
+and `environment="development"`; production labels remain unchanged.
+The dashboard's host GPU panels still include every workload, including Jupyter.

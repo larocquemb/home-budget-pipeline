@@ -7,6 +7,8 @@ import os
 import urllib.parse
 import urllib.request
 
+from .ollama_runtime import thread_options
+
 
 @dataclass(frozen=True)
 class Profile:
@@ -167,7 +169,8 @@ def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> di
     message = {'role': 'user', 'content': qwen_content(text, schema, images)}
     if images:
         message['images'] = [image['data'] for image in images]
-    options = {'temperature': 0, 'num_ctx': profile.context_tokens, 'num_predict': profile.output_tokens}
+    options = {'temperature': 0, 'num_ctx': profile.context_tokens,
+               'num_predict': profile.output_tokens, **thread_options()}
     if set(schema.get('properties', {})) == {'queries'}:
         options.update(temperature=0.7, top_p=0.8, top_k=20, seed=42)
     data = post(base + '/api/chat', {'model': profile.model, 'messages': [message],

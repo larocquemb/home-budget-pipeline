@@ -1,4 +1,4 @@
-// Managed by ops/ollama. Collect only the managed host service, not terminal instances.
+// Managed by Git + Ansible; terminal instances are excluded.
 loki.source.journal "ollama" {
   matches = "_SYSTEMD_UNIT=ollama.service"
   max_age = "1h"
@@ -7,6 +7,19 @@ loki.source.journal "ollama" {
     node = "{{ inventory_hostname }}",
     service = "ollama",
     environment = "production",
+    collection = "host-journal",
+  }
+  forward_to = [loki.process.ollama.receiver]
+}
+
+loki.source.journal "ollama_development" {
+  matches = "_SYSTEMD_UNIT=ollama-development.service"
+  max_age = "1h"
+  labels = {
+    host = "{{ inventory_hostname }}",
+    node = "{{ inventory_hostname }}",
+    service = "ollama-development",
+    environment = "development",
     collection = "host-journal",
   }
   forward_to = [loki.process.ollama.receiver]

@@ -106,7 +106,11 @@ def test_repeated_empty_queries_are_an_incomplete_error_not_a_zero_match(monkeyp
     assert comparison.compare([success, result])["winner"] == "incomplete"
 
 
-def test_ollama_structured_chat_observes_gpu_memory(monkeypatch):
+@pytest.mark.parametrize("threads", [None, "5"])
+def test_ollama_structured_chat_observes_gpu_memory(monkeypatch, threads):
+    monkeypatch.delenv("OLLAMA_NUM_THREADS", raising=False)
+    if threads:
+        monkeypatch.setenv("OLLAMA_NUM_THREADS", threads)
     calls = []
     class Response:
         def __init__(self, data): self.data = data
@@ -131,6 +135,7 @@ def test_ollama_structured_chat_observes_gpu_memory(monkeypatch):
     assert result["gpu_vram_bytes"] == 18000000000
     assert result["input_tokens"] == 42
     assert request["options"]["num_ctx"] == 4096
+    assert request["options"].get("num_thread") == (5 if threads else None)
     assert result["ollama_load_seconds"] == 1
     assert result["ollama_eval_seconds"] == 1.5
 
