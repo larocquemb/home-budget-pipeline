@@ -414,7 +414,11 @@ def load_collaborations(conn, expense_id):
 
 def load(conn, sha):
     """Read one consistent authoritative snapshot; no graph or model calls."""
-    receipt = conn.execute('SELECT r.*,s.status,s.attempts FROM ingest.receipts r LEFT JOIN ingest.receipt_processing_status s USING(source_sha256) WHERE r.source_sha256=%s', (sha,)).fetchone()
+    from .receipts.catalogue import RECEIPT_CATALOGUE
+    receipt = conn.execute(f'''SELECT ir.*,r.*,s.status,s.attempts FROM {RECEIPT_CATALOGUE} r
+        LEFT JOIN ingest.receipts ir USING(source_sha256)
+        LEFT JOIN ingest.receipt_processing_status s USING(source_sha256)
+        WHERE r.source_sha256=%s''', (sha,)).fetchone()
     if not receipt:
         raise ValueError('Receipt not found')
     expense = conn.execute('SELECT x.* FROM budget.expenses x JOIN budget.receipt_evidence e ON e.expense_pk=x.id WHERE e.source_sha256=%s ORDER BY e.is_primary_source DESC,e.id LIMIT 1', (sha,)).fetchone()
@@ -467,11 +471,12 @@ def write(tx, sha, graph, observed_at):
 def project(dsn, *, sha=None, limit=100, after=''):
     import psycopg
     from psycopg.rows import dict_row
+    from .receipts.catalogue import RECEIPT_CATALOGUE
     with driver() as backend, psycopg.connect(dsn, row_factory=dict_row) as conn:
         with backend.session(database=os.getenv('NEO4J_DATABASE', 'neo4j')) as session:
             session.run('CREATE CONSTRAINT receipt_flow_id IF NOT EXISTS FOR (n:ReceiptFlowEntity) REQUIRE n.id IS UNIQUE').consume()
             session.run('CREATE CONSTRAINT receipt_snapshot_sha IF NOT EXISTS FOR (n:ReceiptSnapshot) REQUIRE n.sha IS UNIQUE').consume()
-            rows = conn.execute('SELECT source_sha256 FROM ingest.receipts WHERE (%s OR source_sha256=%s) AND source_sha256>%s ORDER BY source_sha256 LIMIT %s', (sha is None, sha, after, limit)).fetchall()
+            rows = conn.execute(f'SELECT source_sha256 FROM {RECEIPT_CATALOGUE} r WHERE (%s OR source_sha256=%s) AND source_sha256>%s ORDER BY source_sha256 LIMIT %s', (sha is None, sha, after, limit)).fetchall()
             conn.commit()
             for row in rows:
                 conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')

@@ -25,6 +25,7 @@ from .app import (
 )
 from .queries import LedgerQueryService, Page, RecommendationConflict, recommendation_candidate
 from ..product_labels import product_name, corrected_reading, ocr_variants
+from ..receipts.catalogue import RECEIPT_CATALOGUE
 from .render import esc, money, page, pager
 from . import receipt_graph as _receipt_graph_routes
 
@@ -65,11 +66,11 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
                   sort: str = 'date', direction: str = 'desc', q: str = '') -> Page:
     sort_column = _RECEIPT_SORT_COLUMNS.get(sort, _RECEIPT_SORT_COLUMNS['date'])
     sort_direction = 'ASC' if direction == 'asc' else 'DESC'
-    joins = """
-          FROM ingest.receipts r
+    joins = f"""
+          FROM {RECEIPT_CATALOGUE} r
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
           LEFT JOIN LATERAL (
-              SELECT id, expense_pk, merchant, transaction_datetime, total,
+              SELECT id, expense_pk, evidence_type, merchant, transaction_datetime, total,
                      extraction_status, extraction_confidence
                 FROM budget.receipt_evidence
                WHERE source_sha256 = r.source_sha256
@@ -99,7 +100,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
     rows = service._fetch(
         f"""
         SELECT r.source_sha256, r.source_reference,
-               s.status AS processing_status, s.attempts,
+               COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts,
                re.id AS evidence_id, re.expense_pk,
                COALESCE(re.merchant, e.store_name) AS merchant,
                COALESCE(re.transaction_datetime, e.transaction_datetime,
@@ -121,16 +122,16 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
     if not _RECEIPT_KEY_RE.fullmatch(source_sha256):
         return None
     rows = service._fetch(
-        """
+        f"""
         SELECT r.source_sha256, r.source_reference,
                r.first_discovered_at, r.updated_at,
-               s.status AS processing_status, s.attempts, s.last_error,
+               COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts, s.last_error,
                s.first_attempted_at, s.last_attempted_at, s.completed_at,
                re.id AS evidence_id, re.expense_pk
-          FROM ingest.receipts r
+          FROM {RECEIPT_CATALOGUE} r
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
           LEFT JOIN LATERAL (
-              SELECT id, expense_pk
+              SELECT id, expense_pk, evidence_type
                 FROM budget.receipt_evidence
                WHERE source_sha256 = r.source_sha256
                ORDER BY is_primary_source DESC, id
@@ -550,6 +551,13 @@ def receipt_page(
 <div><strong>Source</strong><br>{esc(source_reference)}</div>
 <div><strong>Accounting record</strong><br>{canonical_expense}</div>
 </div></div>"""
+
+    import_record = (evidence.get('raw_payload') or {}).get('receipt') or {}
+    possible_duplicates = import_record.get('possible_duplicate_expense_pks') or []
+    if possible_duplicates:
+        links = ', '.join(f'<a href="{BASE_PATH}/expenses/{int(pk)}">Expense {int(pk)}</a>'
+                          for pk in possible_duplicates)
+        header += f'<div class="card">Possible duplicate purchase: compare {links} before including both accounting records.</div>'
 
     item_rows = []
     for item in expense.get("items", ()):

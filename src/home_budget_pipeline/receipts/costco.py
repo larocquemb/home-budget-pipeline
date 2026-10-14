@@ -49,7 +49,7 @@ EXTRACT_DIR = PROJECT_DIR / 'costco_receipts_extracted_categorized'
 OUT_XLSX = PROJECT_DIR / 'costco_receipt_items_categorized.xlsx'
 AI_SUGGESTIONS_PATH = PROJECT_DIR / 'ai_category_cache.json'
 
-AMOUNT_RE = re.compile(r'(\$?-?\d+\.\d{2}-?)\s*(?:[A-Z])?\s*$')
+AMOUNT_RE = re.compile(r'(\$?-?\d+\.\d{2}-?)\s*(?:[A-Z]|2)?\s*$')
 DATE_NAME_RE = re.compile(r'^(\d{8}[a-z]?)\.pdf$', re.I)
 SKU_RE = re.compile(r'\b(\d{3,8})\b')
 LONG_NUM_RE = re.compile(r'\b(\d{20,30})\b')
@@ -616,6 +616,9 @@ def parse_receipt_items(file_stem: str, text: str) -> List[Dict]:
 
     for pos, line in enumerate(lines):
         idx = pos + 1
+        # Tender/rebate amounts below the subtotal are payments, not purchases.
+        if re.match(r'^SUBTOTAL\b', line, re.I):
+            break
         if not likely_item_line(line):
             continue
 
@@ -956,10 +959,11 @@ def write_costco_to_postgres(
     expense_sql = f"""
         INSERT INTO {schema}.expenses (
             source, order_id, receipt_filename, order_date, store_name, order_url,
-            receipt_item_subtotal, receipt_total_charged, expense_total, raw_payload
+            receipt_item_subtotal, receipt_total_charged, expense_total, raw_payload,
+            extraction_status, extraction_confidence
         ) VALUES (
             %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s::jsonb
+            %s, %s, %s, %s::jsonb, %s, %s
         )
         ON CONFLICT (source, order_id)
         DO UPDATE SET
@@ -970,7 +974,9 @@ def write_costco_to_postgres(
             receipt_item_subtotal = EXCLUDED.receipt_item_subtotal,
             receipt_total_charged = EXCLUDED.receipt_total_charged,
             expense_total = EXCLUDED.expense_total,
-            raw_payload = EXCLUDED.raw_payload
+            raw_payload = EXCLUDED.raw_payload,
+            extraction_status = EXCLUDED.extraction_status,
+            extraction_confidence = EXCLUDED.extraction_confidence
         RETURNING id
     """
     delete_items_sql = f'DELETE FROM {schema}.expense_items WHERE expense_pk = %s'
@@ -988,7 +994,7 @@ def write_costco_to_postgres(
             is_primary_source
         ) VALUES (
             %s, 'electronic', %s, %s, 'application/pdf', %s, 'Costco', %s, %s,
-            'complete', 1, %s, %s::jsonb, TRUE
+            %s, %s, %s, %s::jsonb, TRUE
         )
         ON CONFLICT (source_sha256) DO UPDATE SET
             expense_pk = EXCLUDED.expense_pk,
@@ -1027,26 +1033,32 @@ def write_costco_to_postgres(
                     'receipt': receipt,
                     'items': receipt_items,
                 }
-                cur.execute(
-                    expense_sql,
-                    (
-                        'costco',
-                        order_id,
-                        f'{receipt_id}.pdf',
-                        _receipt_date_from_id(receipt_id),
-                        'Costco',
-                        None,
-                        subtotal_dec,
-                        total_dec,
-                        total_dec,
-                        json.dumps(payload, ensure_ascii=True),
-                    ),
-                )
-                row = cur.fetchone()
-                if row is None:
-                    continue
-                expense_pk = int(row[0])
-                written_expenses += 1
+                existing_expense_pk = receipt.get('matched_expense_pk')
+                if not existing_expense_pk:
+                    cur.execute(
+                        expense_sql,
+                        (
+                            'costco',
+                            order_id,
+                            f'{receipt_id}.pdf',
+                            _receipt_date_from_id(receipt_id),
+                            'Costco',
+                            None,
+                            subtotal_dec,
+                            total_dec,
+                            total_dec,
+                            json.dumps(payload, ensure_ascii=True),
+                            'complete' if receipt.get('extraction_status', 'complete') == 'complete' else 'review',
+                            receipt.get('extraction_confidence', 1),
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        continue
+                    expense_pk = int(row[0])
+                    written_expenses += 1
+                else:
+                    expense_pk = int(existing_expense_pk)
 
                 source_path = Path(str(receipt['source_path']))
                 source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
@@ -1059,12 +1071,17 @@ def write_costco_to_postgres(
                         _receipt_date_from_id(receipt_id),
                         order_id,
                         total_dec,
+                        receipt.get('extraction_status', 'complete'),
+                        receipt.get('extraction_confidence', 1),
                         receipt.get('raw_text'),
                         json.dumps(payload, ensure_ascii=True),
                     ),
                 )
                 if cur.fetchone() is not None:
                     written_evidence += 1
+
+                if existing_expense_pk:
+                    continue
 
                 cur.execute(delete_items_sql, (expense_pk,))
                 # Collapse exact duplicate lines within one receipt into a single canonical row.

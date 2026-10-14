@@ -72,6 +72,15 @@ their merchant-specific source. PDFs and images processed by the OCR pipeline
 use `scanned`, regardless of merchant, and retain their original file as receipt
 evidence.
 
+Costco electronic PDFs belong in `/data/receipts/raw/electronic/Costco`.
+The `electronic-receipt-import` CronJob checks for new files every 15 minutes;
+`home-budget-import-electronic --root /path/to/Costco` runs the same import
+manually with `DATABASE_URL` configured. Previously imported receipts are skipped
+to preserve item edits. Empty or unreadable PDFs are reported in the job summary.
+Receipts with unmatched item subtotals remain visible with partial extraction
+status and need review. The Receipts page includes electronic evidence even when
+the file has no OCR queue entry.
+
 ### Scanned paper receipts
 
 Place complete receipt files under `RECEIPT_SOURCE_ROOT`. Discovery walks that

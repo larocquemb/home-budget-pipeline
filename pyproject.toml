@@ -37,6 +37,7 @@ home-budget-categorize = "home_budget_pipeline.categorization.command:main"
 home-budget-category-catalog = "home_budget_pipeline.categorization.catalog_config:main"
 home-budget-enrich-products = "home_budget_pipeline.product_enrichment_runtime:main"
 home-budget-receipt-graph = "home_budget_pipeline.receipt_graph:main"
+home-budget-import-electronic = "home_budget_pipeline.receipts.electronic:main"
 
 [project.optional-dependencies]
 graph = ["neo4j>=6,<7"]
