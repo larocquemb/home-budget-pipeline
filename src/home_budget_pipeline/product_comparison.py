@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from . import product_enrichment as core
 from .gpu_sampling import GpuSampler
+from .ollama_runtime import thread_options
 
 QUERY_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["queries"],
@@ -74,7 +75,7 @@ def _generate_once(provider: str, text: str, *, model: str | None = None) -> dic
         base + "/api/chat",
         data=json.dumps({"model": model, "messages": [{"role": "user", "content": text}],
                          "stream": False, "think": False, "format": QUERY_SCHEMA,
-                         "options": {"temperature": 0, "num_predict": 1200,
+                         "options": {**thread_options(), "temperature": 0, "num_predict": 1200,
                                      "num_ctx": int(os.getenv("OLLAMA_CONTEXT_TOKENS", "4096"))},
                          "keep_alive": "5m"}).encode(),
         headers={"Content-Type": "application/json"},

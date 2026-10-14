@@ -166,3 +166,24 @@ Git rollback promptly; do not leave a persistent manual configuration fork.
 Notebook CUDA experiments still share the 3090 with development Ollama. Unload
 idle development models before a large PyTorch experiment. CPU production also
 uses shared host RAM, CPU, and storage, so monitor concurrent pressure.
+
+## Production CPU thread tuning
+
+Production Qwen workers and enrichment jobs set `OLLAMA_NUM_THREADS=5`. Both
+Ollama request adapters translate it to `options.num_thread`; unset or blank
+leaves server defaults intact for development GPU clients. Invalid nonpositive
+or noninteger values fail before inference. No model parameter or service
+environment variable is changed by this request setting.
+
+On Arsene, a controlled 37-output-token prompt measured warm generation at
+2.28, 4.33, 5.82, 6.70, 7.04, and 6.85 tokens/second for one through six threads.
+The integrated Radeon achieved 1.37 tokens/second at a matched 4096-token
+context. Production retains CPU-only device isolation, its six-core quota, and
+port 11434; development retains the RTX 3090 on 11436. These short-prompt
+measurements do not establish complete receipt latency or justify changing
+the 180-second provider timeout. Validate a real receipt after rollout.
+
+Deploy the rebuilt application image through the existing GitOps workflow.
+The changed Qwen Deployment restarts workers; new enrichment Jobs inherit
+five threads. Existing Jobs and local processes need restarting/updating.
+Jupyter and the development configuration do not set this variable.

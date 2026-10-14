@@ -49,6 +49,9 @@ spec:
               key: HOME_BUDGET_OCR_CACHE
         - name: OCR_ARTIFACT_URI_PREFIX
           value: pvc://home-budget/receipts/derived/ocr-cache
+        # Measured CPU optimum on Arsene; development GPU clients keep defaults.
+        - name: OLLAMA_NUM_THREADS
+          value: "5"
         - name: OLLAMA_BASE_URL
           value: http://192.168.2.201:11434
         - name: OLLAMA_GPU_METRICS_URL
