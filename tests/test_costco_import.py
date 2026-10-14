@@ -53,3 +53,20 @@ TOTAL TAX 3.60-
 """
 
     assert costco.parse_receipt_amounts(text) == (-29.99, -3.60, -33.59)
+
+
+def test_numeric_tax_marker_and_split_tenders_preserve_item_subtotal(monkeypatch):
+    monkeypatch.setattr(costco, 'try_ai_category_batch', lambda _: {})
+    text = '''1979114 BUFFALO JEAN 24.99 2
+2071755 TPD/JEANS 5.00-
+1472215 KS FACE WIPE 17.99 B
+SUBTOTAL 37.98
+TAX 2.00
+**** TOTAL 39.98
+CIBC GIFT CERTIFICATE/REBATE 30.00
+COSTCO MASTERCARD 9.98
+'''
+    rows = costco.parse_receipt_items('20260904', text)
+    assert len(rows) == 2
+    assert [row['amount_cad'] for row in rows] == [19.99, 17.99]
+    assert sum(row['amount_cad'] for row in rows) == 37.98

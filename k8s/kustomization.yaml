@@ -11,6 +11,7 @@ resources:
   - oauth2-proxy.yaml
   - ledger-ingress.yaml
   - receipt-processor-cronjob.yaml
+  - electronic-receipt-import-cronjob.yaml
   - product-enrichment-cronjob.yaml
   - receipt-model-profiles.yaml
   - model-collaboration-workers.yaml

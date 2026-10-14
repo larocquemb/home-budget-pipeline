@@ -61,15 +61,28 @@ def receipt_label(expense_pk, merchant, receipt_date, total) -> str:
     return ' · '.join(parts)
 
 
+# Electronic importers persist evidence directly, without an OCR queue entry.
+# Keep pending scans and imported artifacts in one hash-keyed catalogue.
+_RECEIPT_CATALOGUE = """(
+    SELECT source_sha256, source_reference, first_discovered_at, updated_at
+      FROM ingest.receipts
+    UNION ALL
+    SELECT e.source_sha256, e.source_reference, e.created_at, e.updated_at
+      FROM budget.receipt_evidence e
+     WHERE NOT EXISTS (SELECT 1 FROM ingest.receipts r
+                        WHERE r.source_sha256 = e.source_sha256)
+)"""
+
+
 def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
                   sort: str = 'date', direction: str = 'desc', q: str = '') -> Page:
     sort_column = _RECEIPT_SORT_COLUMNS.get(sort, _RECEIPT_SORT_COLUMNS['date'])
     sort_direction = 'ASC' if direction == 'asc' else 'DESC'
-    joins = """
-          FROM ingest.receipts r
+    joins = f"""
+          FROM {_RECEIPT_CATALOGUE} r
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
           LEFT JOIN LATERAL (
-              SELECT id, expense_pk, merchant, transaction_datetime, total,
+              SELECT id, expense_pk, evidence_type, merchant, transaction_datetime, total,
                      extraction_status, extraction_confidence
                 FROM budget.receipt_evidence
                WHERE source_sha256 = r.source_sha256
@@ -99,7 +112,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
     rows = service._fetch(
         f"""
         SELECT r.source_sha256, r.source_reference,
-               s.status AS processing_status, s.attempts,
+               COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts,
                re.id AS evidence_id, re.expense_pk,
                COALESCE(re.merchant, e.store_name) AS merchant,
                COALESCE(re.transaction_datetime, e.transaction_datetime,
@@ -121,16 +134,16 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
     if not _RECEIPT_KEY_RE.fullmatch(source_sha256):
         return None
     rows = service._fetch(
-        """
+        f"""
         SELECT r.source_sha256, r.source_reference,
                r.first_discovered_at, r.updated_at,
-               s.status AS processing_status, s.attempts, s.last_error,
+               COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts, s.last_error,
                s.first_attempted_at, s.last_attempted_at, s.completed_at,
                re.id AS evidence_id, re.expense_pk
-          FROM ingest.receipts r
+          FROM {_RECEIPT_CATALOGUE} r
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
           LEFT JOIN LATERAL (
-              SELECT id, expense_pk
+              SELECT id, expense_pk, evidence_type
                 FROM budget.receipt_evidence
                WHERE source_sha256 = r.source_sha256
                ORDER BY is_primary_source DESC, id
