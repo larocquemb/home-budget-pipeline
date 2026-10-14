@@ -169,18 +169,8 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
                 if enrichment and enrichment.get('status') == 'accepted':
                     enrichment['reading_evidence'] = candidate_evidence(item.get('item_name') or '', domain,
                         enrichment.get('candidate_title') or '', enrichment.get('candidate_url') or '')
-        recommendation_rows = service._fetch(
-            """SELECT DISTINCT ON (c.expense_item_id) c.id,c.expense_item_id,c.run_uuid,
-                      c.completed_at,c.payload,a.occurred_at AS accepted_at
-                 FROM enrichment.receipt_collaborations c
-                 LEFT JOIN LATERAL (SELECT occurred_at FROM lineage.receipt_events
-                     WHERE source_sha256=%s AND payload->>'event'='product_recommendation_accepted'
-                       AND payload->>'collaboration_id'=c.id::text
-                     ORDER BY occurred_at DESC LIMIT 1) a ON TRUE
-                WHERE c.expense_item_id=ANY(%s)
-                ORDER BY c.expense_item_id,c.completed_at DESC,c.id DESC""",
-            (source_sha256, [int(item["expense_item_id"]) for item in expense["items"]]),
-        )
+        recommendation_rows = service.receipt_recommendations(
+            source_sha256, [int(item['expense_item_id']) for item in expense['items']])
         recommendations = {}
         for row in recommendation_rows:
             payload = row['payload']

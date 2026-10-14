@@ -737,6 +737,52 @@ class LedgerQueryService:
         )
         return dict(rows[0]) if rows else None
 
+    def receipt_recommendations(self, source_sha256: str, item_ids: list[int]):
+        """Load display evidence, leaving large discovery/task history in storage."""
+        return self._fetch("""
+            WITH latest AS (
+                SELECT DISTINCT ON (expense_item_id) id,expense_item_id,run_uuid,completed_at,payload
+                  FROM enrichment.receipt_collaborations
+                 WHERE expense_item_id=ANY(%s)
+                 ORDER BY expense_item_id,completed_at DESC,id DESC
+            )
+            SELECT c.id,c.expense_item_id,c.run_uuid,c.completed_at,
+                   jsonb_build_object(
+                       'decision', c.payload->'decision',
+                       'blocking_errors', c.payload->'blocking_errors',
+                       'search_results', COALESCE((
+                           SELECT jsonb_agg(jsonb_build_object('id',candidate->'id',
+                               'title',candidate->'title','url',candidate->'url',
+                               'evidence',candidate->'evidence'))
+                           FROM (SELECT candidate FROM jsonb_array_elements(
+                               COALESCE(c.payload->'search_results','[]'::jsonb))
+                               WITH ORDINALITY AS results(candidate,position)
+                               WHERE candidate->>'id'=c.payload->'decision'->>'candidate_id'
+                               ORDER BY position LIMIT 1) selected
+                       ),'[]'::jsonb),
+                       'evidence_bundle', jsonb_build_object('sources', COALESCE((
+                           SELECT jsonb_agg(jsonb_build_object(
+                               'id',source->'id','kind',source->'kind','text',source->'text',
+                               'engine',source->'engine','pass_id',source->'pass_id',
+                               'variant',source->'variant','ocr_run_uuid',source->'ocr_run_uuid',
+                               'line_number',source->'line_number','page_number',source->'page_number',
+                               'evidence_id',source->'evidence_id'))
+                           FROM jsonb_array_elements(COALESCE(
+                               c.payload->'evidence_bundle'->'sources','[]'::jsonb)) sources(source)
+                           WHERE source->>'kind' IN ('ocr_pass','ocr_consensus')
+                       ),'[]'::jsonb)),
+                       'reading_hypotheses', COALESCE(c.payload->'reading_hypotheses','[]'::jsonb)
+                   ) AS payload,a.occurred_at AS accepted_at
+              FROM latest c
+              LEFT JOIN LATERAL (
+                  SELECT occurred_at FROM lineage.receipt_events
+                   WHERE source_sha256=%s AND payload->>'event'='product_recommendation_accepted'
+                     AND payload->>'collaboration_id'=c.id::text
+                   ORDER BY occurred_at DESC LIMIT 1
+              ) a ON TRUE
+             ORDER BY c.expense_item_id
+        """, (item_ids, source_sha256))
+
     def pending_duplicates(self, *, limit: int = 50, offset: int = 0) -> Page:
         sql = """
             SELECT id, left_evidence_id, right_evidence_id, canonical_expense_pk,

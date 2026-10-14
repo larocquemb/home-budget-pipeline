@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from home_budget_pipeline.web.queries import recommendation_candidate
+from home_budget_pipeline.web.queries import recommendation_candidate, LedgerQueryService
 from home_budget_pipeline.web.receipt_app import (
     BASE_PATH, app, _enrichment_html, _recommendation_html, _receipt_detail, query_service,
 )
@@ -34,13 +34,14 @@ def test_acceptance_requires_saved_recommended_product_evidence(change):
 
 def test_receipt_detail_loads_latest_collaboration_per_item_instead_of_reporting_not_enriched_only():
     class Service:
+        receipt_recommendations = LedgerQueryService.receipt_recommendations
         def _fetch(self, sql, params=()):
             if 'FROM ingest.receipts r' in sql:
                 return [{'source_sha256': 'a'*64, 'evidence_id': 1, 'expense_pk': 2}]
             if 'FROM budget.product_enrichment_results' in sql: return []
-            assert 'DISTINCT ON (c.expense_item_id)' in sql
-            assert 'c.completed_at DESC,c.id DESC' in sql
-            assert params == ('a'*64, [10, 11])
+            assert 'DISTINCT ON (expense_item_id)' in sql
+            assert 'completed_at DESC,id DESC' in sql
+            assert params == ([10, 11], 'a'*64)
             return [{'id': 3, 'expense_item_id': 10, 'run_uuid': 'run-1', 'completed_at': 'now',
                      'payload': payload(), 'accepted_at': None}]
         def receipt_evidence(self, key): return {'expense_pk': 2}

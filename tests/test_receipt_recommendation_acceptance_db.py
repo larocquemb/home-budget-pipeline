@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 from pathlib import Path
 from decimal import Decimal
 
@@ -12,6 +13,8 @@ from home_budget_pipeline.web.queries import LedgerQueryService, RecommendationC
 from home_budget_pipeline.web.receipt_app import _receipt_detail
 from home_budget_pipeline import receipt_graph
 from home_budget_pipeline.product_labels import product_name
+from home_budget_pipeline.product_labels import ocr_variants
+from home_budget_pipeline.web.queries import recommendation_candidate
 from home_budget_pipeline.web.receipt_graph import processing_story
 from test_receipt_recommendation_acceptance import payload
 
@@ -46,6 +49,34 @@ def accept(receipt, **overrides):
     return service.accept_product_recommendation(overrides.pop('source',source),items[0],
         overrides.pop('collaboration',collaboration),expected_description=None,expected_url=None,
         actor_user='paul',actor_email='paul@example.com',**overrides)
+
+
+def test_receipt_display_does_not_load_unrelated_discovery_or_task_payloads(receipt):
+    service, source, _, items, collaboration, p = receipt
+    padding = 'irrelevant discovery content ' * 200000
+    p['search_results'].append({'id': 'unrelated', 'raw_text': padding})
+    p['independent_results'] = [{'raw_response': padding}]
+    p['evidence_bundle'] = {'sources': [
+        {'id': 'pass:1', 'kind': 'ocr_pass', 'text': 'Cep Pic Med', 'engine': 'tesseract',
+         'pass_id': 1, 'ocr_run_uuid': 'original-run', 'raw_text': padding},
+        {'id': 'layout:1', 'kind': 'ocr_layout', 'text': padding},
+    ]}
+    p['reading_hypotheses'] = [{'reading': 'Cep Pic Med', 'source_ids': ['pass:1']}]
+    with service._connect() as conn:
+        conn.execute('UPDATE enrichment.receipt_collaborations SET payload=%s WHERE id=%s',
+                     (Jsonb(p), collaboration))
+    rows = service.receipt_recommendations(source, items)
+    compact = rows[0]['payload']
+    assert len(json.dumps(compact)) < 10000
+    assert recommendation_candidate(compact) == {key: p['search_results'][0][key]
+                                                for key in ('id', 'title', 'url', 'evidence')}
+    assert ocr_variants(compact) == ocr_variants(p)
+    detail = _receipt_detail(service, source)
+    assert detail['expense']['items'][0]['recommendation']['eligible']
+    with service._connect() as conn:
+        stored = conn.execute('SELECT octet_length(payload::text) AS bytes FROM enrichment.receipt_collaborations WHERE id=%s',
+                              (collaboration,)).fetchone()['bytes']
+        assert stored > 10000000
 
 
 def test_acceptance_updates_one_duplicate_item_and_retains_audit_and_graph_provenance(receipt):
