@@ -1033,28 +1033,32 @@ def write_costco_to_postgres(
                     'receipt': receipt,
                     'items': receipt_items,
                 }
-                cur.execute(
-                    expense_sql,
-                    (
-                        'costco',
-                        order_id,
-                        f'{receipt_id}.pdf',
-                        _receipt_date_from_id(receipt_id),
-                        'Costco',
-                        None,
-                        subtotal_dec,
-                        total_dec,
-                        total_dec,
-                        json.dumps(payload, ensure_ascii=True),
-                        'complete' if receipt.get('extraction_status', 'complete') == 'complete' else 'review',
-                        receipt.get('extraction_confidence', 1),
-                    ),
-                )
-                row = cur.fetchone()
-                if row is None:
-                    continue
-                expense_pk = int(row[0])
-                written_expenses += 1
+                existing_expense_pk = receipt.get('matched_expense_pk')
+                if not existing_expense_pk:
+                    cur.execute(
+                        expense_sql,
+                        (
+                            'costco',
+                            order_id,
+                            f'{receipt_id}.pdf',
+                            _receipt_date_from_id(receipt_id),
+                            'Costco',
+                            None,
+                            subtotal_dec,
+                            total_dec,
+                            total_dec,
+                            json.dumps(payload, ensure_ascii=True),
+                            'complete' if receipt.get('extraction_status', 'complete') == 'complete' else 'review',
+                            receipt.get('extraction_confidence', 1),
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        continue
+                    expense_pk = int(row[0])
+                    written_expenses += 1
+                else:
+                    expense_pk = int(existing_expense_pk)
 
                 source_path = Path(str(receipt['source_path']))
                 source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
@@ -1075,6 +1079,9 @@ def write_costco_to_postgres(
                 )
                 if cur.fetchone() is not None:
                     written_evidence += 1
+
+                if existing_expense_pk:
+                    continue
 
                 cur.execute(delete_items_sql, (expense_pk,))
                 # Collapse exact duplicate lines within one receipt into a single canonical row.

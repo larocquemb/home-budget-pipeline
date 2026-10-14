@@ -3,13 +3,35 @@ import argparse
 import hashlib
 import json
 import os
+import re
+from datetime import datetime
 from pathlib import Path
 
 from . import costco
 
 
+def matching_scanned_expense(conn, order, total):
+    """Match the printed warehouse/register/transaction identity and minute."""
+    if not re.fullmatch(r'22\d{21}', order):
+        return None
+    try:
+        when = datetime.strptime(order[-10:], '%y%m%d%H%M')
+    except ValueError:
+        return None
+    warehouse, register, transaction = (str(int(order[a:b])) for a, b in ((2, 6), (6, 9), (9, 13)))
+    identity = re.compile(r'(?<!\d)' + r'\s+'.join(map(re.escape, (warehouse, register, transaction))) + r'(?!\d)')
+    candidates = conn.execute('''SELECT DISTINCT e.id,re.raw_text
+        FROM budget.expenses e JOIN budget.receipt_evidence re ON re.expense_pk=e.id
+        WHERE e.source='scanned' AND e.store_name ILIKE '%%costco%%'
+          AND e.expense_total=%s
+          AND e.transaction_datetime >= %s::timestamp
+          AND e.transaction_datetime < %s::timestamp + interval '1 minute' ''', (total, when, when)).fetchall()
+    matches = {pk for pk, text in candidates if identity.search(text or '')}
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
 def import_receipts(root: Path):
-    result = {'imported': 0, 'skipped': 0, 'review': [], 'unreadable': []}
+    result = {'imported': 0, 'linked_existing': 0, 'skipped': 0, 'review': [], 'unreadable': []}
     # A session lock also protects manual imports from racing the scheduled job.
     with costco._connect_postgres('') as conn:
         conn.autocommit = True
@@ -47,6 +69,11 @@ def import_receipts(root: Path):
                        'source_reference': f'Costco/{path.name}', 'raw_text': text,
                        'extraction_status': 'complete' if complete else 'partial',
                        'extraction_confidence': 1 if complete else .5}
+                matched = matching_scanned_expense(conn, order, total)
+                if matched:
+                    row['matched_expense_pk'] = matched
+                    row['match_reason'] = 'warehouse_register_transaction_minute_total'
+                    result['linked_existing'] += 1
                 costco.write_costco_to_postgres([row], items, '', 'budget')
                 known.add(sha)
                 orders.add(order)

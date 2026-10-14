@@ -76,3 +76,30 @@ def test_electronic_import_preserves_edits_and_reports_partial_and_empty_files(t
     with psycopg.connect(os.environ['TEST_DATABASE_URL']) as conn:
         assert conn.execute("SELECT item_name FROM budget.expense_items WHERE expense_pk=(SELECT id FROM budget.expenses WHERE source='costco' AND order_id='20260101')").fetchone()[0] == 'Human corrected milk'
         assert conn.execute("SELECT extraction_status FROM budget.receipt_evidence WHERE receipt_id='20260102'").fetchone()[0] == 'partial'
+
+
+def test_matching_printed_transaction_links_artifact_without_duplicate_spend(tmp_path, monkeypatch):
+    monkeypatch.setenv('DATABASE_URL', os.environ['TEST_DATABASE_URL'])
+    path = tmp_path / '20260720.pdf'
+    path.write_text('unique electronic refund')
+    text = '22054912500432607201140\n1981364 WW DRESS 29.99-\nSUBTOTAL 29.99-\nTAX 3.60-\n**** TOTAL 33.59-'
+    monkeypatch.setattr(electronic.costco, 'pdf_text', lambda _: text)
+    monkeypatch.setattr(electronic.costco, 'try_ai_category_batch', lambda _: {})
+    with psycopg.connect(os.environ['TEST_DATABASE_URL']) as conn:
+        conn.execute("INSERT INTO budget.category_groups (group_key,group_name) VALUES ('electronic-test','Electronic test') ON CONFLICT DO NOTHING")
+        conn.execute("INSERT INTO budget.expense_categories (category_name,group_id) SELECT 'Clothing',id FROM budget.category_groups WHERE group_key='electronic-test' ON CONFLICT DO NOTHING")
+        pk = conn.execute('''INSERT INTO budget.expenses
+            (source,order_id,store_name,transaction_datetime,expense_total)
+            VALUES ('scanned','electronic-link-test','Costco','2026-07-20 11:40:32',-33.59)
+            RETURNING id''').fetchone()[0]
+        conn.execute('''INSERT INTO budget.receipt_evidence
+            (expense_pk,evidence_type,source_reference,source_sha256,raw_text)
+            VALUES (%s,'scanned','refund.pdf',%s,'11:40:34 549 125 43 639')''', (pk, 'd'*64))
+        conn.execute("INSERT INTO budget.expense_items (expense_pk,item_name,line_total) VALUES (%s,'Human reviewed dress',-29.99)", (pk,))
+        assert electronic.matching_scanned_expense(conn, '22054912600432607201140', -33.59) is None
+    result = electronic.import_receipts(tmp_path)
+    assert result['imported'] == result['linked_existing'] == 1
+    with psycopg.connect(os.environ['TEST_DATABASE_URL']) as conn:
+        assert conn.execute("SELECT expense_pk FROM budget.receipt_evidence WHERE source_reference='Costco/20260720.pdf'").fetchone()[0] == pk
+        assert conn.execute('SELECT item_name FROM budget.expense_items WHERE expense_pk=%s', (pk,)).fetchall() == [('Human reviewed dress',)]
+        assert conn.execute("SELECT count(*) FROM budget.expenses WHERE order_id='22054912500432607201140'").fetchone()[0] == 0
