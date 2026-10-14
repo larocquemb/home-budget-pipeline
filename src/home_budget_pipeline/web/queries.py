@@ -728,6 +728,7 @@ class LedgerQueryService:
                    transaction_datetime, merchant, receipt_id, total,
                    payment_method, card_last4, extraction_status,
                    extraction_confidence, raw_text, page_text,
+                   raw_payload->'receipt'->'possible_duplicate_expense_pks' AS possible_duplicate_expense_pks,
                    has_handwritten_notes, has_category_markup
               FROM budget.receipt_evidence
              WHERE id = %s
