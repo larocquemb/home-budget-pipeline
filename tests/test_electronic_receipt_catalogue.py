@@ -4,7 +4,8 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from home_budget_pipeline.web.receipt_app import _receipt_detail, _receipt_list
+from home_budget_pipeline.web.receipt_app import _receipt_detail, _receipt_list, receipt_page
+from home_budget_pipeline.web.queries import LedgerQueryService
 from home_budget_pipeline.receipts import electronic
 
 
@@ -34,13 +35,13 @@ def test_imported_evidence_is_listed_and_opened_without_an_ocr_entry():
                 return conn.execute(sql, params).fetchall()
 
             def receipt_evidence(self, evidence_id):
-                return conn.execute('SELECT * FROM budget.receipt_evidence WHERE id=%s',
-                                    (evidence_id,)).fetchone()
+                return LedgerQueryService.receipt_evidence(self, evidence_id)
 
         sha = 'e' * 64
         conn.execute('''INSERT INTO budget.receipt_evidence
-            (evidence_type,source_reference,source_sha256,merchant,total,extraction_status)
-            VALUES ('electronic','Costco/catalogue-test.pdf',%s,'Costco',12.34,'complete')''', (sha,))
+            (evidence_type,source_reference,source_sha256,merchant,total,extraction_status,raw_payload)
+            VALUES ('electronic','Costco/catalogue-test.pdf',%s,'Costco',12.34,'complete',
+                    '{"receipt":{"possible_duplicate_expense_pks":[228]}}')''', (sha,))
         service = Service()
         rows = _receipt_list(service, limit=10, offset=0, q='catalogue-test')
         assert rows.total_count == 1
@@ -49,6 +50,9 @@ def test_imported_evidence_is_listed_and_opened_without_an_ocr_entry():
         assert detail['evidence']['evidence_type'] == 'electronic'
         assert detail['processing_status'] == 'imported'
         assert detail['evidence']['source_reference'] == 'Costco/catalogue-test.pdf'
+        html = receipt_page(sha, service=service, identity={'user': 'test'})
+        assert 'Possible duplicate purchase' in html
+        assert '/expenses/228' in html
         from home_budget_pipeline.receipt_graph import build, load
         graph = build(load(conn, sha))
         assert any(node['kind'] == 'Receipt' and node['label'] == 'Costco/catalogue-test.pdf'
