@@ -25,6 +25,7 @@ from .app import (
 )
 from .queries import LedgerQueryService, Page, RecommendationConflict, recommendation_candidate
 from ..product_labels import product_name, corrected_reading, ocr_variants
+from ..receipts.catalogue import RECEIPT_CATALOGUE
 from .render import esc, money, page, pager
 from . import receipt_graph as _receipt_graph_routes
 
@@ -61,25 +62,12 @@ def receipt_label(expense_pk, merchant, receipt_date, total) -> str:
     return ' · '.join(parts)
 
 
-# Electronic importers persist evidence directly, without an OCR queue entry.
-# Keep pending scans and imported artifacts in one hash-keyed catalogue.
-_RECEIPT_CATALOGUE = """(
-    SELECT source_sha256, source_reference, first_discovered_at, updated_at
-      FROM ingest.receipts
-    UNION ALL
-    SELECT e.source_sha256, e.source_reference, e.created_at, e.updated_at
-      FROM budget.receipt_evidence e
-     WHERE NOT EXISTS (SELECT 1 FROM ingest.receipts r
-                        WHERE r.source_sha256 = e.source_sha256)
-)"""
-
-
 def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
                   sort: str = 'date', direction: str = 'desc', q: str = '') -> Page:
     sort_column = _RECEIPT_SORT_COLUMNS.get(sort, _RECEIPT_SORT_COLUMNS['date'])
     sort_direction = 'ASC' if direction == 'asc' else 'DESC'
     joins = f"""
-          FROM {_RECEIPT_CATALOGUE} r
+          FROM {RECEIPT_CATALOGUE} r
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
           LEFT JOIN LATERAL (
               SELECT id, expense_pk, evidence_type, merchant, transaction_datetime, total,
@@ -140,7 +128,7 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
                COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts, s.last_error,
                s.first_attempted_at, s.last_attempted_at, s.completed_at,
                re.id AS evidence_id, re.expense_pk
-          FROM {_RECEIPT_CATALOGUE} r
+          FROM {RECEIPT_CATALOGUE} r
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
           LEFT JOIN LATERAL (
               SELECT id, expense_pk, evidence_type

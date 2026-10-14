@@ -33,6 +33,10 @@ def test_imported_evidence_is_listed_and_opened_without_an_ocr_entry():
         assert detail['evidence']['evidence_type'] == 'electronic'
         assert detail['processing_status'] == 'imported'
         assert detail['evidence']['source_reference'] == 'Costco/catalogue-test.pdf'
+        from home_budget_pipeline.receipt_graph import build, load
+        graph = build(load(conn, sha))
+        assert any(node['kind'] == 'Receipt' and node['label'] == 'Costco/catalogue-test.pdf'
+                   for node in graph['nodes'])
 
         # Registering the same artifact for OCR must not duplicate the listing.
         conn.execute('''INSERT INTO ingest.receipts (source_sha256,source_reference)
