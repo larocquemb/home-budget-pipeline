@@ -11,6 +11,22 @@ from home_budget_pipeline.receipts import electronic
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(autouse=True)
+def clean_import_records():
+    # The importer owns committed connections; isolate its test records from
+    # other integration tests which seed their own category catalogue.
+    tables = ('expenses', 'receipt_evidence', 'expense_categories', 'category_groups')
+    with psycopg.connect(os.environ['TEST_DATABASE_URL'], autocommit=True) as conn:
+        before = {table: [r[0] for r in conn.execute(f'SELECT id FROM budget.{table}')]
+                  for table in tables}
+        try:
+            yield
+        finally:
+            for table in tables:
+                conn.execute(f'DELETE FROM budget.{table} WHERE NOT (id=ANY(%s::bigint[]))',
+                             (before[table],))
+
+
 def test_imported_evidence_is_listed_and_opened_without_an_ocr_entry():
     with psycopg.connect(os.environ['TEST_DATABASE_URL'], row_factory=dict_row) as conn:
         class Service:
