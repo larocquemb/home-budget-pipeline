@@ -74,6 +74,23 @@ def import_receipts(root: Path):
                     row['matched_expense_pk'] = matched
                     row['match_reason'] = 'warehouse_register_transaction_minute_total'
                     result['linked_existing'] += 1
+                else:
+                    # Totals and basket overlap alone do not establish identity.
+                    # Surface possible scanned duplicates for review.
+                    candidates = conn.execute('''SELECT e.id,re.raw_text
+                        FROM budget.expenses e JOIN budget.receipt_evidence re ON re.expense_pk=e.id
+                        WHERE e.source='scanned' AND e.store_name ILIKE '%%costco%%'
+                          AND e.expense_total=%s''', (total,)).fetchall()
+                    skus = {item['sku'] for item in items if item.get('sku')}
+                    possible = sorted({pk for pk, raw in candidates if
+                        len(skus & set(re.findall(r'\b\d{3,8}\b', raw or ''))) >= 3
+                        and costco.parse_receipt_amounts(raw or '')[0] == subtotal})
+                    if possible:
+                        row['possible_duplicate_expense_pks'] = possible
+                        row['extraction_status'] = 'review'
+                        row['extraction_confidence'] = .5
+                        result['review'].append({'file': path.name,
+                            'reason': 'possible_scanned_duplicate', 'expense_pks': possible})
                 costco.write_costco_to_postgres([row], items, '', 'budget')
                 known.add(sha)
                 orders.add(order)

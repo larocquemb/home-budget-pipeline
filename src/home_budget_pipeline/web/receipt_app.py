@@ -552,6 +552,13 @@ def receipt_page(
 <div><strong>Accounting record</strong><br>{canonical_expense}</div>
 </div></div>"""
 
+    import_record = (evidence.get('raw_payload') or {}).get('receipt') or {}
+    possible_duplicates = import_record.get('possible_duplicate_expense_pks') or []
+    if possible_duplicates:
+        links = ', '.join(f'<a href="{BASE_PATH}/expenses/{int(pk)}">Expense {int(pk)}</a>'
+                          for pk in possible_duplicates)
+        header += f'<div class="card">Possible duplicate purchase: compare {links} before including both accounting records.</div>'
+
     item_rows = []
     for item in expense.get("items", ()):
         description_html = esc(_item_description(dict(item))) or '<span class="muted">Awaiting product identification</span>'
