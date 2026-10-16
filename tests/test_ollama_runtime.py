@@ -37,12 +37,12 @@ def test_invalid_thread_counts_fail_before_inference(monkeypatch, value):
         thread_options()
 
 
-def test_production_cpu_requests_use_five_threads(monkeypatch):
+def test_explicit_cpu_diagnostic_requests_use_five_threads(monkeypatch):
     monkeypatch.setenv("OLLAMA_NUM_THREADS", "5")
     assert thread_options() == {"num_thread": 5}
 
 
-def test_production_callers_configure_threads_only_for_qwen():
+def test_production_callers_use_shared_gpu_with_bounded_timeouts():
     from pathlib import Path
     import yaml
     root = Path(__file__).resolve().parents[1]
@@ -51,12 +51,14 @@ def test_production_callers_configure_threads_only_for_qwen():
         if not worker or worker.get("kind") != "Deployment":
             continue
         env = {row["name"]: row.get("value") for row in worker["spec"]["template"]["spec"]["containers"][0]["env"]}
-        assert env.get("OLLAMA_NUM_THREADS") == ("5" if worker["metadata"]["name"] == "model-worker-qwen" else None)
+        assert "OLLAMA_NUM_THREADS" not in env
+        assert env["OLLAMA_BASE_URL"] == "http://192.168.2.201:11436"
         assert env.get("OLLAMA_TIMEOUT_SECONDS") == ("300" if worker["metadata"]["name"] == "model-worker-qwen" else None)
         assert env["COMPARISON_TIMEOUT_SECONDS"] == "180"
         assert worker["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] > 2 * 300
     cron = yaml.safe_load((root / "k8s/product-enrichment-cronjob.yaml").read_text())
     env = {row["name"]: row.get("value") for row in cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["env"]}
-    assert env["OLLAMA_NUM_THREADS"] == "5"
+    assert "OLLAMA_NUM_THREADS" not in env
+    assert env["OLLAMA_BASE_URL"] == "http://192.168.2.201:11436"
     assert env["OLLAMA_TIMEOUT_SECONDS"] == "300"
     assert env["COMPARISON_TIMEOUT_SECONDS"] == "180"

@@ -113,7 +113,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.baseline == args.candidate or not 0 <= args.threshold <= 1:
         parser.error('Use distinct models and a threshold between 0 and 1')
-    base = os.getenv('OLLAMA_BASE_URL') or os.getenv('OLLAMA_HOST') or 'http://192.168.2.201:11434'
+    base = os.getenv('OLLAMA_BASE_URL') or os.getenv('OLLAMA_HOST') or 'http://192.168.2.201:11436'
     base = base.rstrip('/')
     address = urlsplit(base)
     if address.scheme not in ('http', 'https') or not address.hostname or address.username or address.password or address.query or address.fragment:
