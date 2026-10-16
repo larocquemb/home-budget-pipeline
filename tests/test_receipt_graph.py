@@ -130,7 +130,8 @@ def test_retry_requires_an_observed_retry_not_merely_multiple_runs():
 
 def test_web_graph_is_bounded_and_handles_missing_backend(monkeypatch):
     graph = g.build(evidence())
-    monkeypatch.setattr(web, 'read', lambda *a, **kw: [{'graph': json.dumps(graph), 'observed_at': 'now'}])
+    monkeypatch.setattr(web, 'snapshot_index', lambda sha: (graph, 'now'))
+    monkeypatch.setattr(web, 'snapshot_nodes', lambda sha, time, ids: [n for n in graph['nodes'] if n['id'] in ids])
     result = web.receipt('a'*64, perspective='domain', offset=0, limit=3)
     assert len(result['nodes']) == 3
     ids = {n['id'] for n in result['nodes']}
@@ -229,7 +230,8 @@ def test_story_selects_latest_run_even_when_it_failed_and_keeps_items_separate(m
     data['items'].append({'id': 11, 'item_name': 'Other item'})
     data['collaborations'].append(other)
     result = g.build(data)
-    monkeypatch.setattr(web, 'read', lambda *a, **k: [{'graph': json.dumps(result), 'observed_at': 'now'}])
+    monkeypatch.setattr(web, 'snapshot_index', lambda sha: (result, 'now'))
+    monkeypatch.setattr(web, 'snapshot_nodes', lambda sha, time, ids: [n for n in result['nodes'] if n['id'] in ids])
     story = web.receipt('a'*64, perspective='story', offset=0, limit=1)
     assert story['chronology_known'] is True
     assert story['nodes'] and len(story['nodes']) > 1  # Story is scoped before pagination.
@@ -407,10 +409,90 @@ def test_large_graph_writes_bounded_parameters_and_keeps_complete_snapshot():
     assert max(map(len, batches)) <= 500
     assert [n['id'] for batch in batches for n in batch] == [n['id'] for n in nodes]
     assert all('properties' not in n for batch in batches for n in batch)
-    membership = [c['ids'] for c in calls if 'ids' in c]
+    membership = [c['members'] for c in calls if 'members' in c]
     assert max(map(len, membership)) <= 500
-    assert [i for batch in membership for i in batch] == [n['id'] for n in nodes]
+    assert [i['id'] for batch in membership for i in batch] == [n['id'] for n in nodes]
+    assert [json.loads(i['payload']) for batch in membership for i in batch] == nodes
+    assert json.loads(next(c['edges'] for c in calls if 'edges' in c)) == edges
     relations = [c['rows'] for c in calls if 'rows' in c]
     assert max(map(len, relations)) <= 1000
     assert [e for batch in relations for e in batch] == edges
     assert json.loads(next(c['graph'] for c in calls if 'graph' in c)) == graph
+
+
+@pytest.mark.parametrize('header,status', [
+    ({'version': 6, 'count': 1, 'ready': 0, 'chars': 0}, 503),
+    ({'version': 7, 'count': 1, 'ready': 0, 'chars': 0}, 503),
+    ({'version': 7, 'count': web.MAX_INDEX_NODES + 1, 'ready': web.MAX_INDEX_NODES + 1, 'chars': 0}, 413),
+    ({'version': 7, 'count': 1, 'ready': 1, 'chars': web.MAX_INDEX_CHARS + 1}, 413),
+])
+def test_snapshot_rejects_legacy_or_large_index_before_loading(monkeypatch, header, status):
+    calls = []
+    def read(query, **params):
+        calls.append(query)
+        assert len(calls) == 1, 'Must not transfer evidence or index after guard fails'
+        return [{**header, 'observed_at': 'now'}]
+    monkeypatch.setattr(web, 'read', read)
+    with pytest.raises(HTTPException) as exc:
+        web.snapshot_index('a' * 64)
+    assert exc.value.status_code == status
+    assert 's.graph_json' not in calls[0]
+
+
+def test_snapshot_evidence_guard_runs_before_payload_transfer(monkeypatch):
+    calls = []
+    def read(query, **params):
+        calls.append(query)
+        assert 'RETURN r.node_id AS id,r.node_json AS payload' not in query
+        return [{'count': 1, 'chars': web.MAX_DETAIL_CHARS + 1}]
+    monkeypatch.setattr(web, 'read', read)
+    with pytest.raises(HTTPException) as exc:
+        web.snapshot_nodes('a' * 64, 'now', ['node'])
+    assert exc.value.status_code == 413
+    assert len(calls) == 1
+
+
+def test_story_endpoint_hydrates_only_selected_run_from_exact_snapshot(monkeypatch):
+    from fastapi.testclient import TestClient
+    from home_budget_pipeline.web.receipt_app import app
+    data = evidence()
+    old = deepcopy(data['collaborations'][0])
+    old['payload']['run_uuid'] = 'old-run'
+    old['completed_at'] = '2026-10-01'
+    data['collaborations'][0]['completed_at'] = '2026-10-16'
+    data['collaborations'].append(old)
+    full = g.build(data)
+    index = {'edges': full['edges'], 'nodes': [{
+        **{k: n[k] for k in ('id', 'kind', 'label')},
+        'properties': {k: v for k, v in n['properties'].items()
+                       if k in ('run_uuid', 'completed_at', 'sequence')},
+    } for n in full['nodes']]}
+    expected = web.processing_story(full)
+    monkeypatch.delenv('LEDGER_PROXY_SECRET', raising=False)
+    monkeypatch.setattr(web, 'snapshot_index', lambda sha: (index, 'observed'))
+    def read(query, **params):
+        assert 's.graph_json' not in query
+        assert params['time'] == 'observed'
+        assert set(params['ids']) == {n['id'] for n in expected['nodes']}
+        if 'sum(size' in query:
+            return [{'count': len(params['ids']), 'chars': 100}]
+        return [{'id': n['id'], 'payload': json.dumps(n)} for n in full['nodes']
+                if n['id'] in params['ids']]
+    monkeypatch.setattr(web, 'read', read)
+    with TestClient(app) as client:
+        response = client.get(web.BASE_PATH + '/api/graph/receipts/' + 'a'*64,
+                              params={'perspective': 'story'}, headers={'X-Forwarded-User': 'operator'})
+    assert response.status_code == 200
+    actual = response.json()
+    assert actual['items'] == expected['items']
+    assert actual['runs'] == expected['runs']
+    assert actual['run_id'] == expected['run_id']
+    assert actual['product_name'] == expected['product_name']
+    assert not any(n['properties'].get('run_uuid') == 'old-run' for n in actual['nodes'])
+
+
+def test_snapshot_projection_race_returns_conflict_not_partial_evidence(monkeypatch):
+    monkeypatch.setattr(web, 'read', lambda *args, **kwargs: [{'count': 0, 'chars': 0}])
+    with pytest.raises(HTTPException) as exc:
+        web.snapshot_nodes('a' * 64, 'stale', ['node'])
+    assert exc.value.status_code == 409

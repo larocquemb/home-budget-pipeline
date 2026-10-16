@@ -282,7 +282,7 @@ matching amounts or pass line order alone do not establish it.
 
 ### Queued model collaboration provenance
 
-Graph projection version 6 separates independent and evidence-exchange rounds.
+Graph projection version 7 retains the version 6 separation of independent and evidence-exchange rounds.
 `CollaborationRound` dispatches `ModelTask` entities with durable task/cohort IDs,
 provider queue, attempts and recorded timestamps. Tasks connect to their model
 invocations and recorded workers. Initial reviews, including abstentions, stay
@@ -298,3 +298,35 @@ exchange worker identity or exact prompt inclusion can remain unknown when it
 was not recorded; the projector does not infer it from another round. New worker
 results record task ID, start time, worker identity and exact exchange source IDs.
 Failed or expired tasks remain task failures rather than fabricated model calls.
+
+## Bounded web reads and projection version 7 (KAN-98)
+
+A deployed Sobeys receipt detail request exhausted the ledger-web container's
+512 MiB limit (OOMKilled, exit 137), causing repeated restarts and HTML 502
+responses in place of JSON. Pagination had occurred only after loading and
+parsing the complete receipt snapshot, including every run's evidence.
+
+Version 7 stores the exact serialized node on its receipt snapshot membership,
+a small selection index, and snapshot edge metadata in the same projection
+transaction. The web API loads bounded metadata first, selects a run or page,
+checks its serialized evidence size in Neo4j, then fetches only those nodes.
+It never reads the monolithic graph_json property. Existing normalized historical
+entities and the full snapshot remain available; this adds storage overhead.
+A snapshot timestamp scopes all reads. A projection replacement returns HTTP
+409 if the selection is no longer available rather than mixing evidence.
+
+Interactive requests reject indexes larger than 15,000 nodes or 2 Mi characters
+and evidence selections larger than 2,000 nodes or 1 Mi characters with HTTP 413.
+These conservative limits bound individual requests; they are not measured
+whole-pod concurrency guarantees. Large evidence needs a more granular browser
+rather than increasing the limits without memory measurements. HTTP 503 indicates
+a legacy projection that must be replayed with the new application image.
+The UI reports non-JSON gateway/authentication responses explicitly.
+
+After merging, passing CI (including the real Neo4j projection/read integration
+test), building the image, and deploying with make deploy-k3s, confirm the graph
+CronJob uses the new image. Wait for its next successful scheduled projection
+before loading the Sobeys graph. This rebuilds derived data without calling models
+or changing canonical receipts. Check Item/Run selectors, historical run isolation,
+web restart count and pod memory while viewing the receipt. These live checks
+remain required; the local fix alone does not complete KAN-98.
