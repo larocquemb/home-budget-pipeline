@@ -46,6 +46,13 @@ def test_real_neo4j_atomic_replay_and_out_of_order_snapshot(monkeypatch):
     a = graph.node('Receipt', sha, 'Synthetic receipt')
     b = graph.node('Model', sha, 'Synthetic model')
     graph.edge(a, 'USES_MODEL', b)
+    item = graph.node('Item', (sha, 'item'), 'Synthetic item')
+    run = graph.node('Collaboration', (sha, 'run'), 'Synthetic run', run_uuid='synthetic-run', completed_at='2026-10-04')
+    decision = graph.node('Decision', (sha, 'decision'), 'review', canonical_updated=False)
+    graph.edge(a, 'HAS_COLLABORATION', run)
+    graph.edge(run, 'ANALYZES', item)
+    graph.edge(run, 'USES_MODEL', b)
+    graph.edge(run, 'RESULTED_IN', decision)
     data = graph.export()
     with GraphDatabase.driver(os.environ['TEST_NEO4J_URI'], auth=('neo4j', 'test-graph-password')) as driver, driver.session(database='neo4j') as session:
         try:
@@ -53,8 +60,8 @@ def test_real_neo4j_atomic_replay_and_out_of_order_snapshot(monkeypatch):
             session.run('CREATE CONSTRAINT receipt_snapshot_sha IF NOT EXISTS FOR (n:ReceiptSnapshot) REQUIRE n.sha IS UNIQUE').consume()
             for _ in range(2):
                 assert session.execute_write(write, sha, data, '2026-10-04T15:00:00+00:00')
-            assert session.run('MATCH (n:ReceiptFlowEntity) WHERE n.id IN $ids RETURN count(n) AS c', ids=[a, b]).single()['c'] == 2
-            assert session.run('MATCH (a:ReceiptFlowEntity {id:$id})-[r]->() RETURN count(r) AS c', id=a).single()['c'] == 1
+            assert session.run('MATCH (n:ReceiptFlowEntity) WHERE n.id IN $ids RETURN count(n) AS c', ids=[a, b, item, run, decision]).single()['c'] == 5
+            assert session.run('MATCH (a:ReceiptFlowEntity {id:$id})-[r]->() RETURN count(r) AS c', id=a).single()['c'] == 2
             assert not session.execute_write(write, sha, {'nodes': [], 'edges': []}, '2026-10-03T15:00:00+00:00')
             malformed = {**data, 'edges': [{**data['edges'][0], 'kind': 'INVALID; QUERY'}]}
             with pytest.raises(ValueError):
@@ -71,15 +78,21 @@ def test_real_neo4j_atomic_replay_and_out_of_order_snapshot(monkeypatch):
             monkeypatch.setattr(web, 'read', read)
             index, time = web.snapshot_index(sha)
             assert index['edges'] == data['edges']
-            assert {n['id'] for n in index['nodes']} == {a, b}
+            assert {n['id'] for n in index['nodes']} == {a, b, item, run, decision}
             assert web.snapshot_nodes(sha, time, [b, a]) == [
                 next(n for n in data['nodes'] if n['id'] == key) for key in (b, a)]
             result = web.receipt(sha, perspective='lineage', offset=0, limit=1)
             assert len(result['nodes']) == 1
             assert result['nodes'][0]['id'] == a
+            scoped, observed = web.story_index(sha)
+            story = web.processing_story(scoped)
+            assert observed == time
+            assert story['item_id'] == item and story['run_id'] == run
+            assert {n['id'] for n in story['nodes']} == {item, run, b, decision}
+            assert {e['kind'] for e in story['edges']} == {'ANALYZES', 'USES_MODEL', 'RESULTED_IN'}
 
         finally:
-            session.run('MATCH (n:ReceiptFlowEntity) WHERE n.id IN $ids DETACH DELETE n', ids=[a,b]).consume()
+            session.run('MATCH (n:ReceiptFlowEntity) WHERE n.id IN $ids DETACH DELETE n', ids=[a,b,item,run,decision]).consume()
             session.run('MATCH (s:ReceiptSnapshot {sha:$sha}) DETACH DELETE s', sha=sha).consume()
 
 
