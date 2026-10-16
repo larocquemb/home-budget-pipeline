@@ -117,11 +117,14 @@ def processing_story(result, item_id='', run_id=''):
               'RESULTED_IN', 'SKIPPED', 'PRODUCED', 'USES_MODEL', 'BELONGS_TO', 'OBSERVED_GPU',
               'LOCATED_ON', 'REFERENCES', 'RETURNED', 'EVALUATED', 'EXECUTED_BY', 'RUNS_ON',
               'ACCEPTED_AS', 'UPDATED', 'PERSISTED_AS'}
+    outgoing = {}
+    for edge in edges:
+        outgoing.setdefault(edge['source'], []).append(edge)
     queue = [chosen['id']]
     while queue:
         source = queue.pop()
-        for e in edges:
-            if e['source'] == source and e['kind'] in follow and e['target'] not in ids:
+        for e in outgoing.get(source, []):
+            if e['kind'] in follow and e['target'] not in ids:
                 ids.add(e['target'])
                 # OCR passes shared across runs must not pull in their other outputs.
                 if nodes[e['target']]['kind'] != 'Observation':
@@ -150,22 +153,84 @@ def processing_story(result, item_id='', run_id=''):
             'path_ids': sorted(path)}
 
 
+# Bound metadata and evidence separately; a long receipt must not kill the web
+# process before Python gets a chance to paginate it. Limits use character counts
+# conservatively to leave room for UTF-8, JSON objects and response serialization.
+MAX_INDEX_NODES = 15000
+MAX_INDEX_CHARS = 2 * 1024 * 1024
+MAX_DETAIL_CHARS = 1024 * 1024
+MAX_STORY_NODES = 2000
+
+
+def snapshot_index(sha):
+    rows = read('''MATCH (s:ReceiptSnapshot {sha:$sha})
+        OPTIONAL MATCH (s)-[r:HAS_ENTITY]->()
+        WITH s,count(r) AS count,count(r.node_json) AS ready,
+            sum(coalesce(size(r.story_json),0)+coalesce(size(r.label),0)) AS chars
+        RETURN s.observed_at AS observed_at,s.version AS version,count,ready,
+            coalesce(size(s.edges_json),0)+chars AS chars''', sha=sha)
+    if not rows:
+        raise HTTPException(404, 'Receipt not projected yet')
+    header = rows[0]
+    if (header['version'] or 0) < 7 or header['ready'] != header['count']:
+        raise HTTPException(503, 'Receipt graph needs projection with the current application version')
+    if header['count'] > MAX_INDEX_NODES or header['chars'] > MAX_INDEX_CHARS:
+        raise HTTPException(413, 'Receipt graph index exceeds the interactive view limit')
+    observed_at = header['observed_at']
+    rows = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})
+        MATCH (s)-[r:HAS_ENTITY]->()
+        WITH s,r ORDER BY r.ordinal
+        RETURN s.edges_json AS edges,collect({id:r.node_id,kind:r.kind,
+            label:r.label,story:r.story_json}) AS nodes''', sha=sha, time=observed_at)
+    if not rows:
+        raise HTTPException(409, 'Receipt projection changed; refresh the graph')
+    return {'nodes': [{**{k: n[k] for k in ('id', 'kind', 'label')},
+                       'properties': json.loads(n['story'])} for n in rows[0]['nodes']],
+            'edges': json.loads(rows[0]['edges'])}, observed_at
+
+
+def snapshot_nodes(sha, observed_at, ids):
+    if not ids:
+        return []
+    if len(ids) > MAX_STORY_NODES:
+        raise HTTPException(413, 'Selected story exceeds the interactive view limit')
+    # Measure on the database side BEFORE transferring/deserializing evidence.
+    rows = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})
+        MATCH (s)-[r:HAS_ENTITY]->() WHERE r.node_id IN $ids
+        RETURN count(r) AS count,sum(size(r.node_json)) AS chars''',
+        sha=sha, time=observed_at, ids=ids)
+    if not rows or rows[0]['count'] != len(ids):
+        raise HTTPException(409, 'Receipt projection changed; refresh the graph')
+    if rows[0]['chars'] > MAX_DETAIL_CHARS:
+        raise HTTPException(413, 'Selected evidence exceeds the interactive view limit')
+    rows = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})
+        MATCH (s)-[r:HAS_ENTITY]->() WHERE r.node_id IN $ids
+        RETURN r.node_id AS id,r.node_json AS payload''',
+        sha=sha, time=observed_at, ids=ids)
+    if len(rows) != len(ids):
+        raise HTTPException(409, 'Receipt projection changed; refresh the graph')
+    nodes = {r['id']: json.loads(r['payload']) for r in rows}
+    return [nodes[key] for key in ids]
+
+
 @app.get(f'{BASE_PATH}/api/graph/receipts/{{sha}}')
 def receipt(sha: str, perspective: str = 'lineage', offset: int = Query(0, ge=0),
             limit: int = Query(100, ge=1, le=200), item_id: str = '', run_id: str = '',
             _: dict = Depends(authenticated_identity)):
     if perspective not in PERSPECTIVES or not graph.re.fullmatch('[0-9a-f]{64}', sha):
         raise HTTPException(422, 'Invalid receipt or perspective')
-    rows = read('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.graph_json AS graph,s.observed_at AS observed_at', sha=sha)
-    if not rows:
-        raise HTTPException(404, 'Receipt not projected yet')
-    result = json.loads(rows[0]['graph'])
+    result, observed_at = snapshot_index(sha)
     if perspective == 'story':
         story = processing_story(result, item_id, run_id)
+        story['nodes'] = snapshot_nodes(sha, observed_at, [n['id'] for n in story['nodes']])
+        decision = next((n for n in story['nodes'] if n['kind'] == 'Decision'), None)
+        if decision:
+            props = decision['properties']
+            story['product_name'] = product_name(props.get('candidate_title'), props.get('candidate_url'))
         for node in story['nodes']:
             node['links'] = links(node)
         return {**story, 'total_nodes': len(story['nodes']), 'offset': 0,
-                'observed_at': rows[0]['observed_at']}
+                'observed_at': observed_at}
     kinds = PERSPECTIVES[perspective]
     nodes = [n for n in result['nodes'] if kinds is None or n['kind'] in kinds]
     # Breadth-first order keeps connected steps visible on the first page.
@@ -185,12 +250,12 @@ def receipt(sha: str, perspective: str = 'lineage', offset: int = Query(0, ge=0)
         ordered.append(eligible[key])
         queue.extend(adjacency.get(key, []))
     ordered.extend(n for n in nodes if n['id'] not in seen)
-    selected = ordered[offset:offset + limit]
+    selected = snapshot_nodes(sha, observed_at, [n['id'] for n in ordered[offset:offset + limit]])
     ids = {n['id'] for n in selected}
     for node in selected:
         node['links'] = links(node)
     return {'nodes': selected, 'edges': [e for e in result['edges'] if e['source'] in ids and e['target'] in ids],
-            'total_nodes': len(nodes), 'offset': offset, 'limit': limit, 'observed_at': rows[0]['observed_at']}
+            'total_nodes': len(nodes), 'offset': offset, 'limit': limit, 'observed_at': observed_at}
 
 
 @app.get(f'{BASE_PATH}/api/graph/telemetry')

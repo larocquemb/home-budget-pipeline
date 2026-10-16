@@ -37,7 +37,7 @@ def test_real_postgres_attempt_history_is_authoritative(pg_conn):
         pg_conn.rollback()
 
 
-def test_real_neo4j_atomic_replay_and_out_of_order_snapshot():
+def test_real_neo4j_atomic_replay_and_out_of_order_snapshot(monkeypatch):
     if not os.getenv('TEST_NEO4J_URI'):
         pytest.skip('TEST_NEO4J_URI not configured')
     from neo4j import GraphDatabase
@@ -62,6 +62,20 @@ def test_real_neo4j_atomic_replay_and_out_of_order_snapshot():
             row = session.run('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.graph_json AS graph,s.observed_at AS time', sha=sha).single()
             assert json.loads(row['graph']) == data
             assert row['time'] == '2026-10-04T15:00:00+00:00'
+            from home_budget_pipeline.web import receipt_graph as web
+            def read(query, **params):
+                assert 's.graph_json' not in query
+                return session.execute_read(lambda tx: [r.data() for r in tx.run(query, **params)])
+            monkeypatch.setattr(web, 'read', read)
+            index, time = web.snapshot_index(sha)
+            assert index['edges'] == data['edges']
+            assert {n['id'] for n in index['nodes']} == {a, b}
+            assert web.snapshot_nodes(sha, time, [b, a]) == [
+                next(n for n in data['nodes'] if n['id'] == key) for key in (b, a)]
+            result = web.receipt(sha, perspective='lineage', offset=0, limit=1)
+            assert len(result['nodes']) == 1
+            assert result['nodes'][0]['id'] == a
+
         finally:
             session.run('MATCH (n:ReceiptFlowEntity) WHERE n.id IN $ids DETACH DELETE n', ids=[a,b]).consume()
             session.run('MATCH (s:ReceiptSnapshot {sha:$sha}) DETACH DELETE s', sha=sha).consume()
