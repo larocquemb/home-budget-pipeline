@@ -108,6 +108,7 @@ def test_repeated_empty_queries_are_an_incomplete_error_not_a_zero_match(monkeyp
 
 @pytest.mark.parametrize("threads", [None, "5"])
 def test_ollama_structured_chat_observes_gpu_memory(monkeypatch, threads):
+    monkeypatch.setenv("OLLAMA_TIMEOUT_SECONDS", "300")
     monkeypatch.delenv("OLLAMA_NUM_THREADS", raising=False)
     if threads:
         monkeypatch.setenv("OLLAMA_NUM_THREADS", threads)
@@ -128,6 +129,7 @@ def test_ollama_structured_chat_observes_gpu_memory(monkeypatch, threads):
     monkeypatch.setattr(comparison.urllib.request, "urlopen", urlopen)
     result = comparison.generate("qwen", "same prompt")
     request = json.loads(calls[0][0].data)
+    assert calls[0][1] == 300
     assert request["model"] == "qwen3.8:27b"
     assert request["format"] == comparison.QUERY_SCHEMA
     assert request["messages"][0]["content"] == "same prompt"
@@ -138,6 +140,17 @@ def test_ollama_structured_chat_observes_gpu_memory(monkeypatch, threads):
     assert request["options"].get("num_thread") == (5 if threads else None)
     assert result["ollama_load_seconds"] == 1
     assert result["ollama_eval_seconds"] == 1.5
+
+
+def test_ollama_transport_timeout_is_not_retried(monkeypatch):
+    calls = []
+    def urlopen(request, timeout):
+        calls.append(request)
+        raise TimeoutError('read timed out')
+    monkeypatch.setattr(comparison.urllib.request, 'urlopen', urlopen)
+    with pytest.raises(TimeoutError):
+        comparison.generate('qwen', 'text')
+    assert len(calls) == 1
 
 
 def test_openai_uses_same_schema_and_reports_usage(monkeypatch):

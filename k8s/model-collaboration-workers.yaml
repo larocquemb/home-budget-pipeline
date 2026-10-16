@@ -52,6 +52,9 @@ spec:
         # Measured CPU optimum on Arsene; development GPU clients keep defaults.
         - name: OLLAMA_NUM_THREADS
           value: "5"
+        # Cold CPU receipt-image request measured 193s; cloud waits stay at 180s.
+        - name: OLLAMA_TIMEOUT_SECONDS
+          value: "300"
         - name: OLLAMA_BASE_URL
           value: http://192.168.2.201:11434
         - name: OLLAMA_GPU_METRICS_URL

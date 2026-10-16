@@ -51,6 +51,8 @@ def main():
     parser.add_argument('--production-url', default='http://192.168.2.201:11434')
     parser.add_argument('--development-url', default='http://192.168.2.201:11436')
     parser.add_argument('--model', default='qwen3-vl-receipts:30b-instruct')
+    parser.add_argument('--num-threads', type=int, default=5,
+                        help='CPU threads for image-mode requests (default: production setting of 5); JSON replay is unchanged')
     parser.add_argument('--image', type=Path, help='Receipt PNG/JPEG, not a PDF')
     parser.add_argument('--request-json', type=Path, help='Replay an actual Ollama chat request/settings instead')
     parser.add_argument('--timeout', type=float, default=900)
@@ -58,8 +60,8 @@ def main():
     parser.add_argument('--concurrent', action='store_true', help='Also exercise both services simultaneously')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
-    if args.production_url == args.development_url or args.repeats < 1 or args.timeout <= 0:
-        parser.error('Use distinct service endpoints, positive repeats, and positive timeout')
+    if args.production_url == args.development_url or args.repeats < 1 or args.timeout <= 0 or args.num_threads < 1:
+        parser.error('Use distinct service endpoints, positive repeats, timeout, and thread count')
     if bool(args.image) == bool(args.request_json):
         parser.error('Supply exactly one of --image or --request-json')
     if args.request_json:
@@ -75,7 +77,8 @@ def main():
         body = {'model': args.model,
                 'messages': [{'role': 'user', 'content': 'Read this receipt. Return the merchant, date, total, and first five product rows as JSON.',
                               'images': [base64.b64encode(image).decode()]}],
-                'options': {'temperature': 0, 'num_ctx': 4096, 'num_predict': 256}}
+                'options': {'temperature': 0, 'num_ctx': 4096, 'num_predict': 256,
+                            'num_thread': args.num_threads}}
     # Identical payload for both services. Hardware placement is enforced by systemd, not request options.
     body.update(stream=False, keep_alive='2m')
     report = {'created': datetime.now(timezone.utc).isoformat(), 'input_sha256': input_hash,
@@ -97,7 +100,7 @@ def main():
     output = args.output or Path('.model-evals') / ('ollama-split-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')) / 'report.json'
     output.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(output.parent, 0o700)
-    with output.open('w', opener=lambda path, flags: os.open(path, flags, 0o600)) as file:
+    with open(output, 'w', opener=lambda path, flags: os.open(path, flags, 0o600)) as file:
         json.dump(report, file, indent=2)
         file.write('\n')
     os.chmod(output, 0o600)
