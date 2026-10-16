@@ -87,6 +87,9 @@ Run a bounded comparison using a receipt PNG/JPEG (render PDFs first):
 ```
 
 The default receipt vision model is `qwen3-vl-receipts:30b-instruct`.
+Image-mode requests use five CPU threads (`--num-threads` overrides this),
+matching the deployed production callers. JSON replay preserves the recorded
+request settings, including its thread count.
 For production-equivalent prompt, model, and context/output settings, replay a
 saved Ollama `/api/chat` request instead:
 
@@ -102,10 +105,13 @@ not the complete receipt job. Review cold load and warm repeats separately.
 Run the actual receipt job afterward and inspect its existing queue/retry history,
 whole-job duration, and structured application measurements.
 
-**The benchmark's 900-second HTTP timeout does not change production's existing
-180-second provider timeout.** Verify actual receipt calls fit that limit. If
-CPU latency exceeds it, review a separate timeout/concurrency change before
-normal production scheduling resumes. Do not infer vision-model performance
+**The benchmark's 900-second HTTP timeout is measurement-only.** Production
+Qwen workers and enrichment jobs set `OLLAMA_TIMEOUT_SECONDS=300`; other
+providers retain `COMPARISON_TIMEOUT_SECONDS=180`. The Ollama adapters prefer
+the dedicated setting and otherwise use the existing comparison timeout.
+These are HTTP socket timeouts, not a total receipt-job deadline. Verify actual
+production requests and whole jobs after rollout; the image benchmark is not
+a complete receipt or enrichment test. Do not infer vision-model performance
 from an unrelated 27B text-generation benchmark. Financial/model-quality
 results remain informational; there is no new CI accuracy gate.
 
@@ -180,10 +186,46 @@ On Arsene, a controlled 37-output-token prompt measured warm generation at
 The integrated Radeon achieved 1.37 tokens/second at a matched 4096-token
 context. Production retains CPU-only device isolation, its six-core quota, and
 port 11434; development retains the RTX 3090 on 11436. These short-prompt
-measurements do not establish complete receipt latency or justify changing
-the 180-second provider timeout. Validate a real receipt after rollout.
+measurements do not establish complete receipt latency or replace the
+cold-image measurements below. Validate a real receipt after rollout.
 
 Deploy the rebuilt application image through the existing GitOps workflow.
 The changed Qwen Deployment restarts workers; new enrichment Jobs inherit
 five threads. Existing Jobs and local processes need restarting/updating.
 Jupyter and the development configuration do not set this variable.
+
+## Measured cold CPU timeout follow-up (KAN-135)
+
+On October 16, 2026, after rebooting Arsene with the Git-managed six-core quota,
+CPU affinity 0-7, and GPU device isolation, a five-thread receipt-image request
+using `qwen3-vl-receipts:30b-instruct` completed in 193.05 seconds on production:
+9.07 seconds loading, 178.86 seconds prompt/image processing, and 5.05 seconds
+generating. Development completed the same request in 4.74 seconds on GPU.
+The subsequent concurrent requests took 5.51 seconds CPU and 0.68 seconds GPU;
+those repeated-image timings benefit from prompt caching and must not be used
+as estimates for a new receipt image. All four placement checks passed with
+the same model digest. The request used context 4096 and at most 256 output
+tokens; production collaboration budgets and its default model differ.
+
+The 300-second production Ollama timeout gives this measured cold request
+approximately 107 seconds of headroom. It is an initial measured setting, not
+proof that all models, images, output budgets, queue delays, or complete jobs
+fit. Keep KAN-135 open until representative production jobs and retry behavior
+are verified under the deployed configuration.
+
+No transport retries are added: a timed-out model request may still be running
+on the server. Existing empty-output, truncation, and citation-correction retries
+remain bounded and distinct from transport errors. RabbitMQ task IDs, advisory
+locks, persisted results, and ACK-after-commit behavior are unchanged; they do
+not guarantee exactly-once inference following process interruption. The
+existing 900-second collaboration round timeout, worker termination grace, and
+broker acknowledgement timeout are unchanged and still need whole-job testing.
+
+Deploy the updated application image and manifests through the existing
+GitOps workflow. The Qwen Deployment rolls its worker; new enrichment Jobs
+inherit the setting, while existing Jobs must finish or be handled explicitly.
+Production remains on 11434 and development on 11436. To roll back, revert the
+Ollama timeout override in Git and reconcile; other provider waits and receipt
+data are unaffected. Private benchmark reports stay under `.model-evals/` and
+must not be committed. The report-writer fix uses built-in `open` with mode
+0600; the regression test exercises actual report creation.

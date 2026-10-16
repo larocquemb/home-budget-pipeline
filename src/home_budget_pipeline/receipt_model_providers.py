@@ -7,7 +7,7 @@ import os
 import urllib.parse
 import urllib.request
 
-from .ollama_runtime import thread_options
+from .ollama_runtime import request_timeout, thread_options
 
 
 @dataclass(frozen=True)
@@ -95,10 +95,12 @@ def profiles() -> tuple[list[Profile], list[dict]]:
     return enabled, skipped
 
 
-def post(url, body, headers=None):
+def post(url, body, headers=None, *, timeout=None):
     request = urllib.request.Request(url, data=json.dumps(body).encode(),
         headers={'Content-Type': 'application/json', **(headers or {})})
-    with urllib.request.urlopen(request, timeout=float(os.getenv('COMPARISON_TIMEOUT_SECONDS', '180'))) as response:
+    if timeout is None:
+        timeout = float(os.getenv('COMPARISON_TIMEOUT_SECONDS', '180'))
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -175,7 +177,7 @@ def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> di
         options.update(temperature=0.7, top_p=0.8, top_k=20, seed=42)
     data = post(base + '/api/chat', {'model': profile.model, 'messages': [message],
         'stream': False, 'think': False, 'format': schema, 'keep_alive': '5m',
-        'options': options})
+        'options': options}, timeout=request_timeout())
     usage = {'input_tokens': data.get('prompt_eval_count'), 'output_tokens': data.get('eval_count')}
     for field in ('total_duration', 'load_duration', 'prompt_eval_duration', 'eval_duration'):
         value = data.get(field)

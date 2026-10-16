@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,40 @@ from home_budget_pipeline.receipt_collaboration import PROPOSAL_SCHEMA
 
 OUTPUT = {'reading': 'Salsa', 'queries': ['Salsa medium'], 'source_ids': ['item:canonical'], 'reason': 'reading'}
 IMAGES = [{'id': 'image:1:1', 'data': 'encoded-image'}]
+
+
+@pytest.mark.parametrize('provider,expected', [('qwen', 300), ('anthropic', 180), ('gemini', 180)])
+def test_ollama_timeout_does_not_extend_cloud_http_requests(monkeypatch, provider, expected):
+    monkeypatch.setenv('OLLAMA_TIMEOUT_SECONDS', '300')
+    monkeypatch.setenv('COMPARISON_TIMEOUT_SECONDS', '180')
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test')
+    monkeypatch.setenv('GEMINI_API_KEY', 'test')
+    timeouts = []
+    responses = {
+        'qwen': {'done': True, 'done_reason': 'stop', 'message': {'content': json.dumps(OUTPUT)}},
+        'anthropic': {'stop_reason': 'tool_use', 'content': [
+            {'type': 'tool_use', 'name': 'receipt_evidence', 'input': OUTPUT}]},
+        'gemini': {'candidates': [{'finishReason': 'STOP', 'content': {
+            'parts': [{'text': json.dumps(OUTPUT)}]}}]},
+    }
+    def urlopen(request, timeout):
+        timeouts.append(timeout)
+        return BytesIO(json.dumps(responses[provider]).encode())
+    monkeypatch.setattr(providers.urllib.request, 'urlopen', urlopen)
+    result = providers.request(providers.Profile(provider, provider, 'test'), 'text', PROPOSAL_SCHEMA, [])
+    assert result['output'] == OUTPUT
+    assert timeouts == [expected]
+
+
+def test_qwen_transport_timeout_is_not_retried(monkeypatch):
+    calls = []
+    def urlopen(request, timeout):
+        calls.append(request)
+        raise TimeoutError('read timed out')
+    monkeypatch.setattr(providers.urllib.request, 'urlopen', urlopen)
+    with pytest.raises(TimeoutError):
+        providers.request(providers.Profile('qwen', 'qwen', 'test'), 'text', PROPOSAL_SCHEMA, [])
+    assert len(calls) == 1
 
 
 def test_profiles_report_missing_credentials_and_apply_token_budgets(monkeypatch):
@@ -43,7 +78,7 @@ def test_qwen_text_and_vision_requests_use_explicit_budgets_and_reuse_model(monk
     if threads:
         monkeypatch.setenv("OLLAMA_NUM_THREADS", threads)
     calls = []
-    monkeypatch.setattr(providers, 'post', lambda url, body, headers=None: calls.append(body) or {
+    monkeypatch.setattr(providers, 'post', lambda url, body, headers=None, **kwargs: calls.append(body) or {
         'message': {'content': json.dumps(OUTPUT)}, 'done': True, 'done_reason': 'stop',
         'prompt_eval_count': 200, 'eval_count': 40, 'load_duration': 1000000000})
     for vision in (False, True):
@@ -103,13 +138,16 @@ def test_gemini_key_stays_in_header_and_images_are_inline(monkeypatch):
 
 def test_openai_images_schema_and_budget_are_sent_together(monkeypatch):
     import openai
-    calls = []
-    monkeypatch.setattr(openai, 'OpenAI', lambda **kw: SimpleNamespace(responses=SimpleNamespace(
+    monkeypatch.setenv('OLLAMA_TIMEOUT_SECONDS', '300')
+    monkeypatch.setenv('COMPARISON_TIMEOUT_SECONDS', '180')
+    calls, clients = [], []
+    monkeypatch.setattr(openai, 'OpenAI', lambda **kw: clients.append(kw) or SimpleNamespace(responses=SimpleNamespace(
         create=lambda **args: calls.append(args) or SimpleNamespace(status='completed',
             output_text=json.dumps(OUTPUT), usage=SimpleNamespace(input_tokens=50, output_tokens=20)))))
     result = providers.request(providers.Profile('openai', 'openai', 'test', output_tokens=4096, vision=True),
                                'evidence', PROPOSAL_SCHEMA, IMAGES)
     assert result['output'] == OUTPUT
+    assert clients == [{'timeout': 180.0, 'max_retries': 0}]
     assert calls[0]['max_output_tokens'] == 4096 and calls[0]['store'] is False
     assert calls[0]['input'][0]['content'][-1]['image_url'].startswith('data:image/png;base64,')
 
@@ -117,7 +155,7 @@ def test_openai_images_schema_and_budget_are_sent_together(monkeypatch):
 @pytest.mark.parametrize('content', ['', '{"reading": "unfinished', 'START' + '繰り返し' * 1000 + 'END'])
 def test_qwen_truncation_diagnostics_are_bounded_and_keep_usage(monkeypatch, content):
     thinking = 'private reasoning' * 500
-    monkeypatch.setattr(providers, 'post', lambda *args: {
+    monkeypatch.setattr(providers, 'post', lambda *args, **kwargs: {
         'done': True, 'done_reason': 'length', 'message': {'content': content, 'thinking': thinking},
         'prompt_eval_count': 623, 'eval_count': 2048, 'eval_duration': 2_000_000_000,
         'total_duration': 3_000_000_000, 'unexpected': 'must not be retained'})
@@ -182,7 +220,7 @@ def test_production_configmap_preserves_qwen_budget_over_shared_defaults(monkeyp
 
 def test_prefix_task_uses_bounded_exploration_sampling(monkeypatch):
     bodies = []
-    monkeypatch.setattr(providers, 'post', lambda url, body, headers=None: bodies.append(body) or {
+    monkeypatch.setattr(providers, 'post', lambda url, body, headers=None, **kwargs: bodies.append(body) or {
         'message': {'content': '{"queries":["picante medium"]}'}, 'done': True, 'done_reason': 'stop'})
     providers.request(providers.Profile('qwen', 'qwen', 'local', 32768, 8192), 'expand prefixes',
         {'type': 'object', 'properties': {'queries': {'type': 'array'}}}, [])

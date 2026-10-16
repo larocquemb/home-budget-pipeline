@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from . import product_enrichment as core
 from .gpu_sampling import GpuSampler
-from .ollama_runtime import thread_options
+from .ollama_runtime import request_timeout, thread_options
 
 QUERY_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["queries"],
@@ -80,9 +80,7 @@ def _generate_once(provider: str, text: str, *, model: str | None = None) -> dic
                          "keep_alive": "5m"}).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=float(
-        os.getenv("COMPARISON_TIMEOUT_SECONDS", "180")
-    )) as response:
+    with urllib.request.urlopen(request, timeout=request_timeout()) as response:
         data = json.load(response)
     if data.get('done') is False or data.get('done_reason') not in (None, 'stop'):
         raise ValueError('Incomplete model output')
