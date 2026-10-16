@@ -349,3 +349,24 @@ required after deployment before declaring this incident resolved.
 Rollbacks to web versions before v7 require reprojection with the matching old
 projector to regenerate graph_json. Do not roll back only the web image and assume
 that the old snapshot property still exists. Keep the authoritative evidence.
+
+### Select a collaboration before loading its index (projection version 8)
+
+The version-7 replay succeeded, but the Sobeys receipt exceeded the full-receipt
+interactive index guard. Raising that guard would restore memory risk as history
+grows. Version 8 records per-node outgoing edge metadata and item/run association
+on exact snapshot memberships. Processing story reads only item/run selectors,
+chooses a run, and traverses that run's metadata in bounded steps. Shared OCR
+observations are not expanded into other runs. Producer and internal edge queries
+use snapshot edge IDs to exclude retained global historical relationships.
+
+The selected run keeps the existing node, metadata and evidence limits. Whole
+receipt history no longer counts against the Processing story index limit.
+Other canvas perspectives still use the bounded full index and may report the
+existing limit for this unusually large receipt. They need separate graph-level
+pagination work; this change targets the item/run collaboration investigation.
+
+Deploy the merged application and projector image, then complete a fresh replay
+before opening Processing story: version-7 snapshots explicitly request projection.
+Validate the Sobeys latest GPU run and an older CPU failure independently, and
+check that ledger-web does not restart. Do not close KAN-98 on unit tests alone.

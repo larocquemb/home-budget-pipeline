@@ -230,7 +230,7 @@ def test_story_selects_latest_run_even_when_it_failed_and_keeps_items_separate(m
     data['items'].append({'id': 11, 'item_name': 'Other item'})
     data['collaborations'].append(other)
     result = g.build(data)
-    monkeypatch.setattr(web, 'snapshot_index', lambda sha: (result, 'now'))
+    monkeypatch.setattr(web, 'story_index', lambda *args: (result, 'now'))
     monkeypatch.setattr(web, 'snapshot_nodes', lambda sha, time, ids: [n for n in result['nodes'] if n['id'] in ids])
     story = web.receipt('a'*64, perspective='story', offset=0, limit=1)
     assert story['chronology_known'] is True
@@ -469,7 +469,7 @@ def test_story_endpoint_hydrates_only_selected_run_from_exact_snapshot(monkeypat
     } for n in full['nodes']]}
     expected = web.processing_story(full)
     monkeypatch.delenv('LEDGER_PROXY_SECRET', raising=False)
-    monkeypatch.setattr(web, 'snapshot_index', lambda sha: (index, 'observed'))
+    monkeypatch.setattr(web, 'story_index', lambda *args: (index, 'observed'))
     def read(query, **params):
         assert 's.graph_json' not in query
         assert params['time'] == 'observed'
@@ -524,3 +524,60 @@ def test_projector_does_not_encode_receipt_sized_snapshot(monkeypatch):
     monkeypatch.setattr(g, 'encoded', encoded)
     assert g.write(Transaction(), 'a' * 64, full, 'now')
     assert any('REMOVE s.graph_json' in q for q in queries)
+
+
+def test_story_loads_selected_run_without_full_receipt_index(monkeypatch):
+    data = evidence()
+    data['collaborations'][0]['completed_at'] = '2026-10-16'
+    old = deepcopy(data['collaborations'][0])
+    old['payload']['run_uuid'] = 'unrelated-old-run'
+    old['completed_at'] = '2026-10-01'
+    data['collaborations'].append(old)
+    full = g.build(data)
+    # Unrelated history can exceed the old full-index guard without affecting
+    # the selected run. No payloads from these nodes should be requested.
+    full['nodes'].extend({'id': f'unrelated:{i}', 'kind': 'Observation',
+        'label': 'old evidence', 'properties': {}} for i in range(web.MAX_INDEX_NODES + 1))
+    lookup = {n['id']: n for n in full['nodes']}
+    outgoing = {}
+    for edge in full['edges']:
+        outgoing.setdefault(edge['source'], []).append(edge)
+    item_for = {e['source']: e['target'] for e in full['edges'] if e['kind'] == 'ANALYZES'}
+    metadata_ids = set()
+    def metadata(node):
+        return {k: node[k] for k in ('id', 'kind', 'label')} | {
+            'story': json.dumps({k: v for k, v in node['properties'].items()
+                                if k in ('run_uuid', 'sequence', 'completed_at')})}
+    def read(query, **params):
+        assert 's.edges_json' not in query and 's.graph_json' not in query
+        if 's.version AS version' in query:
+            return [{'time': 'now', 'version': 8}]
+        if "r.kind IN ['Item','Collaboration']" in query:
+            return [metadata(n) | {'item': item_for.get(n['id'])} for n in full['nodes']
+                    if n['kind'] in ('Item', 'Collaboration')]
+        ids = set(params['ids'])
+        metadata_ids.update(ids)
+        assert not any(key.startswith('unrelated:') for key in ids)
+        if 'sum(size(r.edges_json)' in query:
+            return [{'count': len(ids), 'chars': 10 * len(ids)}]
+        if "r.kind='Observation'" in query:
+            return [metadata(lookup[key]) for key in ids if lookup[key]['kind'] == 'Observation']
+        if 'r.edges_json AS edges' in query:
+            return [metadata(lookup[key]) | {'edges': json.dumps(outgoing.get(key, []))} for key in ids]
+        if "r.kind='OCRPass'" in query:
+            return [metadata(lookup[e['source']]) | {'edge_id': e['id'], 'target': e['target']}
+                    for e in full['edges'] if e['kind'] == 'PRODUCED'
+                    and e['target'] in ids and lookup[e['source']]['kind'] == 'OCRPass']
+        if 'type(e) AS kind' in query:
+            return [e for e in full['edges'] if e['source'] in ids and e['target'] in ids]
+        raise AssertionError(query)
+    monkeypatch.setattr(web, 'read', read)
+    index, time = web.story_index('a' * 64)
+    expected = web.processing_story(full)
+    actual = web.processing_story(index)
+    assert time == 'now'
+    assert actual['items'] == expected['items']
+    assert actual['runs'] == expected['runs']
+    assert {n['id'] for n in actual['nodes']} == {n['id'] for n in expected['nodes']}
+    assert {e['id'] for e in actual['edges']} == {e['id'] for e in expected['edges']}
+    assert len(metadata_ids) < 100

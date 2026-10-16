@@ -12,7 +12,7 @@ import re
 from uuid import UUID, uuid4, uuid5
 from urllib.parse import urlencode
 
-VERSION = 7
+VERSION = 8
 
 
 def encoded(value):
@@ -469,10 +469,15 @@ def write(tx, sha, graph, observed_at):
                nodes=batch).consume()
     # Relationship types come exclusively from our validated graph builder.
     grouped = defaultdict(list)
+    outgoing = defaultdict(list)
+    item_for = {}
     for edge in graph['edges']:
         if not re.fullmatch('[A-Z_]+', edge['kind']):
             raise ValueError('Invalid relationship type')
         grouped[edge['kind']].append(edge)
+        outgoing[edge['source']].append(edge)
+        if edge['kind'] == 'ANALYZES':
+            item_for[edge['source']] = edge['target']
     tx.run('MATCH (s:ReceiptSnapshot {sha:$sha})-[r:HAS_ENTITY]->() DELETE r', sha=sha).consume()
     # Store exact snapshot properties per membership. Stream serialization so
     # hundreds of large evidence records do not share one Bolt parameter batch.
@@ -481,12 +486,16 @@ def write(tx, sha, graph, observed_at):
         'story': encoded({k: n['properties'][k] for k in
             ('run_uuid', 'completed_at', 'sequence') if k in n['properties']}),
         'payload': encoded(n), 'ordinal': i,
+        'edges': encoded(outgoing[n['id']]),
+        'item': item_for.get(n['id']),
+        'edge_ids': [e['id'] for e in outgoing[n['id']]],
     } for i, n in enumerate(graph['nodes']))
     for batch in write_batches(members):
         tx.run('''MATCH (s:ReceiptSnapshot {sha:$sha}) UNWIND $members AS row
             MATCH (n:ReceiptFlowEntity {id:row.id}) MERGE (s)-[r:HAS_ENTITY]->(n)
             SET r.node_id=row.id,r.kind=row.kind,r.label=row.label,
-                r.story_json=row.story,r.node_json=row.payload,r.ordinal=row.ordinal''',
+                r.story_json=row.story,r.node_json=row.payload,r.ordinal=row.ordinal,
+                r.edges_json=row.edges,r.item_id=row.item,r.edge_ids=row.edge_ids''',
             sha=sha, members=batch).consume()
     for kind, rows in grouped.items():
         for offset in range(0, len(rows), 1000):

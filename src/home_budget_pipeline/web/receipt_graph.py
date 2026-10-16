@@ -87,6 +87,12 @@ def kubernetes_health():
             for p in rows if p['status'].get('phase') not in {'Succeeded', 'Failed'}]
 
 
+STORY_FOLLOW = {'HAS_ROUND', 'DISPATCHED', 'ROUTED_TO', 'HAS_EXCHANGE', 'SUPPLIED_TO', 'USES_EVIDENCE', 'HAS_IMAGE_REFERENCE', 'CONSIDERS', 'SEARCHED', 'HAS_INVOCATION',
+              'RESULTED_IN', 'SKIPPED', 'PRODUCED', 'USES_MODEL', 'BELONGS_TO', 'OBSERVED_GPU',
+              'LOCATED_ON', 'REFERENCES', 'RETURNED', 'EVALUATED', 'EXECUTED_BY', 'RUNS_ON',
+              'ACCEPTED_AS', 'UPDATED', 'PERSISTED_AS'}
+
+
 def processing_story(result, item_id='', run_id=''):
     """Scope the whole snapshot before display; historical runs cannot mix evidence."""
     nodes = {n['id']: n for n in result['nodes']}
@@ -113,10 +119,6 @@ def processing_story(result, item_id='', run_id=''):
         return {**info, 'nodes': [], 'edges': [], 'path_ids': []}
     ids = {chosen['id'], selected_item}
     # Follow only run-owned outputs and explicitly recorded supporting entities.
-    follow = {'HAS_ROUND', 'DISPATCHED', 'ROUTED_TO', 'HAS_EXCHANGE', 'SUPPLIED_TO', 'USES_EVIDENCE', 'HAS_IMAGE_REFERENCE', 'CONSIDERS', 'SEARCHED', 'HAS_INVOCATION',
-              'RESULTED_IN', 'SKIPPED', 'PRODUCED', 'USES_MODEL', 'BELONGS_TO', 'OBSERVED_GPU',
-              'LOCATED_ON', 'REFERENCES', 'RETURNED', 'EVALUATED', 'EXECUTED_BY', 'RUNS_ON',
-              'ACCEPTED_AS', 'UPDATED', 'PERSISTED_AS'}
     outgoing = {}
     for edge in edges:
         outgoing.setdefault(edge['source'], []).append(edge)
@@ -124,7 +126,7 @@ def processing_story(result, item_id='', run_id=''):
     while queue:
         source = queue.pop()
         for e in outgoing.get(source, []):
-            if e['kind'] in follow and e['target'] not in ids:
+            if e['kind'] in STORY_FOLLOW and e['target'] not in ids:
                 ids.add(e['target'])
                 # OCR passes shared across runs must not pull in their other outputs.
                 if nodes[e['target']]['kind'] != 'Observation':
@@ -213,14 +215,113 @@ def snapshot_nodes(sha, observed_at, ids):
     return [nodes[key] for key in ids]
 
 
+def story_index(sha, item_id='', run_id=''):
+    """Select a run before reading any unrelated receipt topology/evidence."""
+    headers = read('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time,s.version AS version', sha=sha)
+    if not headers:
+        raise HTTPException(404, 'Receipt not projected yet')
+    if (headers[0]['version'] or 0) < 8:
+        raise HTTPException(503, 'Receipt graph needs projection with the current application version')
+    time = headers[0]['time']
+    # The catalog contains only items and run selectors, never evidence edges.
+    catalog_rows = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->()
+        WHERE r.kind IN ['Item','Collaboration']
+        RETURN r.node_id AS id,r.kind AS kind,r.label AS label,r.story_json AS story,
+            r.item_id AS item ORDER BY r.ordinal LIMIT $limit''',
+        sha=sha, time=time, limit=MAX_INDEX_NODES + 1)
+    if len(catalog_rows) > MAX_INDEX_NODES:
+        raise HTTPException(413, 'Receipt has too many item/run selectors')
+    catalog = {'nodes': [{k: row[k] for k in ('id', 'kind', 'label')} |
+                {'properties': json.loads(row['story'])} for row in catalog_rows],
+        'edges': [{'id': graph.identifier('edge', row['id'], 'ANALYZES', row['item']), 'source': row['id'],
+                   'target': row['item'], 'kind': 'ANALYZES'}
+                  for row in catalog_rows if row['item']]}
+    selection = processing_story(catalog, item_id, run_id)
+    if not selection['run_id']:
+        return catalog, time
+    loaded = {n['id']: n for n in catalog['nodes']}
+    edges = {e['id']: e for e in catalog['edges']}
+    ids = {selection['run_id'], selection['item_id']}
+    pending = [selection['run_id']]
+    chars = 0
+    while pending:
+        if len(ids) > MAX_STORY_NODES:
+            raise HTTPException(413, 'Selected story exceeds the interactive view limit')
+        size = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->()
+            WHERE r.node_id IN $ids
+            RETURN count(r) AS count,sum(size(r.edges_json)+size(r.story_json)+size(r.label)) AS chars''',
+            sha=sha, time=time, ids=pending)
+        if not size or size[0]['count'] != len(pending):
+            raise HTTPException(409, 'Receipt projection changed; refresh the graph')
+        chars += size[0]['chars']
+        if chars > MAX_INDEX_CHARS:
+            raise HTTPException(413, 'Selected run index exceeds the interactive view limit')
+        rows = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->()
+            WHERE r.node_id IN $ids RETURN r.node_id AS id,r.kind AS kind,r.label AS label,
+                r.story_json AS story,r.edges_json AS edges''', sha=sha, time=time, ids=pending)
+        if len(rows) != len(pending):
+            raise HTTPException(409, 'Receipt projection changed; refresh the graph')
+        pending = []
+        for row in rows:
+            loaded[row['id']] = {k: row[k] for k in ('id', 'kind', 'label')} | {'properties': json.loads(row['story'])}
+            for edge in json.loads(row['edges']):
+                edges[edge['id']] = edge
+                if edge['kind'] in STORY_FOLLOW and edge['target'] not in ids:
+                    ids.add(edge['target'])
+                    pending.append(edge['target'])
+        if len(ids) > MAX_STORY_NODES:
+            raise HTTPException(413, 'Selected story exceeds the interactive view limit')
+        # Observation properties have no outgoing traversal. Load their tiny kind
+        # metadata but suppress expansion of shared OCR observations below.
+        if pending:
+            observations = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->()
+                WHERE r.node_id IN $ids AND r.kind='Observation'
+                RETURN r.node_id AS id,r.kind AS kind,r.label AS label,r.story_json AS story''',
+                sha=sha, time=time, ids=pending)
+            for row in observations:
+                loaded[row['id']] = {k: row[k] for k in ('id', 'kind', 'label')} | {'properties': json.loads(row['story'])}
+            observation_ids = {row['id'] for row in observations}
+            pending = [key for key in pending if key not in observation_ids]
+    # Recover only observed producer links in this exact snapshot, not all other
+    # outputs of a shared OCR pass or retained global historical relationships.
+    producers = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->(n)
+        WHERE r.kind='OCRPass'
+        MATCH (n)-[e:PRODUCED]->(target) WHERE e.id IN r.edge_ids AND target.id IN $ids
+        RETURN DISTINCT r.node_id AS id,r.kind AS kind,r.label AS label,r.story_json AS story,
+            e.id AS edge_id,target.id AS target LIMIT 10001''', sha=sha, time=time, ids=list(ids))
+    if len(producers) > 10000:
+        raise HTTPException(413, 'Selected story has too many producer relationships')
+    for row in producers:
+        ids.add(row['id'])
+        loaded[row['id']] = {k: row[k] for k in ('id', 'kind', 'label')} | {'properties': json.loads(row['story'])}
+        edges[row['edge_id']] = {'id': row['edge_id'], 'source': row['id'], 'target': row['target'], 'kind': 'PRODUCED'}
+    if len(ids) > MAX_STORY_NODES:
+        raise HTTPException(413, 'Selected story exceeds the interactive view limit')
+    # Edges from observations were not expanded; fetch only edges whose endpoints
+    # are selected. Membership edge IDs exclude stale global relationships.
+    internal = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->(n)
+        WHERE r.node_id IN $ids
+        MATCH (n)-[e]->(target) WHERE e.id IN r.edge_ids AND target.id IN $ids
+        RETURN e.id AS id,n.id AS source,target.id AS target,type(e) AS kind LIMIT 10001''',
+        sha=sha, time=time, ids=list(ids))
+    if len(internal) > 10000:
+        raise HTTPException(413, 'Selected story has too many relationships')
+    for edge in internal:
+        edges[edge['id']] = edge
+    # Only catalog ANALYZES edges and selected subgraph edges reach the scoper.
+    result = {'nodes': list(loaded.values()), 'edges': [e for e in edges.values()
+        if e['kind'] == 'ANALYZES' or (e['source'] in ids and e['target'] in ids)]}
+    return result, time
+
+
 @app.get(f'{BASE_PATH}/api/graph/receipts/{{sha}}')
 def receipt(sha: str, perspective: str = 'lineage', offset: int = Query(0, ge=0),
             limit: int = Query(100, ge=1, le=200), item_id: str = '', run_id: str = '',
             _: dict = Depends(authenticated_identity)):
     if perspective not in PERSPECTIVES or not graph.re.fullmatch('[0-9a-f]{64}', sha):
         raise HTTPException(422, 'Invalid receipt or perspective')
-    result, observed_at = snapshot_index(sha)
     if perspective == 'story':
+        result, observed_at = story_index(sha, item_id, run_id)
         story = processing_story(result, item_id, run_id)
         story['nodes'] = snapshot_nodes(sha, observed_at, [n['id'] for n in story['nodes']])
         decision = next((n for n in story['nodes'] if n['kind'] == 'Decision'), None)
@@ -231,6 +332,7 @@ def receipt(sha: str, perspective: str = 'lineage', offset: int = Query(0, ge=0)
             node['links'] = links(node)
         return {**story, 'total_nodes': len(story['nodes']), 'offset': 0,
                 'observed_at': observed_at}
+    result, observed_at = snapshot_index(sha)
     kinds = PERSPECTIVES[perspective]
     nodes = [n for n in result['nodes'] if kinds is None or n['kind'] in kinds]
     # Breadth-first order keeps connected steps visible on the first page.
