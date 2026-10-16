@@ -311,7 +311,8 @@ a small selection index, and snapshot edge metadata in the same projection
 transaction. The web API loads bounded metadata first, selects a run or page,
 checks its serialized evidence size in Neo4j, then fetches only those nodes.
 It never reads the monolithic graph_json property. Existing normalized historical
-entities and the full snapshot remain available; this adds storage overhead.
+entities and exact per-node snapshot evidence remain available. The redundant
+monolithic graph_json property is removed on successful projection.
 A snapshot timestamp scopes all reads. A projection replacement returns HTTP
 409 if the selection is no longer available rather than mixing evidence.
 
@@ -330,3 +331,21 @@ before loading the Sobeys graph. This rebuilds derived data without calling mode
 or changing canonical receipts. Check Item/Run selectors, historical run isolation,
 web restart count and pod memory while viewing the receipt. These live checks
 remain required; the local fix alone does not complete KAN-98.
+
+### Projector memory follow-up
+
+The first version-7 replay exceeded the projector's 1 GiB memory limit after its
+first 100-receipt batch (OOMKilled, exit 137). Web bounding alone was insufficient.
+The follow-up stops encoding/storing the legacy full-receipt graph_json copy,
+which the v7 web API no longer reads. Node and membership parameters stream in
+batches bounded by both 500 rows and 256 Ki characters of scalar text; an
+oversized individual entity is sent alone without losing evidence. The previous
+receipt graph is released before building the next receipt. Per-receipt start and
+completion logs identify an interrupted receipt and report graph node/edge counts.
+These changes reduce transient copies; the complete in-memory graph still must
+fit within the projector limit. Successful replay and live memory observation are
+required after deployment before declaring this incident resolved.
+
+Rollbacks to web versions before v7 require reprojection with the matching old
+projector to regenerate graph_json. Do not roll back only the web image and assume
+that the old snapshot property still exists. Keep the authoritative evidence.

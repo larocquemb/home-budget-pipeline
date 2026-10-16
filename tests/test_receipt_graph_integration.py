@@ -60,7 +60,9 @@ def test_real_neo4j_atomic_replay_and_out_of_order_snapshot(monkeypatch):
             with pytest.raises(ValueError):
                 session.execute_write(write, sha, malformed, '2026-10-05T15:00:00+00:00')
             row = session.run('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.graph_json AS graph,s.observed_at AS time', sha=sha).single()
-            assert json.loads(row['graph']) == data
+            assert row['graph'] is None
+            snapshot = session.run('MATCH (s:ReceiptSnapshot {sha:$sha})-[r:HAS_ENTITY]->() RETURN r.node_json AS payload ORDER BY r.ordinal', sha=sha)
+            assert [json.loads(r['payload']) for r in snapshot] == data['nodes']
             assert row['time'] == '2026-10-04T15:00:00+00:00'
             from home_budget_pipeline.web import receipt_graph as web
             def read(query, **params):

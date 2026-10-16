@@ -438,16 +438,35 @@ def driver():
                                connection_timeout=3, max_transaction_retry_time=5, connection_acquisition_timeout=5)
 
 
+def write_batches(rows, *, max_rows=500, max_chars=256 * 1024):
+    """Bound serialized parameter copies by text size as well as row count.
+
+    A single oversized entity is sent alone; its evidence is never discarded.
+    Rows contain only scalar values, including pre-serialized JSON strings.
+    """
+    batch, chars = [], 0
+    for row in rows:
+        size = sum(len(v) if isinstance(v, str) else 32 for v in row.values())
+        if batch and (len(batch) >= max_rows or chars + size > max_chars):
+            yield batch
+            batch, chars = [], 0
+        batch.append(row)
+        chars += size
+    if batch:
+        yield batch
+
+
 def write(tx, sha, graph, observed_at):
     """A per-receipt lock prevents stale snapshots racing newer projections."""
     tx.run('MERGE (s:ReceiptSnapshot {sha:$sha}) SET s.lock=coalesce(s.lock,0)+1', sha=sha).consume()
     prior = tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time', sha=sha).single()
     if prior['time'] and prior['time'] > observed_at:
         return False
-    for offset in range(0, len(graph['nodes']), 500):
+    rows = ({'id': n['id'], 'kind': n['kind'], 'label': n['label'],
+             'props': encoded(n['properties'])} for n in graph['nodes'])
+    for batch in write_batches(rows):
         tx.run('UNWIND $nodes AS row MERGE (n:ReceiptFlowEntity {id:row.id}) SET n.kind=row.kind,n.label=row.label,n.properties_json=row.props',
-               nodes=[{'id': n['id'], 'kind': n['kind'], 'label': n['label'], 'props': encoded(n['properties'])}
-                      for n in graph['nodes'][offset:offset + 500]]).consume()
+               nodes=batch).consume()
     # Relationship types come exclusively from our validated graph builder.
     grouped = defaultdict(list)
     for edge in graph['edges']:
@@ -455,25 +474,27 @@ def write(tx, sha, graph, observed_at):
             raise ValueError('Invalid relationship type')
         grouped[edge['kind']].append(edge)
     tx.run('MATCH (s:ReceiptSnapshot {sha:$sha})-[r:HAS_ENTITY]->() DELETE r', sha=sha).consume()
-    for offset in range(0, len(graph['nodes']), 500):
-        # Store exact snapshot properties per membership. Web reads can select a
-        # run/page before transferring evidence, without mutable global entities.
+    # Store exact snapshot properties per membership. Stream serialization so
+    # hundreds of large evidence records do not share one Bolt parameter batch.
+    members = ({
+        'id': n['id'], 'kind': n['kind'], 'label': n['label'][:256],
+        'story': encoded({k: n['properties'][k] for k in
+            ('run_uuid', 'completed_at', 'sequence') if k in n['properties']}),
+        'payload': encoded(n), 'ordinal': i,
+    } for i, n in enumerate(graph['nodes']))
+    for batch in write_batches(members):
         tx.run('''MATCH (s:ReceiptSnapshot {sha:$sha}) UNWIND $members AS row
             MATCH (n:ReceiptFlowEntity {id:row.id}) MERGE (s)-[r:HAS_ENTITY]->(n)
             SET r.node_id=row.id,r.kind=row.kind,r.label=row.label,
                 r.story_json=row.story,r.node_json=row.payload,r.ordinal=row.ordinal''',
-            sha=sha, members=[{
-                'id': n['id'], 'kind': n['kind'], 'label': n['label'][:256],
-                'story': encoded({k: n['properties'][k] for k in
-                    ('run_uuid', 'completed_at', 'sequence') if k in n['properties']}),
-                'payload': encoded(n), 'ordinal': offset + i,
-            } for i, n in enumerate(graph['nodes'][offset:offset + 500])]).consume()
+            sha=sha, members=batch).consume()
     for kind, rows in grouped.items():
         for offset in range(0, len(rows), 1000):
             tx.run(f'UNWIND $rows AS row MATCH (a:ReceiptFlowEntity {{id:row.source}}),(b:ReceiptFlowEntity {{id:row.target}}) MERGE (a)-[r:{kind} {{id:row.id}}]->(b)', rows=rows[offset:offset + 1000]).consume()
-    # UI reads the atomic snapshot, never a mix of current and historical states.
-    tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) SET s.graph_json=$graph,s.observed_at=$time,s.version=$version,s.name=$name,s.edges_json=$edges',
-           sha=sha, graph=encoded(graph), edges=encoded(graph['edges']), time=observed_at, version=VERSION,
+    # Web v7 reads per-node snapshot memberships, never the legacy monolithic
+    # graph_json. Avoid allocating another receipt-sized JSON string during writes.
+    tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) SET s.observed_at=$time,s.version=$version,s.name=$name,s.edges_json=$edges REMOVE s.graph_json',
+           sha=sha, edges=encoded(graph['edges']), time=observed_at, version=VERSION,
            name=next(n['label'] for n in graph['nodes'] if n['kind'] == 'Receipt')).consume()
     return True
 
@@ -489,11 +510,16 @@ def project(dsn, *, sha=None, limit=100, after=''):
             rows = conn.execute(f'SELECT source_sha256 FROM {RECEIPT_CATALOGUE} r WHERE (%s OR source_sha256=%s) AND source_sha256>%s ORDER BY source_sha256 LIMIT %s', (sha is None, sha, after, limit)).fetchall()
             conn.commit()
             for row in rows:
+                print(encoded({'event': 'receipt_graph_projection_started', 'sha': row['source_sha256']}), flush=True)
                 conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
                 observed = conn.execute('SELECT transaction_timestamp() AS time').fetchone()['time'].astimezone(timezone.utc).isoformat(timespec='microseconds')
                 graph = build(load(conn, row['source_sha256']))
                 conn.commit()
                 session.execute_write(write, row['source_sha256'], graph, observed)
+                print(encoded({'event': 'receipt_graph_projection_completed', 'sha': row['source_sha256'],
+                               'nodes': len(graph['nodes']), 'edges': len(graph['edges'])}), flush=True)
+                # Assignment alone retains the prior graph while building the next.
+                del graph
     return {'projected': len(rows), 'after': rows[-1]['source_sha256'] if rows else after}
 
 
