@@ -417,7 +417,7 @@ def test_large_graph_writes_bounded_parameters_and_keeps_complete_snapshot():
     relations = [c['rows'] for c in calls if 'rows' in c]
     assert max(map(len, relations)) <= 1000
     assert [e for batch in relations for e in batch] == edges
-    assert json.loads(next(c['graph'] for c in calls if 'graph' in c)) == graph
+    assert not any('graph' in c for c in calls)
 
 
 @pytest.mark.parametrize('header,status', [
@@ -496,3 +496,31 @@ def test_snapshot_projection_race_returns_conflict_not_partial_evidence(monkeypa
     with pytest.raises(HTTPException) as exc:
         web.snapshot_nodes('a' * 64, 'stale', ['node'])
     assert exc.value.status_code == 409
+
+
+def test_write_batches_bound_large_evidence_and_preserve_oversized_entities():
+    rows = [{'id': str(i), 'payload': 'é' * 100_000} for i in range(8)]
+    rows.append({'id': 'large', 'payload': 'x' * 300_000})
+    batches = list(g.write_batches(iter(rows)))
+    assert [r for batch in batches for r in batch] == rows
+    assert all(len(batch) <= 2 for batch in batches)
+    assert batches[-1] == [rows[-1]]
+
+
+def test_projector_does_not_encode_receipt_sized_snapshot(monkeypatch):
+    full = g.build(evidence())
+    original = g.encoded
+    queries = []
+    def encoded(value):
+        assert value is not full, 'Do not construct a second receipt-sized JSON string'
+        return original(value)
+    class Result:
+        def consume(self): pass
+        def single(self): return {'time': None}
+    class Transaction:
+        def run(self, query, **params):
+            queries.append(query)
+            return Result()
+    monkeypatch.setattr(g, 'encoded', encoded)
+    assert g.write(Transaction(), 'a' * 64, full, 'now')
+    assert any('REMOVE s.graph_json' in q for q in queries)
