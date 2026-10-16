@@ -109,7 +109,7 @@ the managed `product-enrichment` CronJob supplies the application image and
 database, OpenAI and Brave secret references. It remains suspended, so comparisons
 run only when requested. The OpenAI model uses the existing `AI_PRODUCT_MODEL`
 setting/default. Qwen uses `OLLAMA_PRODUCT_MODEL=qwen3.8:27b` and
-`OLLAMA_BASE_URL=http://192.168.2.201:11434` from the CronJob manifest.
+`OLLAMA_BASE_URL=http://192.168.2.201:11436` from the CronJob manifest.
 
 Apply the Grafana dashboard from this repository on your Mac:
 
@@ -143,7 +143,7 @@ finds no events, check log collection before rerunning the experiment.
 On Arsene, inspect the listener:
 
 ```sh
-ss -ltnp | grep 11434
+ss -ltnp | grep 11436
 ```
 
 The job must reach the service from Kubernetes. Manage Arsene's listener and
@@ -154,15 +154,15 @@ make ollama-gitops-check
 make ollama-gitops-apply
 ```
 
-Run these Make commands on your Mac. The role configures the existing service at
-`192.168.2.201:11434`; when firewalld is active it allows the private LAN and K3s
+Run these Make commands on your Mac. The role configures the shared GPU service at
+`192.168.2.201:11436`; when firewalld is active it allows the private LAN and K3s
 pod network in the default zone. For a dedicated LAN zone, set
 `ollama_firewall_zone` in `ops/ollama/inventory/production.yml`. Other firewall
 implementations require their own managed rule. Keep the unauthenticated endpoint
 on the private network. Check reachability from your Mac before running the job:
 
 ```sh
-curl --fail --max-time 5 http://192.168.2.201:11434/api/tags
+curl --fail --max-time 5 http://192.168.2.201:11436/api/tags
 ```
 
 Qwen loads automatically on the first request and stays loaded for five minutes
@@ -172,7 +172,7 @@ The caller Pod needs no GPU allocation; Ollama on Arsene owns the RTX 3090.
 Check actual offload on Arsene during the experiment:
 
 ```sh
-export OLLAMA_HOST=http://192.168.2.201:11434
+export OLLAMA_HOST=http://192.168.2.201:11436
 ollama ps
 watch -n 1 'ollama ps; nvidia-smi'
 ```
@@ -314,7 +314,7 @@ It supports vision and receives the same receipt page images as OpenAI. To
 install the default model on another managed host:
 
 ```sh
-OLLAMA_HOST=http://192.168.2.201:11434 ollama pull qwen3.8:27b
+OLLAMA_HOST=http://192.168.2.201:11436 ollama pull qwen3.8:27b
 ```
 
 The previous `qwen3-vl-receipts:30b-instruct` alias remains available for explicit

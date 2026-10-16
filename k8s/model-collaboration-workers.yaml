@@ -49,14 +49,12 @@ spec:
               key: HOME_BUDGET_OCR_CACHE
         - name: OCR_ARTIFACT_URI_PREFIX
           value: pvc://home-budget/receipts/derived/ocr-cache
-        # Measured CPU optimum on Arsene; development GPU clients keep defaults.
-        - name: OLLAMA_NUM_THREADS
-          value: "5"
-        # Cold CPU receipt-image request measured 193s; cloud waits stay at 180s.
+        # Shared RTX 3090 endpoint; use server thread defaults.
+        # Allow model loading and queued requests; cloud waits stay at 180s.
         - name: OLLAMA_TIMEOUT_SECONDS
           value: "300"
         - name: OLLAMA_BASE_URL
-          value: http://192.168.2.201:11434
+          value: http://192.168.2.201:11436
         - name: OLLAMA_GPU_METRICS_URL
           value: http://192.168.2.201:11435/gpu
         - name: GPU_SAMPLE_INTERVAL_SECONDS
@@ -149,7 +147,7 @@ spec:
         - name: OCR_ARTIFACT_URI_PREFIX
           value: pvc://home-budget/receipts/derived/ocr-cache
         - name: OLLAMA_BASE_URL
-          value: http://192.168.2.201:11434
+          value: http://192.168.2.201:11436
         - name: OLLAMA_GPU_METRICS_URL
           value: http://192.168.2.201:11435/gpu
         - name: GPU_SAMPLE_INTERVAL_SECONDS
@@ -248,7 +246,7 @@ spec:
         - name: OCR_ARTIFACT_URI_PREFIX
           value: pvc://home-budget/receipts/derived/ocr-cache
         - name: OLLAMA_BASE_URL
-          value: http://192.168.2.201:11434
+          value: http://192.168.2.201:11436
         - name: OLLAMA_GPU_METRICS_URL
           value: http://192.168.2.201:11435/gpu
         - name: GPU_SAMPLE_INTERVAL_SECONDS
@@ -347,7 +345,7 @@ spec:
         - name: OCR_ARTIFACT_URI_PREFIX
           value: pvc://home-budget/receipts/derived/ocr-cache
         - name: OLLAMA_BASE_URL
-          value: http://192.168.2.201:11434
+          value: http://192.168.2.201:11436
         - name: OLLAMA_GPU_METRICS_URL
           value: http://192.168.2.201:11435/gpu
         - name: GPU_SAMPLE_INTERVAL_SECONDS

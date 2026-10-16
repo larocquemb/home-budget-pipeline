@@ -16,9 +16,9 @@ it never pulls, deletes, configures or unloads models.
 
 ```sh
 # This explicitly installs the candidate in the same service the pipeline uses.
-OLLAMA_HOST=http://192.168.2.201:11434 ollama pull qwen3.8:27b
+OLLAMA_HOST=http://192.168.2.201:11436 ollama pull qwen3.8:27b
 
-OLLAMA_BASE_URL=http://192.168.2.201:11434 make eval-models \
+OLLAMA_BASE_URL=http://192.168.2.201:11436 make eval-models \
   BASELINE=qwen3-vl-receipts:30b-instruct CANDIDATE=qwen3.8:27b
 ```
 

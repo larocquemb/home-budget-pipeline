@@ -458,7 +458,7 @@ def main(argv=None):
         parser.error('Use distinct models and 1..10 repeats')
     if not 1024 <= args.context_tokens <= 65536 or not 256 <= args.output_tokens <= 16384 or args.output_tokens >= args.context_tokens or args.timeout <= 0:
         parser.error('Invalid context, output or timeout budget')
-    base = os.getenv('OLLAMA_BASE_URL') or os.getenv('OLLAMA_HOST') or 'http://192.168.2.201:11434'
+    base = os.getenv('OLLAMA_BASE_URL') or os.getenv('OLLAMA_HOST') or 'http://192.168.2.201:11436'
     base = base.rstrip('/')
     address = urlsplit(base)
     if address.scheme not in ('http', 'https') or not address.hostname or address.username or address.password or address.query or address.fragment:

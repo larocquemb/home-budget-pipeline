@@ -1,21 +1,27 @@
-# Production CPU and development RTX 3090 (KAN-135)
+# Shared RTX 3090 inference (KAN-135)
 
-Ollama runs natively on Arsene under systemd, managed by Git + Ansible.
-Production keeps its existing service and URL. Development gets a new service;
-no production Kubernetes endpoint changes or inference gateway are needed.
+Receipt inference, enrichment, local development, and Jupyter use the existing
+GPU service at `http://192.168.2.201:11436`. Kubernetes callers and application
+fallback URLs use this endpoint. The CPU service on 11434 remains available
+for explicit diagnostics; its systemd isolation is unchanged.
 
-| Workload | Native service | Endpoint |
-|---|---|---|
-| Production | `ollama.service` | `http://192.168.2.201:11434` |
-| Local development and Jupyter | `ollama-development.service` | `http://192.168.2.201:11436` |
-| Shared read-only host telemetry | `ollama-gpu-telemetry.service` | `http://192.168.2.201:11435/metrics` |
+The shared GPU service allows one loaded model and one parallel Ollama request.
+There is no GPU reservation mechanism: direct Jupyter CUDA allocations can still
+compete with Ollama for VRAM. Avoid running those workloads simultaneously.
+The 15-minute receipt discovery schedule is unchanged; product enrichment remains
+an on-demand, suspended CronJob template. Existing Jobs keep their original
+configuration and must finish before evaluating the new routing.
 
-Production has CUDA/ROCm/Vulkan disabled and `PrivateDevices=true`, preventing
-access to GPU devices. CPU affinity initially uses logical processors 0–7,
-with a six-core CPU-time quota, low CPU scheduling weight, 32 GiB memory-high,
-40 GiB memory-max, and no service swap. These are starting limits to validate,
-not a guarantee of isolated memory bandwidth. Development selects CUDA device 0.
-Both services allow one loaded model and one parallel request.
+Production clients use server thread defaults and retain a 300-second Ollama
+request timeout. Cloud provider waits remain 180 seconds. The one-hour timeout
+was a diagnostic setting only.
+
+The matched saved review used 8,795 input tokens. GPU completed in 15.13 seconds
+(7.34 seconds prompt processing, 2.13 seconds generating 194 output tokens).
+CPU with five threads and raised memory limits completed in 294.53 seconds
+(261.77 seconds prompt processing, 31.85 seconds generating 171 tokens).
+The CPU model was already loaded; these are not matched cold-start measurements.
+This result motivates GPU routing but is not whole-pipeline validation.
 
 The existing model store `/home/ollama/models` is preserved and shared.
 The development service owns model download/create/update operations;
@@ -194,7 +200,7 @@ The changed Qwen Deployment restarts workers; new enrichment Jobs inherit
 five threads. Existing Jobs and local processes need restarting/updating.
 Jupyter and the development configuration do not set this variable.
 
-## Measured cold CPU timeout follow-up (KAN-135)
+## Historical CPU timeout follow-up (KAN-135)
 
 On October 16, 2026, after rebooting Arsene with the Git-managed six-core quota,
 CPU affinity 0-7, and GPU device isolation, a five-thread receipt-image request
@@ -229,3 +235,16 @@ Ollama timeout override in Git and reconcile; other provider waits and receipt
 data are unaffected. Private benchmark reports stay under `.model-evals/` and
 must not be committed. The report-writer fix uses built-in `open` with mode
 0600; the regression test exercises actual report creation.
+
+## Deploy shared GPU routing
+
+Deploy through `make deploy-k3s` using the existing GitOps workflow. Verify the
+Qwen Deployment rolls out with `OLLAMA_BASE_URL=http://192.168.2.201:11436` and
+without `OLLAMA_NUM_THREADS`. New enrichment Jobs inherit the same endpoint.
+Run a bounded real receipt job and verify its outcome and GPU placement before
+closing KAN-135. Earlier CPU routing and tuning sections below the introduction
+record the previous deployment; the shared GPU routing above supersedes them.
+
+To roll back, revert this routing change in Git and reconcile. The CPU service
+on 11434 remains available, but representative image reviews can approach or
+exceed the retained 300-second timeout. Receipt data and model files are unchanged.

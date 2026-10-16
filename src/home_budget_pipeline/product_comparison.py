@@ -70,7 +70,7 @@ def _generate_once(provider: str, text: str, *, model: str | None = None) -> dic
                 "input_tokens": getattr(usage, "input_tokens", None),
                 "output_tokens": getattr(usage, "output_tokens", None)}
     model = model or os.getenv("OLLAMA_PRODUCT_MODEL", "qwen3.8:27b")
-    base = os.getenv("OLLAMA_BASE_URL", "http://192.168.2.201:11434").rstrip("/")
+    base = os.getenv("OLLAMA_BASE_URL", "http://192.168.2.201:11436").rstrip("/")
     request = urllib.request.Request(
         base + "/api/chat",
         data=json.dumps({"model": model, "messages": [{"role": "user", "content": text}],

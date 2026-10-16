@@ -167,7 +167,7 @@ def request(profile: Profile, text: str, schema: dict, images: list[dict]) -> di
                 'output_tokens': usage.get('candidatesTokenCount'), 'reasoning_tokens': usage.get('thoughtsTokenCount')}
     if profile.provider != 'qwen':
         raise ValueError('Unknown model provider')
-    base = os.getenv('OLLAMA_BASE_URL', 'http://192.168.2.201:11434').rstrip('/')
+    base = os.getenv('OLLAMA_BASE_URL', 'http://192.168.2.201:11436').rstrip('/')
     message = {'role': 'user', 'content': qwen_content(text, schema, images)}
     if images:
         message['images'] = [image['data'] for image in images]
