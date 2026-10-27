@@ -8,7 +8,8 @@ development backend. On October 27 the services were provisioned, both databases
 and this Mac's `.env.dev` switched to Arsene. PostgreSQL role/database and broker
 vhost isolation checks pass. The old Mac configuration and data remain retained.
 The m4pro Mac mini workflow has been validated; work MacBook validation was
-waived. Background Python LAN access and host recovery checks remain pending.
+waived. Receipt worker and collector background LAN access and physical restore
+checks remain pending.
 
 ## Command interface
 
@@ -226,18 +227,17 @@ curl http://localhost:8080/ledger/health
 
 ## macOS Local Network permission and foreground operation
 
-On the m4pro Mac mini, native CLI/foreground Python reaches Arsene, while Python
-LaunchAgents currently fail with `EHOSTUNREACH` / “No route to host”. This was
-reproduced using a separate agent probe, so it is not a PostgreSQL routing or
-credential failure. Python's existing Local Network permission was refreshed
-with Paul's approval, and remained enabled; the agent failure persisted.
+macOS applies Local Network privacy differently to LaunchAgents and Terminal
+processes. The web service builds a small signed app executable that embeds the
+virtual environment's Python framework, so the agent can be assigned its own
+Local Network permission. This requires the macOS command-line developer tools
+and the Python framework headers. If macOS asks, allow **Ledger Web Agent** to
+access the local network. The agent uses the existing `.env.dev` configuration
+and the local HTTPS/Entra proxy. If access fails, foreground operation remains
+available; see [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
 
-Agents are associated with the actual framework interpreter's Python.app bundle
-when available, as recommended by [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
-This metadata alone did not resolve the current Homebrew Python background
-failure. Do not disable system privacy controls or claim LaunchAgent connectivity
-is verified. Foreground web operation, local HTTPS/Entra and graph reads were
-verified using the new Arsene development backends.
+Receipt worker and collector LaunchAgents use the existing Python executable;
+their background LAN connectivity is not yet verified on this Mac.
 
 Use separate terminals when background agents are affected:
 

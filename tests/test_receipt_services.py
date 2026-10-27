@@ -168,3 +168,17 @@ def test_tesseract_threads_are_scoped_to_child_process(monkeypatch):
         assert call['env']['OMP_NUM_THREADS'] == '4'
         assert call['env']['OMP_THREAD_LIMIT'] == '4'
     assert os.environ['OMP_NUM_THREADS'] == '1'
+
+
+def test_web_agent_uses_distinct_signed_python_identity():
+    import sys
+    spec = importlib.util.spec_from_file_location('receipt_services', 'scripts/receipt_services.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    root = Path('/Users/example/Development/home budget')
+    config = module.service_plist(root, 'web')
+    assert config['AssociatedBundleIdentifiers'] == ['net.brownrook.ledger.webagent']
+    assert config['ProgramArguments'] == [str(root / '.local-services/LedgerWebAgent.app/Contents/MacOS/LedgerWebAgent'), str(root / 'scripts/mac_web_agent.py')]
+    assert config['EnvironmentVariables']['PYTHONHOME'] == sys.base_prefix
+    assert config['EnvironmentVariables']['PYTHONPATH']
+    assert config['KeepAlive'] is True

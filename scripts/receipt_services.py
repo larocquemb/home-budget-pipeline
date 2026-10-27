@@ -9,6 +9,9 @@ from pathlib import Path
 import plistlib
 import subprocess
 import time
+import sys
+import site
+import shlex
 
 ROOT = Path(__file__).resolve().parents[1]
 NAMES = None
@@ -37,6 +40,40 @@ def positive_count(value: str) -> int:
 
 def service_label(name: str) -> str:
     return f'com.brownrook.home-budget.{name}'
+
+
+WEB_BUNDLE_ID = 'net.brownrook.ledger.webagent'
+
+
+def web_agent_bundle(root: Path) -> Path:
+    return root / '.local-services' / 'LedgerWebAgent.app'
+
+
+def prepare_web_agent(root: Path) -> None:
+    """Build a signed app identity for local-network access by the web agent."""
+    bundle = web_agent_bundle(root)
+    contents = bundle / 'Contents'
+    executable = contents / 'MacOS' / 'LedgerWebAgent'
+    metadata = contents / 'Info.plist'
+    marker = root / '.local-services' / 'ledger-web-agent-build.json'
+    source = root / 'scripts/mac_web_agent.c'
+    desired = {'python': sys.base_prefix, 'version': sys.version, 'source': source.read_text()}
+    if marker.exists() and executable.exists() and metadata.exists():
+        if json.loads(marker.read_text()) == desired:
+            return
+    executable.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    config = Path(sys.base_prefix) / 'bin' / f'python{sys.version_info.major}.{sys.version_info.minor}-config'
+    includes = shlex.split(subprocess.check_output([str(config), '--includes'], text=True))
+    libraries = shlex.split(subprocess.check_output([str(config), '--ldflags', '--embed'], text=True))
+    subprocess.run(['clang', *includes, str(source), '-o', str(executable), *libraries], check=True)
+    metadata.write_bytes(plistlib.dumps({
+        'CFBundleIdentifier': WEB_BUNDLE_ID, 'CFBundleExecutable': 'LedgerWebAgent',
+        'CFBundleName': 'Ledger Web Agent', 'CFBundlePackageType': 'APPL',
+        'NSLocalNetworkUsageDescription': 'Ledger needs local network access to reach the development services on Arsene.',
+    }))
+    subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(bundle)], check=True)
+    subprocess.run(['/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister', '-f', str(bundle)], check=True)
+    marker.write_text(json.dumps(desired))
 
 
 def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
@@ -69,8 +106,9 @@ def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
             break
 
     if name == 'web':
-        config['ProgramArguments'] = ['/bin/bash', str(root / 'scripts/run_local_web.sh')]
-        config['EnvironmentVariables']['HOME_BUDGET_WEB_BACKGROUND'] = '1'
+        config['ProgramArguments'] = [str(web_agent_bundle(root) / 'Contents/MacOS/LedgerWebAgent'), str(root / 'scripts/mac_web_agent.py')]
+        config['AssociatedBundleIdentifiers'] = [WEB_BUNDLE_ID]
+        config['EnvironmentVariables'].update({'PYTHONHOME': sys.base_prefix, 'PYTHONPATH': os.pathsep.join(site.getsitepackages())})
 
     if is_worker(name) and threads is not None:
         config['EnvironmentVariables']['HOME_BUDGET_SERVICE_OCR_THREADS'] = str(threads)
@@ -119,6 +157,8 @@ def main() -> int:
         if not (ROOT / '.env.dev').is_file() or not (ROOT / '.venv/bin/ledger').is_file():
             parser.error('Configure .env.dev and install the project in .venv first')
         agents.mkdir(parents=True, exist_ok=True)
+        if names == ('web',):
+            prepare_web_agent(ROOT)
         logs = ROOT / '.local-services'
         logs.mkdir(mode=0o700, exist_ok=True)
         if NAMES is None:
@@ -175,5 +215,5 @@ if __name__ == '__main__':
     try:
         raise SystemExit(main())
     except subprocess.CalledProcessError as exc:
-        print(exc.stderr.strip())
+        print((exc.stderr or str(exc)).strip())
         raise SystemExit(exc.returncode) from None
