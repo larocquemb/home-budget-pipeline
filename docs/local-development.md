@@ -31,9 +31,8 @@ Hostnames do not define an environment. Current endpoints are:
 
 | Environment | PostgreSQL endpoint | Database | Settings |
 | --- | --- | --- | --- |
-| Legacy Mac backend (migration pending; retire from active use after validation) | `127.0.0.1:5432` | `home_budget` | Current stale `.env.dev` |
-| Isolated Arsene development | `arsene.brownrook.net:15432` | `home_budget_dev` | Arsene development settings |
-| Isolated Arsene test | `arsene.brownrook.net:15432` | `home_budget_test` | Arsene test settings |
+| Isolated Arsene development | `arsene.brownrook.net:15432` | `home_budget_dev` | `.env.dev` |
+| Isolated Arsene test | `arsene.brownrook.net:15432` | `home_budget_test` | `.env.dev` |
 | Production / K3s | `postgres.brownrook.net:5432` | `home_budget` | `.env.k3s` / workload runtime |
 
 `database rebuild --target arsene-dev` means the isolated development service,
@@ -458,6 +457,19 @@ Replace `EXPENSE_ID` with the number shown in the local UI. This is the automati
 enrichment path; the separate collaborative workflow saves recommendations for
 human review. A Brave HTTP 402 with `USAGE_LIMIT_EXCEEDED` requires resolving the
 API plan allowance or loading a key for an available plan before retrying.
+
+## Run integration tests safely
+
+`make test-db` rebuilds the disposable `home_budget_test` schema on Arsene, then
+runs integration tests with the dedicated test database role and test broker
+vhost. `make test-rabbit` uses the same isolated services. Both verify the actual
+database identity before use and remove inherited PostgreSQL connection overrides.
+They do not use the shared development Neo4j: graph integration tests requiring
+a separate test graph are skipped unless run separately against an isolated graph.
+
+Direct pytest integration runs require an explicit `TEST_DATABASE_URL` and do not
+create or reset any database automatically. Use `make test-db` for the supported
+Mac workflow, or provision a disposable service explicitly in CI.
 
 ## Build, test, and merge
 

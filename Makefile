@@ -1,5 +1,3 @@
-TEST_DB ?= home_budget_test
-TEST_DATABASE_URL ?= postgresql://localhost/$(TEST_DB)
 PYTHON ?= .venv/bin/python
 LEDGER ?= .venv/bin/ledger
 MKDOCS ?= .venv/bin/mkdocs
@@ -272,45 +270,16 @@ test-postgres-oidc-image:
 	@bash ./scripts/test_postgres_oidc_image.sh
 
 test-db-setup:
-	@echo "Resetting PostgreSQL test database..."
-	@psql postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='$(TEST_DB)'" | grep -q 1 || createdb $(TEST_DB)
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -c 'DROP SCHEMA IF EXISTS ingest_blue CASCADE; DROP SCHEMA IF EXISTS ingest_green CASCADE; DROP SCHEMA IF EXISTS ingest CASCADE; DROP SCHEMA IF EXISTS ops CASCADE; DROP SCHEMA IF EXISTS budget CASCADE;' >/dev/null
-	@echo "Loading schema..."
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/schema_phase1.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/receipt_processing.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/schema_constraints.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/product_enrichment.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/receipt_reprocess_requests.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/ocr_result_collector.sql >/dev/null
+	@$(LEDGER) --env-file .env.dev database rebuild --target arsene-test --confirm home_budget_test
 
 test-db: test-db-setup
-	@if test -n "$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}"; then \
-		echo "Running PostgreSQL and RabbitMQ integration tests..."; \
-	else \
-		echo "Running PostgreSQL integration tests; RabbitMQ tests will be skipped (no broker URL)..."; \
-	fi
-	@TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
-		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
-		$(PYTHON) -m pytest -q -rA -m integration
+	@$(PYTHON) scripts/run_development_tests.py pytest -q -rA -m integration
 
-test-db-verbose:
-	@psql postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='$(TEST_DB)'" | grep -q 1 || createdb $(TEST_DB)
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -c 'DROP SCHEMA IF EXISTS ingest_blue CASCADE; DROP SCHEMA IF EXISTS ingest_green CASCADE; DROP SCHEMA IF EXISTS ingest CASCADE; DROP SCHEMA IF EXISTS ops CASCADE; DROP SCHEMA IF EXISTS budget CASCADE;'
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/schema_phase1.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/receipt_processing.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/schema_constraints.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/product_enrichment.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/receipt_reprocess_requests.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/ocr_result_collector.sql
-	TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
-		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
-		$(PYTHON) -m pytest -q -m integration
+test-db-verbose: test-db-setup
+	@$(PYTHON) scripts/run_development_tests.py pytest -v -m integration
 
 test-rabbit: test-db-setup
-	@test -n "$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" || { echo "Export RABBITMQ_URL or TEST_RABBITMQ_URL"; exit 2; }
-	@TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
-		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
-		$(PYTHON) -m pytest -v -m integration tests/test_receipt_queue_rabbitmq.py
+	@$(PYTHON) scripts/run_development_tests.py pytest -v -m integration tests/test_receipt_queue_rabbitmq.py
 
 test-all: test
 	@$(MAKE) test-db
@@ -322,9 +291,8 @@ test-receipts: test-db-setup
 	@rm -rf "$(RECEIPT_TEST_ROOT)"
 	@mkdir -p "$(RECEIPT_TEST_ROOT)/inbox" "$(RECEIPT_TEST_ROOT)/ocr-cache"
 	@rsync -a "$(RECEIPT_SOURCE_ROOT)/" "$(RECEIPT_TEST_ROOT)/inbox/"
-	@echo "Running receipt backlog against local PostgreSQL test database..."
-	@DATABASE_URL=$(TEST_DATABASE_URL) HOME_BUDGET_OCR_CACHE="$(RECEIPT_TEST_ROOT)/ocr-cache" \
-		$(LEDGER) receipts process "$(RECEIPT_TEST_ROOT)/inbox"
+	@echo "Queueing receipt backlog against the isolated Arsene test services..."
+	@$(PYTHON) scripts/run_development_tests.py publish "$(RECEIPT_TEST_ROOT)/inbox" "$(RECEIPT_TEST_ROOT)/ocr-cache"
 
 .PHONY: k3s-postgres-tls-prepare monitoring-receipt-postgres-both-apply
 k3s-postgres-tls-prepare:
