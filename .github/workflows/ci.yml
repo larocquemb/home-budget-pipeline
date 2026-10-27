@@ -36,7 +36,7 @@ jobs:
         run: python -m pytest -v -m "not integration" --durations=10
 
       - name: Validate monitoring automation
-        run: make monitoring-gitops-syntax ollama-gitops-syntax
+        run: make monitoring-gitops-syntax
 
       - name: Validate observability configurations
         run: make test-observability

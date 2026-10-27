@@ -50,7 +50,6 @@ EVAL_OUTPUT_TOKENS ?= 8192
 
 .PHONY: receipts-publish receipts-worker-test
 .PHONY: check-local build-local
-.PHONY: ollama-gitops-syntax ollama-gitops-check ollama-gitops-apply
 .PHONY: dev-postgres-tls-prepare
 .PHONY: dev-postgres-grafana-check dev-postgres-grafana-apply
 .PHONY: monitoring-receipt-postgres-apply
@@ -126,15 +125,6 @@ monitoring-gitops-check:
 
 monitoring-gitops-apply:
 	@$(MONITORING_GITOPS) apply
-
-ollama-gitops-syntax:
-	@bash scripts/ollama_gitops.sh syntax
-
-ollama-gitops-check:
-	@bash scripts/ollama_gitops.sh check
-
-ollama-gitops-apply:
-	@bash scripts/ollama_gitops.sh apply
 
 log-collection-compare:
 	@test -n "$(MARKER)" || (echo "Usage: make log-collection-compare MARKER=NAME [SINCE=1h]" >&2; exit 2)

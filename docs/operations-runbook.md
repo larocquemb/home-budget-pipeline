@@ -119,7 +119,7 @@ Run `make help` for a compact list. The repository provides these targets:
 | `make dev-receipts-stop` | Stop both services and disable startup at login. |
 | `make status` | Report deployment and recent workflow status. |
 | `make enrich-products` | Start and follow a one-off Kubernetes product-enrichment job. |
-| `make ollama-gitops-check` / `make ollama-gitops-apply` | Review/reconcile Arsene's Ollama LAN listener and source-restricted firewalld access. |
+| `brownrook-infra` Ollama Ansible playbook | Review/reconcile Arsene's Ollama LAN listener and source-restricted firewalld access. |
 | `make enrich-products COMPARE=1 LIMIT=10 RECEIPT='receipt.pdf'` | Compare OpenAI and Qwen matches without changing accepted products; see [model comparison](product-model-comparison.md). |
 | `make enrich-products COLLABORATE=1 LIMIT=1 RECEIPT='receipt.pdf'` | Save a Qwen-first collaborative recommendation for review in Ledger. Paid fallback is opt-in with `PAID_FALLBACK=1`. |
 | `make enrich-products COLLABORATE=1 LIMIT=1 DRY_RUN=1` | Validate the Kubernetes Job without creating it or calling providers. |

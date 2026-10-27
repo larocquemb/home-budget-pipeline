@@ -2,7 +2,7 @@
 > GPU Ollama service on port 11434. The CPU/GPU split described below is
 > historical and does not describe the intended new configuration. Complete
 > the coordinated client migration before relying on the new endpoint. See
-> `ops/ollama/README.md` for the new service description.
+> the `brownrook-infra` Ollama runbook for the new service description.
 
 # Shared RTX 3090 inference (KAN-135)
 
@@ -45,8 +45,8 @@ The API is unauthenticated and stays private. Existing LAN/VPN trust is required
 1. Review and merge the pipeline PR. From the checked-out main branch:
 
    ```sh
-   make ollama-gitops-syntax
-   make ollama-gitops-check
+   ansible-playbook ansible/playbooks/ollama.yml --syntax-check
+   ansible-playbook ansible/playbooks/ollama.yml --check --ask-become-pass
    ```
 
 2. Finish active inference before applying: production restarts to unload GPU
@@ -55,7 +55,7 @@ The API is unauthenticated and stays private. Existing LAN/VPN trust is required
    credentials and PKI configuration:
 
    ```sh
-   make ollama-gitops-apply
+   ansible-playbook ansible/playbooks/ollama.yml --ask-become-pass
    make monitoring-gitops-check
    make monitoring-gitops-apply
    ```
