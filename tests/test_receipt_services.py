@@ -127,7 +127,8 @@ def test_paddle_receives_explicit_thread_count_only_when_configured(monkeypatch)
     assert options[1]['cpu_threads'] == 4
 
 
-def test_worker_wrapper_applies_saved_threads_after_loading_env(tmp_path):
+def test_worker_wrapper_applies_saved_threads_after_loading_env(tmp_path, arsene_development_environment):
+    import sys
     import os
     import json
     import subprocess
@@ -137,10 +138,13 @@ def test_worker_wrapper_applies_saved_threads_after_loading_env(tmp_path):
     wrapper.write_text(Path('scripts/run_receipt_service.sh').read_text())
     (root / '.env.dev').write_text('HOME_BUDGET_OCR_THREADS=9\n')
     (root / '.venv/bin').mkdir(parents=True)
+    (root / '.venv/bin/python').symlink_to(sys.executable)
     ledger = root / '.venv/bin/ledger'
     ledger.write_text('#!/usr/bin/env python3\nimport json,os,sys\nprint(json.dumps({"args":sys.argv[1:],"threads":os.environ.get("HOME_BUDGET_OCR_THREADS"),"omp":os.environ.get("OMP_THREAD_LIMIT"),"omp_num":os.environ.get("OMP_NUM_THREADS")}))\n')
     ledger.chmod(0o700)
     env = {**os.environ, 'HOME_BUDGET_SERVICE_OCR_THREADS': '4'}
+    env.update(arsene_development_environment)
+    env['PYTHONPATH'] = str(Path('src').resolve())
     result = subprocess.run(['/bin/sh', str(wrapper), 'worker-2'], env=env, check=True, capture_output=True, text=True)
     assert json.loads(result.stdout) == {'args': ['receipts', 'consume'], 'threads': '4', 'omp': '4', 'omp_num': '1'}
 

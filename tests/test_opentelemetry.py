@@ -543,18 +543,22 @@ def test_local_command_failure_is_saved_and_raised(tmp_path, monkeypatch):
     assert 'TimeoutError: test search timeout' in failure['exception']
 
 
-def test_local_web_wrapper_captures_output_and_preserves_failure(tmp_path):
+def test_local_web_wrapper_captures_output_and_preserves_failure(tmp_path, arsene_development_environment):
+    import sys
     root = tmp_path / 'repo'
     (root / 'scripts').mkdir(parents=True)
     script = root / 'scripts/run_local_web.sh'
     script.write_text((ROOT / 'scripts/run_local_web.sh').read_text())
     (root / '.env.dev').write_text('LEDGER_PROXY_SECRET=test\n')
     (root / '.venv/bin').mkdir(parents=True)
+    (root / '.venv/bin/python').symlink_to(sys.executable)
     uvicorn = root / '.venv/bin/uvicorn'
     uvicorn.write_text('#!/bin/sh\necho "test access log"\necho "test web error" >&2\nexit 7\n')
     uvicorn.chmod(0o700)
     import os
     env = os.environ.copy()
+    env.update(arsene_development_environment)
+    env['PYTHONPATH'] = str(ROOT / 'src')
     env.pop('HOME_BUDGET_LOCAL_LOG_DIR', None)
     result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
     assert result.returncode == 7

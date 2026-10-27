@@ -1,22 +1,120 @@
-# Local development on macOS
+# Local development on macOS with Arsene backends
 
-Develop and review receipts on the Mac, run Qwen workloads on the configured
-model server, and use CI and K3s for integration and deployment validation.
+Application Python, receipt workers and local HTTPS/Entra run on the Mac.
+Development PostgreSQL, RabbitMQ and Neo4j belong on isolated Arsene Podman
+services (KAN-137). Production stays separate in Kubernetes. The Mac's native
+PostgreSQL/RabbitMQ configuration is a legacy setup, not an additional supported
+development backend. Migration is incomplete: on October 27 the checkout still
+selected the native services and Arsene ports 15432/15673/17687 were not listening.
+Do not switch a running application to those endpoints until provisioning and
+connectivity validation succeed.
+
+## Command interface
+
+Use `make` for software builds, tests, documentation, and infrastructure setup.
+Use `ledger` for application operations: processing receipts, maintaining caches,
+rebuilding application databases, and controlling receipt workers and collectors.
+Existing Make operation targets remain compatibility commands; new instructions
+use Ledger. Activate the virtual environment once with `source .venv/bin/activate`,
+or replace `ledger` below with `.venv/bin/ledger`.
+
+Select settings explicitly with `ledger --env-file .env.dev ...`. Place
+`--env-file` before the application command. Without it, Ledger uses the existing
+process environment; it never silently selects development or production settings.
+Native service controls always use this repository's `.env.dev`.
+
+Hostnames do not define an environment. Current endpoints are:
+
+| Environment | PostgreSQL endpoint | Database | Settings |
+| --- | --- | --- | --- |
+| Legacy Mac backend (migration pending; retire from active use after validation) | `127.0.0.1:5432` | `home_budget` | Current stale `.env.dev` |
+| Isolated Arsene development | `arsene.brownrook.net:15432` | `home_budget_dev` | Arsene development settings |
+| Isolated Arsene test | `arsene.brownrook.net:15432` | `home_budget_test` | Arsene test settings |
+| Production / K3s | `postgres.brownrook.net:5432` | `home_budget` | `.env.k3s` / workload runtime |
+
+`database rebuild --target arsene-dev` means the isolated development service,
+not production. Database rebuild has no production target. Its existing guards
+validate endpoint, database role, connected identity, development marker and
+confirmation for Arsene operations. `--env-file` loads settings; it does not by
+itself certify those settings as development. General processing commands act on
+the selected runtime, so use the intended settings and run Kubernetes receipt
+commands inside their configured workload; production cache paths are pod paths.
+Do not use an Arsene hostname alone to decide whether a command is production.
+
+| Application task | Command (after `ledger --env-file .env.dev`) |
+| --- | --- |
+| Start / stop / inspect / follow local services | `receipts services start` / `stop` / `status` / `logs` |
+| Process eligible receipts and replace extraction when caches are missing | `receipts process --verbose` |
+| Force fresh OCR and replace database extraction for every source | `receipts process --refresh-ocr-cache --verbose` |
+| Empty the local cache, retaining old outputs privately | `ocr-cache clean --local` |
+| Recreate missing cache files, preserving saved extraction | `ocr-cache rebuild --missing-only --verbose` |
+| Delete and recreate Arsene development application schemas | `database rebuild --target arsene-dev --confirm home_budget_dev` |
+
+Cache clean requires the isolated Arsene development database/broker settings
+and stops receipt services and moves the old cache to
+`.validation/cache-backups/`, with a private manifest of file hashes. It creates
+an empty cache at the configured repository `.ocr_cache` or `ocr-cache` path,
+and leaves services stopped. It preserves the database and queued jobs.
+Start services explicitly before queueing a rebuild. Database rebuild does not manage workers; stop them first. Neither operation
+purges RabbitMQ; existing jobs can resume.
+Do not clean during an active refresh unless you intend to interrupt it.
+
+For a fresh cache while keeping database extraction unchanged:
+
+```bash
+ledger --env-file .env.dev ocr-cache clean --local
+ledger --env-file .env.dev receipts services start
+ledger --env-file .env.dev ocr-cache rebuild --missing-only --verbose
+ledger --env-file .env.dev receipts services logs
+```
+
+Use `receipts process --verbose` instead of `ocr-cache rebuild` to import into an
+empty database or replace extraction for receipts with missing caches. Queue
+publication is not completion; workers run OCR and the collector commits results.
+The Receipt processing page shows database records, including historical states,
+and is not a count of files in the cache or completion of a specific refresh batch.
+
+## Provision and configure Arsene development
+
+The infrastructure repository owns the `development_backends` Ansible role and
+its playbook. Review its `runbooks/development-backends.md` before provisioning.
+Keep the existing `.dev-backend/secrets.yml`; generating credentials again is
+not a password rotation procedure.
+
+Once the isolated services are healthy, preview and apply the connection update:
+
+```bash
+ledger development configure
+ledger development configure --apply
+ledger --env-file .env.dev development check
+ledger --env-file .env.dev development bootstrap
+ledger --env-file .env.dev development bootstrap --test
+```
+
+Configure preserves HTTPS/Entra settings and saves the original `.env.dev` once
+as `.env.dev.before-arsene`. Check verifies dedicated development/test identities,
+connectivity and graph reachability. Bootstrap refuses initialized databases;
+use migrations for existing schemas. An intentional reset uses
+`ledger --env-file .env.dev database rebuild --target arsene-dev --confirm home_budget_dev`.
+Start/restart the web and receipt services only after the new backends pass checks.
+Native launch wrappers reject non-development endpoints before starting Python.
+Pending jobs in the old Mac broker remain there and are not automatically copied;
+retain the old database, broker and cache evidence until their disposition is reviewed.
 
 ## Services and ports
 
 | Component | Local runtime | Address |
 | --- | --- | --- |
-| PostgreSQL 18 | Homebrew background service | `127.0.0.1:5432` |
-| RabbitMQ | Homebrew background service | `127.0.0.1:5672` |
-| RabbitMQ Management | Native RabbitMQ management plugin | `http://localhost:15672` |
+| Development PostgreSQL | Arsene Podman service (provisioning pending) | `arsene.brownrook.net:15432` |
+| Development RabbitMQ | Arsene Podman service (provisioning pending) | `arsene.brownrook.net:15673` |
+| RabbitMQ Management | Arsene development management | `http://arsene.brownrook.net:15674` |
 | Caddy | Colima container; HTTPS entry point | `https://ledger-dev.brownrook.net` |
 | OAuth2 Proxy | Colima container; Microsoft Entra sign-in | Behind Caddy |
 | Ledger | Python process with automatic code reload | Port `8080`, behind the proxies |
-| OCR worker and result collector | Per-user macOS LaunchAgents | Native RabbitMQ queues |
+| OCR worker and result collector | Per-user macOS LaunchAgents | Arsene development RabbitMQ queues |
 
 Caddy provides HTTPS. OAuth2 Proxy handles sign-in and forwards authenticated
-requests to Ledger. Ledger and the collector use native PostgreSQL directly.
+requests to Ledger. Ledger and the collector use the isolated Arsene development PostgreSQL.
 The local stack no longer runs a PostgreSQL container or uses
 `.local-postgres/runtime.env`.
 
@@ -29,30 +127,37 @@ source .venv/bin/activate
 python -m pip install -e '.[dev,db,docs]'
 ```
 
-Configure `.env.dev` from `.env.dev.example`. Set `DATABASE_URL` to your native
-`home_budget` database on port 5432, `RABBITMQ_URL` to a local RabbitMQ user on
-port 5672, and `RECEIPT_SOURCE_ROOT` to your receipt folder. Use `.ocr_cache` for
-`HOME_BUDGET_OCR_CACHE`. URL-encode special characters in database and broker
-passwords. Keep secrets in the ignored `.env.dev` file.
+Configure `.env.dev` from `.env.dev.example` using the dedicated Arsene development
+credentials. The example uses PostgreSQL port 15432, RabbitMQ port 15673 and
+separate development/test databases and vhosts. Keep secrets outside Git.
+Use `.ocr_cache` on the Mac for `HOME_BUDGET_OCR_CACHE`; local cache storage does
+not mean the database runs locally. Preserve local HTTPS/Entra settings.
+Provision and verify the backend using KAN-137's infrastructure workflow before
+switching active application connections. Retain the native database and queued
+jobs until migration has been validated; do not silently redirect pending work.
 
-Start the installed Homebrew services and enable startup at login:
+Colima remains on the Mac for authentication only:
 
 ```bash
-brew services start postgresql@18
-brew services start rabbitmq
 brew services start colima
 ```
 
-Create `home_budget` if it does not exist:
+Initialize the isolated Arsene development database only after its services have
+been provisioned and `.env.dev` has been configured and checked using the KAN-137
+backend workflow. Do not create another native Mac application database.
+
+An intentional development reset uses:
 
 ```bash
-createdb -h 127.0.0.1 -p 5432 home_budget
+ledger --env-file .env.dev receipts services stop
+ledger --env-file .env.dev database rebuild --target arsene-dev --confirm home_budget_dev
 ```
 
-For a fresh database, initialize the application tables with
-`make dev-db-reset`. This command deletes existing application schemas and data;
-it is not part of the daily startup routine. It preserves source receipt files
-and OCR caches.
+This deletes application schemas and data only after the existing development
+guards verify the dedicated Arsene endpoint, role, database and environment
+marker. Source receipt files and caches remain. Queued jobs remain and may
+repopulate the database after services restart. `arsene-test` selects the separate
+`home_budget_test` database and requires `--confirm home_budget_test`.
 
 For Entra sign-in, configure the values in `.env.dev`, add
 `127.0.0.1 ledger-dev.brownrook.net` to `/etc/hosts`, and register
@@ -69,23 +174,40 @@ only once while the Caddy certificate volume is retained. Restart the browser
 after installation. See [network access](private-networking.md) for the proxy
 and identity boundaries.
 
-## Daily startup
+## Daily startup (after Arsene backend validation)
 
 Normally the infrastructure stays running. Check it with:
 
 ```bash
-brew services list
 colima status
-pg_isready -h localhost -p 5432
-rabbitmq-diagnostics ping
 docker ps
+ledger --env-file .env.dev receipts services status
 ```
 
-PostgreSQL and RabbitMQ run independently of Colima. Caddy and OAuth2 Proxy use
+The legacy Mac services run independently of Colima. Under the agreed
+architecture PostgreSQL and RabbitMQ run on Arsene. Caddy and OAuth2 Proxy use
 `restart: unless-stopped`. Run `make dev-up` if those containers are stopped or
 their configuration changes; it is not required for each editing session.
 
-Start Ledger from the working tree:
+Enable Ledger as a background service once:
+
+```bash
+make dev-web-start
+```
+
+The per-user LaunchAgent `com.brownrook.home-budget.web` starts at login and
+restarts after the process exits. Source changes still reload automatically.
+It runs while the Mac is awake and the user is logged in; sleep and shutdown
+make this local development site unavailable. Caddy and OAuth2 Proxy still
+require Colima. No terminal needs to remain open.
+
+Use `make dev-web-status` to inspect it, `make dev-web-logs` to follow its log,
+and `make dev-web-restart` after changing `.env.dev`. `make dev-web-stop` stops
+the service and disables automatic startup. These commands leave receipt workers
+and the collector alone.
+
+For a foreground debugging session, stop the background service first, then
+start Ledger from the working tree:
 
 ```bash
 make dev-web
@@ -104,8 +226,8 @@ curl http://localhost:8080/ledger/health
 Enable the OCR worker and result collector once:
 
 ```bash
-make dev-receipts-start
-make dev-receipts-status
+ledger --env-file .env.dev receipts services start
+ledger --env-file .env.dev receipts services status
 ```
 
 These LaunchAgents start at login, restart on exit, and read `.env.dev` whenever
@@ -115,11 +237,7 @@ foreground workers or collectors unless you deliberately want extra consumers.
 Queue receipts from one terminal:
 
 ```bash
-source .venv/bin/activate
-set -a
-source .env.dev
-set +a
-ledger receipts process --verbose
+ledger --env-file .env.dev receipts process --verbose
 ```
 
 The publisher exits after confirmed queue publication. The worker reads the
@@ -130,8 +248,8 @@ and remote Qwen inference are separate stages.
 Choose the number of background OCR workers and threads per worker:
 
 ```sh
-make dev-receipts-restart WORKERS=2 OCR_THREADS=4
-make dev-receipts-status
+ledger --env-file .env.dev receipts services restart --workers 2 --ocr-threads 4
+ledger --env-file .env.dev receipts services status
 ```
 
 This starts two independent RabbitMQ consumers and one collector. Each worker
@@ -146,7 +264,7 @@ worker with the engines' default thread settings.
 To reduce concurrency again:
 
 ```sh
-make dev-receipts-restart WORKERS=1
+ledger --env-file .env.dev receipts services restart --workers 1
 ```
 
 Extra worker agents are stopped and removed. RabbitMQ redelivers unacknowledged
@@ -157,11 +275,11 @@ Manage the background services with:
 
 | Command | Effect |
 | --- | --- |
-| `make dev-receipts-status` | Show worker and collector process status. |
-| `make dev-receipts-logs` | Follow all worker and collector log files; Ctrl+C stops only the viewer. |
-| `make dev-receipts-restart` | Restart all worker and collector services, reloading `.env.dev` and code. |
-| `make dev-receipts-stop` | Stop all worker and collector services and disable startup at login. |
-| `make dev-receipts-start` | Enable and start worker and collector services; safe to repeat. |
+| `ledger --env-file .env.dev receipts services status` | Show worker and collector process status. |
+| `ledger --env-file .env.dev receipts services logs` | Follow all worker and collector log files; Ctrl+C stops only the viewer. |
+| `ledger --env-file .env.dev receipts services restart` | Restart all worker and collector services, reloading `.env.dev` and code. |
+| `ledger --env-file .env.dev receipts services stop` | Stop all worker and collector services and disable startup at login. |
+| `ledger --env-file .env.dev receipts services start` | Enable and start worker and collector services; safe to repeat. |
 
 The agents are installed under `~/Library/LaunchAgents/` with labels
 `com.brownrook.home-budget.worker`, `com.brownrook.home-budget.worker-2`
@@ -342,7 +460,7 @@ edges can differ from exact start/end timestamps. Restart receipt services to
 load the signals. Apply the monitoring playbook to update the provisioned panel:
 
 ```bash
-make dev-receipts-restart
+ledger --env-file .env.dev receipts services restart
 ANSIBLE_CONFIG=ops/monitoring/ansible.cfg ansible-playbook \
   -i ops/monitoring/inventory/production.yml ops/monitoring/site.yml \
   --ask-become-pass
@@ -383,7 +501,13 @@ later database commit. Missing lineage events cannot be reconstructed by this
 report. No PostgreSQL datasource is added to Grafana by this change; the
 provisioned activity timeline uses Loki.
 
-### Prepare PostgreSQL TLS for a Grafana connection
+### Legacy Mac PostgreSQL monitoring (superseded by KAN-137)
+
+The following native PostgreSQL/mDNS setup documents the old Mac backend. Do not
+apply it as part of the Arsene development migration; it is retained for legacy
+rollback/reference only.
+
+#### Prepare PostgreSQL TLS for a Grafana connection
 
 Grafana is suitable for operational reports such as worker overlap, throughput,
 and failures. The Ledger UI should expose individual receipt status and history

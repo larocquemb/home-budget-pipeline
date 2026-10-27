@@ -56,6 +56,10 @@ def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
         'StandardErrorPath': str(root / '.local-services' / f'{name}.log'),
     }
 
+    if name == 'web':
+        config['ProgramArguments'] = ['/bin/bash', str(root / 'scripts/run_local_web.sh')]
+        config['EnvironmentVariables']['HOME_BUDGET_WEB_BACKGROUND'] = '1'
+
     if is_worker(name) and threads is not None:
         config['EnvironmentVariables']['HOME_BUDGET_SERVICE_OCR_THREADS'] = str(threads)
     return config

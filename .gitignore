@@ -165,3 +165,10 @@ k8s/secret.yaml
 
 # Private receipt model outputs and comparison reports.
 .model-evals/
+
+# Private KAN-137 backend credentials, client profiles and schema staging.
+/.dev-backend/
+/.env.dev.before-arsene
+
+# Generated local validation reports.
+/.validation/

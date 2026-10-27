@@ -80,13 +80,15 @@ dev-postgres-tls-prepare:
 
 help:
 	@echo "Model evaluation: make eval-models BASELINE=MODEL CANDIDATE=MODEL [EVAL_REPEATS=3]"
-	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
+	@echo "Development infrastructure: dev-up dev-down dev-cert-install"
+	@echo "Application operations: ledger --help (receipts, ocr-cache, database); see docs/local-development.md"
 	@echo "Local checks: check-local (unit tests, Python wheel, strict docs); build-local"
 	@echo "Local logs:  dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down"
 	@echo "Documentation: docs-build docs-serve"
 	@echo "Tests:       test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
-	@echo "Operations:  status otlp-demo enrich-products"
-	@echo "Receipts:    receipts-publish [NODE=name] [RECEIPT=relative/path.pdf] receipts-worker-test NODE=name"
+	@echo "Infrastructure status/demo: status otlp-demo"
+	@echo "Receipt infrastructure test: receipts-worker-test NODE=name"
+	@echo "Legacy application wrappers (prefer ledger): dev-db-reset dev-receipts-* receipts-publish enrich-products"
 	@echo "Deployment:  deploy-k3s k3s-config-check k3s-config-apply (uses .env.k3s)"
 	@echo "PostgreSQL:  postgres-config-check postgres-config-apply postgres-password-rotate"
 	@echo "Monitoring:  monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare"
@@ -156,8 +158,39 @@ dev-web:
 	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
 	@bash scripts/run_local_web.sh
 
+.PHONY: dev-web-start dev-web-stop dev-web-restart dev-web-status dev-web-logs
+dev-web-start:
+	@$(PYTHON) scripts/web_service.py start
+dev-web-stop:
+	@$(PYTHON) scripts/web_service.py stop
+dev-web-restart:
+	@$(PYTHON) scripts/web_service.py restart
+dev-web-status:
+	@$(PYTHON) scripts/web_service.py status
+dev-web-logs:
+	@$(PYTHON) scripts/web_service.py logs
+
 dev-db-reset:
-	@./scripts/rebuild_local_database.sh .env.dev
+	@$(PYTHON) scripts/development_backend.py reset --confirm "$(CONFIRM)"
+
+.PHONY: dev-backend-credentials dev-backend-configure dev-backend-check dev-backend-bootstrap dev-test-db-bootstrap dev-test-db-reset
+dev-backend-credentials:
+	@$(PYTHON) scripts/development_backend.py credentials
+
+dev-backend-configure:
+	@$(PYTHON) scripts/development_backend.py configure $(if $(filter 1,$(APPLY)),--apply,)
+
+dev-backend-check:
+	@$(PYTHON) scripts/development_backend.py check
+
+dev-backend-bootstrap:
+	@$(PYTHON) scripts/development_backend.py bootstrap
+
+dev-test-db-bootstrap:
+	@$(PYTHON) scripts/development_backend.py bootstrap --test
+
+dev-test-db-reset:
+	@$(PYTHON) scripts/development_backend.py reset --test --confirm "$(CONFIRM)"
 
 dev-cert-install:
 	@mkdir -p .dev-certs

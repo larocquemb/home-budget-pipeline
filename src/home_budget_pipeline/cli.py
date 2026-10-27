@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -47,10 +48,23 @@ def _program_name() -> str:
 
 def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description="BrownRook Ledger operations.")
+    parser.add_argument("--env-file", help="Load explicit settings before command defaults, e.g. .env.dev; place before the command.")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    development = commands.add_parser("development", help="Configure and validate the isolated Arsene development backends.")
+    development.add_argument("action", choices=("credentials", "configure", "check", "bootstrap"))
+    development.add_argument("--apply", action="store_true", help="Apply connection changes for configure; default is a preview.")
+    development.add_argument("--test", action="store_true", help="Bootstrap the isolated test database.")
+    development.add_argument("--secrets-file", help="Private backend credential file; default .dev-backend/secrets.yml.")
+    development.set_defaults(handler=_development_backend)
 
     receipts = commands.add_parser("receipts", help="Process receipt evidence.")
     receipt_commands = receipts.add_subparsers(dest="receipt_command", required=True)
+    services = receipt_commands.add_parser("services", help="Control native Mac receipt workers and collector.")
+    services.add_argument("action", choices=("start", "stop", "restart", "status", "logs"))
+    services.add_argument("--workers", type=int)
+    services.add_argument("--ocr-threads", type=int)
+    services.set_defaults(handler=_receipt_services)
     process = receipt_commands.add_parser("process", help="Queue the receipt backlog through RabbitMQ.")
     process.add_argument("receipt_root", nargs="?", default=_receipt_root_default())
     process.add_argument("--workers", type=int, help="Deprecated; concurrency is controlled by RabbitMQ consumers.")
@@ -116,6 +130,9 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
 
     ocr_cache = commands.add_parser("ocr-cache", help="Manage OCR cache files through RabbitMQ workers.")
     cache_commands = ocr_cache.add_subparsers(dest="cache_command", required=True)
+    clean = cache_commands.add_parser("clean", help="Empty the local cache, retaining prior outputs privately; stops receipt services.")
+    clean.add_argument("--local", action="store_true", required=True, help="Operate only on the repository's native Mac cache.")
+    clean.set_defaults(handler=_clean_local_cache)
     rebuild = cache_commands.add_parser("rebuild", help="Queue cache rebuilds without replacing saved extraction results.")
     rebuild.add_argument("receipt_root", nargs="?", default=_receipt_root_default())
     rebuild.add_argument(
@@ -140,6 +157,10 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
 
     database = commands.add_parser("database", help="Manage the PostgreSQL database.")
     database_commands = database.add_subparsers(dest="database_command", required=True)
+    rebuild_db = database_commands.add_parser("rebuild", help="Delete and recreate application schemas on an explicit development target.")
+    rebuild_db.add_argument("--target", choices=("arsene-dev", "arsene-test"), required=True)
+    rebuild_db.add_argument("--confirm", default="", help="Arsene requires the exact development database name.")
+    rebuild_db.set_defaults(handler=_rebuild_database)
     setup = database_commands.add_parser("setup", help="Initialize or upgrade the database schema.")
     setup.add_argument(
         "--database-url",
@@ -149,6 +170,26 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     )
     setup.set_defaults(handler=_setup_database)
     return parser
+
+
+def _receipt_services(args):
+    from .local_operations import run_receipt_services
+    return run_receipt_services(args)
+
+
+def _clean_local_cache(args):
+    from .local_operations import clean_local_cache
+    return clean_local_cache(args)
+
+
+def _rebuild_database(args):
+    from .local_operations import rebuild_database
+    return rebuild_database(args)
+
+
+def _development_backend(args):
+    from .local_operations import development_backend
+    return development_backend(args)
 
 
 def _retry_receipt(args: argparse.Namespace) -> int:
@@ -249,9 +290,26 @@ def _setup_database(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    from contextlib import ExitStack
+    from .cli_environment import environment_file
+    # Load settings before building parsers: argument defaults read the environment.
+    selector = argparse.ArgumentParser(add_help=False)
+    selector.add_argument("--env-file")
+    selected, _ = selector.parse_known_args(argv)
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(environment_file(selected.env_file))
+        except (ValueError, OSError) as exc:
+            print(str(exc) if isinstance(exc, ValueError) else
+                  f"Cannot load Ledger settings ({type(exc).__name__})", file=sys.stderr)
+            return 2
+        return _main(argv)
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
     args = build_parser(_program_name()).parse_args(argv)
     receipt_command = getattr(args, "receipt_command", "")
-    if receipt_command in {"consume", "collect"}:
+    if receipt_command in {"consume", "collect", "services"}:
         return args.handler(args)  # LaunchAgents already capture their output.
     service = "enrichment" if receipt_command == "enrich" else (
         "publisher" if receipt_command in {"process", "publish", "reprocess"} or args.command == "ocr-cache" else "cli"

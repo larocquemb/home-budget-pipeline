@@ -8,6 +8,19 @@ import pytest
 
 
 @pytest.fixture
+def arsene_development_environment():
+    """Generate synthetic dev credentials in memory; never embed credential URLs."""
+    import importlib.util
+    import sys
+    path = Path(__file__).resolve().parents[1] / 'scripts/development_backend.py'
+    sys.path.insert(0, str(path.parent))
+    spec = importlib.util.spec_from_file_location('test_development_helper', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.client_values({key: 'a' * 64 for key in module.SECRET_KEYS})
+
+
+@pytest.fixture
 def offline_gpu_sampling(monkeypatch):
     """Model unit tests exercise summaries without polling production telemetry.
 
