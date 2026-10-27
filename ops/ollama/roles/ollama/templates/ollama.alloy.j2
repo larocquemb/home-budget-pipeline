@@ -6,20 +6,7 @@ loki.source.journal "ollama" {
     host = "{{ inventory_hostname }}",
     node = "{{ inventory_hostname }}",
     service = "ollama",
-    environment = "production",
-    collection = "host-journal",
-  }
-  forward_to = [loki.process.ollama.receiver]
-}
-
-loki.source.journal "ollama_development" {
-  matches = "_SYSTEMD_UNIT=ollama-development.service"
-  max_age = "1h"
-  labels = {
-    host = "{{ inventory_hostname }}",
-    node = "{{ inventory_hostname }}",
-    service = "ollama-development",
-    environment = "development",
+    environment = "shared",
     collection = "host-journal",
   }
   forward_to = [loki.process.ollama.receiver]

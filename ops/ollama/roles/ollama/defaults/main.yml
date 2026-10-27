@@ -14,11 +14,5 @@ ollama_monitoring_key_source: "{{ ollama_monitoring_pki_dir }}/leafs/alloy-loki-
 # Empty means use firewalld's default zone; override for a dedicated LAN zone.
 ollama_firewall_zone: ""
 
-# Production retains its existing listener; development gets its own GPU runner.
-ollama_development_port: 11436
 ollama_models_directory: /home/ollama/models
 ollama_binary: /usr/local/bin/ollama
-ollama_cpu_affinity: "0-7"
-ollama_cpu_quota: "600%"
-ollama_cpu_memory_high: 32G
-ollama_cpu_memory_max: 40G

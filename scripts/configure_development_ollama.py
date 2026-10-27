@@ -7,8 +7,8 @@ import re
 import tempfile
 
 VALUES = {
-    "OLLAMA_HOST": "http://192.168.2.201:11436",
-    "OLLAMA_BASE_URL": "http://192.168.2.201:11436",
+    "OLLAMA_HOST": "http://192.168.2.201:11434",
+    "OLLAMA_BASE_URL": "http://192.168.2.201:11434",
     "OLLAMA_GPU_METRICS_URL": "http://192.168.2.201:11435/gpu",
 }
 
@@ -40,7 +40,7 @@ def main():
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
-    print("Development Ollama configured on Arsene port 11436; restart existing worker processes")
+    print("Development Ollama configured on Arsene port 11434; restart existing worker processes")
 
 if __name__ == "__main__":
     main()

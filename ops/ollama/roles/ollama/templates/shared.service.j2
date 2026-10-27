@@ -1,6 +1,6 @@
-# Managed by Git + Ansible. Independent GPU service for local development.
+# Managed by Git + Ansible. Shared GPU service.
 [Unit]
-Description=Development Ollama RTX 3090 inference
+Description=Shared Ollama RTX 3090 inference
 After=network-online.target ollama-access.service
 Requires=ollama-access.service
 Wants=network-online.target
@@ -8,7 +8,7 @@ Wants=network-online.target
 [Service]
 User={{ ollama_service_user.stdout }}
 ExecStart={{ ollama_binary }} serve
-Environment="OLLAMA_HOST={{ ollama_listen_address }}:{{ ollama_development_port }}"
+Environment="OLLAMA_HOST=0.0.0.0:{{ ollama_port }}"
 Environment="OLLAMA_MODELS={{ ollama_models_directory }}"
 Environment="OLLAMA_MAX_LOADED_MODELS=1"
 Environment="OLLAMA_NUM_PARALLEL=1"

@@ -52,13 +52,13 @@ def test_production_callers_use_shared_gpu_with_bounded_timeouts():
             continue
         env = {row["name"]: row.get("value") for row in worker["spec"]["template"]["spec"]["containers"][0]["env"]}
         assert "OLLAMA_NUM_THREADS" not in env
-        assert env["OLLAMA_BASE_URL"] == "http://192.168.2.201:11436"
+        assert env["OLLAMA_BASE_URL"] == "http://192.168.2.201:11434"
         assert env.get("OLLAMA_TIMEOUT_SECONDS") == ("300" if worker["metadata"]["name"] == "model-worker-qwen" else None)
         assert env["COMPARISON_TIMEOUT_SECONDS"] == "180"
         assert worker["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] > 2 * 300
     cron = yaml.safe_load((root / "k8s/product-enrichment-cronjob.yaml").read_text())
     env = {row["name"]: row.get("value") for row in cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert "OLLAMA_NUM_THREADS" not in env
-    assert env["OLLAMA_BASE_URL"] == "http://192.168.2.201:11436"
+    assert env["OLLAMA_BASE_URL"] == "http://192.168.2.201:11434"
     assert env["OLLAMA_TIMEOUT_SECONDS"] == "300"
     assert env["COMPARISON_TIMEOUT_SECONDS"] == "180"

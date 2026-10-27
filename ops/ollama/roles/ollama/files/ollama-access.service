@@ -1,6 +1,6 @@
 [Unit]
 Description=Private Ollama source restrictions
-Before=ollama.service ollama-development.service ollama-gpu-telemetry.service
+Before=ollama.service ollama-gpu-telemetry.service
 After=network-pre.target
 
 [Service]

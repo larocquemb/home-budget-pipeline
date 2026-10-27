@@ -1,5 +1,5 @@
 ---
-- name: Configure production CPU and development GPU Ollama services
+- name: Configure shared GPU Ollama on the default port
   hosts: ollama_hosts
   become: true
   roles:

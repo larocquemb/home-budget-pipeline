@@ -1,3 +1,9 @@
+> **Migration note:** The current Ansible role is being changed to one shared
+> GPU Ollama service on port 11434. The CPU/GPU split described below is
+> historical and does not describe the intended new configuration. Complete
+> the coordinated client migration before relying on the new endpoint. See
+> `ops/ollama/README.md` for the new service description.
+
 # Shared RTX 3090 inference (KAN-135)
 
 Receipt inference, enrichment, local development, and Jupyter use the existing
