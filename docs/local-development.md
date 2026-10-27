@@ -7,8 +7,8 @@ PostgreSQL/RabbitMQ configuration is a legacy setup, not an additional supported
 development backend. On October 27 the services were provisioned, both databases initialized,
 and this Mac's `.env.dev` switched to Arsene. PostgreSQL role/database and broker
 vhost isolation checks pass. The old Mac configuration and data remain retained.
-Work MacBook acceptance, background Python LAN access and host recovery checks
-remain pending.
+The m4pro Mac mini workflow has been validated; work MacBook validation was
+waived. Background Python LAN access and host recovery checks remain pending.
 
 ## Command interface
 
@@ -226,7 +226,7 @@ curl http://localhost:8080/ledger/health
 
 ## macOS Local Network permission and foreground operation
 
-On this M4 Pro, native CLI/foreground Python reaches Arsene, while Python
+On the m4pro Mac mini, native CLI/foreground Python reaches Arsene, while Python
 LaunchAgents currently fail with `EHOSTUNREACH` / “No route to host”. This was
 reproduced using a separate agent probe, so it is not a PostgreSQL routing or
 credential failure. Python's existing Local Network permission was refreshed
