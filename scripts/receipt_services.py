@@ -56,6 +56,18 @@ def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
         'StandardErrorPath': str(root / '.local-services' / f'{name}.log'),
     }
 
+    # Associate agents with their actual Python.app so macOS can apply its
+    # existing Local Network permission (Apple TN3179). Terminal/SSH processes
+    # are treated differently from LaunchAgents by local-network privacy.
+    interpreter = (root / '.venv/bin/python').resolve()
+    for parent in interpreter.parents:
+        info = parent / 'Resources/Python.app/Contents/Info.plist'
+        if info.is_file():
+            bundle_id = plistlib.loads(info.read_bytes()).get('CFBundleIdentifier')
+            if bundle_id:
+                config['AssociatedBundleIdentifiers'] = [bundle_id]
+            break
+
     if name == 'web':
         config['ProgramArguments'] = ['/bin/bash', str(root / 'scripts/run_local_web.sh')]
         config['EnvironmentVariables']['HOME_BUDGET_WEB_BACKGROUND'] = '1'

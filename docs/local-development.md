@@ -4,10 +4,11 @@ Application Python, receipt workers and local HTTPS/Entra run on the Mac.
 Development PostgreSQL, RabbitMQ and Neo4j belong on isolated Arsene Podman
 services (KAN-137). Production stays separate in Kubernetes. The Mac's native
 PostgreSQL/RabbitMQ configuration is a legacy setup, not an additional supported
-development backend. Migration is incomplete: on October 27 the checkout still
-selected the native services and Arsene ports 15432/15673/17687 were not listening.
-Do not switch a running application to those endpoints until provisioning and
-connectivity validation succeed.
+development backend. On October 27 the services were provisioned, both databases initialized,
+and this Mac's `.env.dev` switched to Arsene. PostgreSQL role/database and broker
+vhost isolation checks pass. The old Mac configuration and data remain retained.
+Work MacBook acceptance, background Python LAN access and host recovery checks
+remain pending.
 
 ## Command interface
 
@@ -22,6 +23,9 @@ Select settings explicitly with `ledger --env-file .env.dev ...`. Place
 `--env-file` before the application command. Without it, Ledger uses the existing
 process environment; it never silently selects development or production settings.
 Native service controls always use this repository's `.env.dev`.
+Run `ledger --env-file .env.dev web serve` for foreground native development with
+code reload. `ledger --env-file .env.dev web services ...` controls the optional
+Mac LaunchAgent, subject to the permission limitation below.
 
 Hostnames do not define an environment. Current endpoints are:
 
@@ -105,8 +109,8 @@ retain the old database, broker and cache evidence until their disposition is re
 
 | Component | Local runtime | Address |
 | --- | --- | --- |
-| Development PostgreSQL | Arsene Podman service (provisioning pending) | `arsene.brownrook.net:15432` |
-| Development RabbitMQ | Arsene Podman service (provisioning pending) | `arsene.brownrook.net:15673` |
+| Development PostgreSQL | Arsene Podman service | `arsene.brownrook.net:15432` |
+| Development RabbitMQ | Arsene Podman service | `arsene.brownrook.net:15673` |
 | RabbitMQ Management | Arsene development management | `http://arsene.brownrook.net:15674` |
 | Caddy | Colima container; HTTPS entry point | `https://ledger-dev.brownrook.net` |
 | OAuth2 Proxy | Colima container; Microsoft Entra sign-in | Behind Caddy |
@@ -174,7 +178,7 @@ only once while the Caddy certificate volume is retained. Restart the browser
 after installation. See [network access](private-networking.md) for the proxy
 and identity boundaries.
 
-## Daily startup (after Arsene backend validation)
+## Daily startup
 
 Normally the infrastructure stays running. Check it with:
 
@@ -192,7 +196,7 @@ their configuration changes; it is not required for each editing session.
 Enable Ledger as a background service once:
 
 ```bash
-make dev-web-start
+ledger --env-file .env.dev web services start
 ```
 
 The per-user LaunchAgent `com.brownrook.home-budget.web` starts at login and
@@ -201,8 +205,8 @@ It runs while the Mac is awake and the user is logged in; sleep and shutdown
 make this local development site unavailable. Caddy and OAuth2 Proxy still
 require Colima. No terminal needs to remain open.
 
-Use `make dev-web-status` to inspect it, `make dev-web-logs` to follow its log,
-and `make dev-web-restart` after changing `.env.dev`. `make dev-web-stop` stops
+Use `ledger --env-file .env.dev web services status` to inspect it, `ledger --env-file .env.dev web services logs` to follow its log,
+and `ledger --env-file .env.dev web services restart` after changing `.env.dev`. `ledger --env-file .env.dev web services stop` stops
 the service and disables automatic startup. These commands leave receipt workers
 and the collector alone.
 
@@ -210,7 +214,7 @@ For a foreground debugging session, stop the background service first, then
 start Ledger from the working tree:
 
 ```bash
-make dev-web
+ledger --env-file .env.dev web serve
 ```
 
 Leave that terminal open. Source changes reload automatically. Open
@@ -220,6 +224,43 @@ connect to the upstream server usually means Ledger is not running; check:
 ```bash
 curl http://localhost:8080/ledger/health
 ```
+
+## macOS Local Network permission and foreground operation
+
+On this M4 Pro, native CLI/foreground Python reaches Arsene, while Python
+LaunchAgents currently fail with `EHOSTUNREACH` / “No route to host”. This was
+reproduced using a separate agent probe, so it is not a PostgreSQL routing or
+credential failure. Python's existing Local Network permission was refreshed
+with Paul's approval, and remained enabled; the agent failure persisted.
+
+Agents are associated with the actual framework interpreter's Python.app bundle
+when available, as recommended by [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+This metadata alone did not resolve the current Homebrew Python background
+failure. Do not disable system privacy controls or claim LaunchAgent connectivity
+is verified. Foreground web operation, local HTTPS/Entra and graph reads were
+verified using the new Arsene development backends.
+
+Use separate terminals when background agents are affected:
+
+```bash
+ledger --env-file .env.dev web services stop
+ledger --env-file .env.dev web serve
+```
+
+For receipt work, `ledger --env-file .env.dev receipts consume` runs a foreground
+worker, and `ledger --env-file .env.dev receipts collect` runs the collector in
+another terminal. Both use the explicit Arsene development settings. Keep these
+terminals open while processing. Do not start background duplicates.
+
+Replay retained graph evidence without model/search calls:
+
+```bash
+ledger --env-file .env.dev development replay --evidence /private/path/evidence.jsonl --output /private/path/report.json
+```
+
+The report distinguishes native RSS from actual Linux cgroup limits when run
+under a capped Linux validation service. A fixture with no collaboration runs
+cannot validate historical run selection or model recommendation provenance.
 
 ## Process receipts in the background
 
@@ -354,7 +395,7 @@ other Ledger CLI commands, the local web server, and Alloy itself. Enrichment
 and CLI output remains visible in the terminal and is also captured to private
 log files when `HOME_BUDGET_LOCAL_LOG_DIR` is configured by the telemetry
 installer. Enrichment logs identify the receipt, selected items, per-item
-progress, search/AI stages, completion, and failures. Restart `make dev-web`
+progress, search/AI stages, completion, and failures. Restart `ledger --env-file .env.dev web serve`
 once to enable capture of web access and error logs after updating the wrapper.
 Production Kubernetes queries do not select local runs.
 

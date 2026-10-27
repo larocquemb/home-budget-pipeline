@@ -52,11 +52,22 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     development = commands.add_parser("development", help="Configure and validate the isolated Arsene development backends.")
-    development.add_argument("action", choices=("credentials", "configure", "check", "bootstrap"))
+    development.add_argument("action", choices=("credentials", "configure", "check", "bootstrap", "replay"))
     development.add_argument("--apply", action="store_true", help="Apply connection changes for configure; default is a preview.")
     development.add_argument("--test", action="store_true", help="Bootstrap the isolated test database.")
     development.add_argument("--secrets-file", help="Private backend credential file; default .dev-backend/secrets.yml.")
+    development.add_argument("--evidence", help="Private saved graph evidence for replay; no model/search calls.")
+    development.add_argument("--run", default="", help="Historical collaboration run to select during replay.")
+    development.add_argument("--output", help="Private replay report path.")
     development.set_defaults(handler=_development_backend)
+
+    web = commands.add_parser("web", help="Control the native development web application.")
+    web_commands = web.add_subparsers(dest="web_command", required=True)
+    web_serve = web_commands.add_parser("serve", help="Run the native development web server in this terminal with code reload.")
+    web_serve.set_defaults(handler=_serve_web)
+    web_services = web_commands.add_parser("services", help="Manage the Mac web LaunchAgent.")
+    web_services.add_argument("action", choices=("start", "stop", "restart", "status", "logs"))
+    web_services.set_defaults(handler=_web_services)
 
     receipts = commands.add_parser("receipts", help="Process receipt evidence.")
     receipt_commands = receipts.add_subparsers(dest="receipt_command", required=True)
@@ -190,6 +201,16 @@ def _rebuild_database(args):
 def _development_backend(args):
     from .local_operations import development_backend
     return development_backend(args)
+
+
+def _web_services(args):
+    from .local_operations import run_web_services
+    return run_web_services(args)
+
+
+def _serve_web(args):
+    from .local_operations import serve_web
+    return serve_web(args)
 
 
 def _retry_receipt(args: argparse.Namespace) -> int:

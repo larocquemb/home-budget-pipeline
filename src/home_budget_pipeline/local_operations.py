@@ -135,6 +135,18 @@ def rebuild_database(args):
 
 
 def development_backend(args):
+    if args.action == 'replay':
+        if not args.evidence or args.apply or args.test or args.secrets_file:
+            raise ValueError('development replay requires --evidence and does not accept configuration/bootstrap options')
+        command = [sys.executable, str(ROOT / 'scripts/replay_development_graph.py'),
+                   '--env-file', str(_env_path(args)), '--evidence', args.evidence]
+        if args.run:
+            command.extend(['--run', args.run])
+        if args.output:
+            command.extend(['--output', args.output])
+        return subprocess.run(command, cwd=ROOT).returncode
+    if args.evidence or args.run or args.output:
+        raise ValueError('--evidence, --run and --output are only valid with development replay')
     if args.apply and args.action != 'configure':
         raise ValueError('--apply is only valid with development configure')
     if args.test and args.action != 'bootstrap':
@@ -148,3 +160,18 @@ def development_backend(args):
     if args.secrets_file:
         command.extend(['--secrets-file', args.secrets_file])
     return subprocess.run(command, cwd=ROOT).returncode
+
+
+def run_web_services(args):
+    if _env_path(args) != ROOT / '.env.dev':
+        raise ValueError('Native web services use the repository .env.dev; select that file')
+    return subprocess.run([sys.executable, str(ROOT / 'scripts/web_service.py'), args.action],
+                          cwd=ROOT).returncode
+
+
+def serve_web(args):
+    if _env_path(args) != ROOT / '.env.dev':
+        raise ValueError('Native development web uses the repository .env.dev; select that file')
+    env = {**os.environ, 'HOME_BUDGET_WEB_BACKGROUND': '0'}
+    return subprocess.run(['bash', str(ROOT / 'scripts/run_local_web.sh')],
+                          cwd=ROOT, env=env).returncode

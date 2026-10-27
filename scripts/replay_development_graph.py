@@ -16,6 +16,20 @@ from home_budget_pipeline import receipt_graph as graph
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def memory_enforcement():
+    if sys.platform != 'linux':
+        return {'memory_enforcement': 'native process observation; not a Linux cgroup limit'}
+    for line in Path('/proc/self/cgroup').read_text().splitlines():
+        if line.startswith('0::'):
+            directory = Path('/sys/fs/cgroup') / line[3:].lstrip('/')
+            maximum = (directory / 'memory.max').read_text().strip()
+            peak = directory / 'memory.peak'
+            return {'memory_enforcement': 'Linux cgroup v2' if maximum != 'max' else 'Linux cgroup v2; no memory cap',
+                    'cgroup_memory_max_bytes': int(maximum) if maximum != 'max' else None,
+                    'cgroup_memory_peak_bytes': int(peak.read_text()) if peak.exists() else None}
+    return {'memory_enforcement': 'Linux memory cap unavailable; RSS observation only'}
+
+
 def read_export(path):
     """Never buffer the receipt's many repeated collaboration JSON payloads."""
     with path.open() as source:
@@ -53,6 +67,8 @@ def main():
         sha = evidence['receipt']['source_sha256']
         built = graph.build(evidence)
     counts = {'nodes': len(built['nodes']), 'edges': len(built['edges'])}
+    counts['catalogue_items'] = sum(n['kind'] == 'Item' for n in built['nodes'])
+    counts['collaboration_runs'] = sum(n['kind'] == 'Collaboration' for n in built['nodes'])
     selected = next((n for n in built['nodes'] if n['kind'] == 'Collaboration'
                      and n['properties'].get('run_uuid') == args.run), None) if args.run else None
     if args.run and not selected:
@@ -71,12 +87,14 @@ def main():
     from home_budget_pipeline.web import receipt_graph as web
     started = time.monotonic()
     result = web.receipt(sha, perspective='story', offset=0, limit=100, item_id=item_id, run_id=run_id)
+    lineage = web.receipt(sha, perspective='lineage', offset=0, limit=100)
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     report = {**counts, 'source_sha': sha, 'projection_seconds': build_seconds,
               'story_seconds': time.monotonic() - started, 'selected_nodes': len(result['nodes']),
               'selected_edges': len(result['edges']), 'items': len(result['items']), 'runs': len(result['runs']),
+              'lineage_nodes': len(lineage['nodes']), 'lineage_total_nodes': lineage['total_nodes'],
               'peak_rss_bytes': peak if sys.platform == 'darwin' else peak * 1024,
-              'memory_enforcement': 'native process observation; not a Linux cgroup limit',
+              **memory_enforcement(),
               'projection_version': graph.VERSION, 'backend': 'isolated Arsene development Neo4j'}
     args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(args.output, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
