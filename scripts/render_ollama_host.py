@@ -15,11 +15,9 @@ values.update(ollama_service_user={"stdout": "daemon"}, ollama_binary="/usr/bin/
 output = args.output.resolve()
 output.mkdir(parents=True, exist_ok=True)
 env = Environment(undefined=StrictUndefined)
-for source, dest in [("listen.conf.j2", "production.conf"),
-                     ("development.service.j2", "ollama-development.service"),
+for source, dest in [("shared.service.j2", "ollama.service"),
                      ("ollama-access.nft.j2", "ollama-access.nft")]:
     (output / dest).write_text(env.from_string((role / "templates" / source).read_text()).render(values))
-(output / "ollama.service").write_text("[Service]\nUser=daemon\nExecStart=/usr/bin/true\n" + (output / "production.conf").read_text())
 # Native unit verification checks ordering dependencies as well as directives.
 (output / "ollama-access.service").write_text((role / "files/ollama-access.service").read_text())
 print(f"Rendered Ollama configuration to {output}")

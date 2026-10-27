@@ -19,4 +19,4 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y nftables
       - run: python scripts/render_ollama_host.py /tmp/ollama-rendered
       - run: sudo nft --check --file /tmp/ollama-rendered/ollama-access.nft
-      - run: systemd-analyze verify /tmp/ollama-rendered/ollama.service /tmp/ollama-rendered/ollama-development.service /tmp/ollama-rendered/ollama-access.service
+      - run: systemd-analyze verify /tmp/ollama-rendered/ollama.service /tmp/ollama-rendered/ollama-access.service
