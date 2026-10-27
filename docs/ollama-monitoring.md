@@ -37,18 +37,18 @@ cannot measure token throughput for arbitrary clients.
 ## Review and apply
 
 The operations commands run on the Mac. Use the existing private
-`.env.monitoring` and Brown Rook PKI identity. The Ollama wrapper now loads that
-file to obtain `MONITORING_PKI_DIR`. It defaults to the existing trusted
+`.env.monitoring` and Brown Rook PKI identity. The Ollama playbook reads `MONITORING_PKI_DIR` from the environment. It defaults to the existing trusted
 `alloy-loki-client` identity; source paths can be overridden in inventory if a
 separate client certificate is issued for Arsene. Certificate keys never enter
 Git and are installed root:alloy mode 0640.
 
 ```bash
-make ollama-gitops-syntax monitoring-gitops-syntax
-make ollama-gitops-check
-make ollama-gitops-apply
-make monitoring-gitops-check
-make monitoring-gitops-apply
+cd /Users/paul/Developer/brownrook/brownrook-infra
+set -a
+source /Users/paul/Developer/home-budget-pipeline/.env.monitoring
+set +a
+ansible-playbook ansible/playbooks/ollama.yml --check --ask-become-pass
+ansible-playbook ansible/playbooks/ollama.yml --ask-become-pass
 ```
 
 Check/apply prompts for the target host's sudo password. Monitoring apply also
@@ -112,11 +112,10 @@ run `sudo systemctl disable --now alloy` on Arsene. The existing `/gpu` endpoint
 and local Ollama journal remain independent of forwarding.
 
 
-## Separate production and development services
+## Shared GPU Ollama service
 
-See [the CPU/GPU development runbook](ollama-cpu-gpu-development.md).
-Production retains port 11434; the new development GPU service uses 11436.
-Service/model metrics now include `workload="production"` or
-`workload="development"`. Development logs use `service="ollama-development"`
-and `environment="development"`; production labels remain unchanged.
-The dashboard's host GPU panels still include every workload, including Jupyter.
+The service on port 11434 handles production and development requests. The
+helper reports a single service and its loaded models; it cannot attribute
+resource usage separately to production and development clients. Logs use
+`service="ollama"` and `environment="shared"`. GPU metrics include all
+workloads on the host, including Jupyter.
