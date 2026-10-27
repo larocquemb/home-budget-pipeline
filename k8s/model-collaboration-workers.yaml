@@ -54,7 +54,7 @@ spec:
         - name: OLLAMA_TIMEOUT_SECONDS
           value: "300"
         - name: OLLAMA_BASE_URL
-          value: http://192.168.2.201:11436
+          value: http://192.168.2.201:11434
         - name: OLLAMA_GPU_METRICS_URL
           value: http://192.168.2.201:11435/gpu
         - name: GPU_SAMPLE_INTERVAL_SECONDS
@@ -147,7 +147,7 @@ spec:
         - name: OCR_ARTIFACT_URI_PREFIX
           value: pvc://home-budget/receipts/derived/ocr-cache
         - name: OLLAMA_BASE_URL
-          value: http://192.168.2.201:11436
+          value: http://192.168.2.201:11434
         - name: OLLAMA_GPU_METRICS_URL
           value: http://192.168.2.201:11435/gpu
         - name: GPU_SAMPLE_INTERVAL_SECONDS
@@ -246,7 +246,7 @@ spec:
         - name: OCR_ARTIFACT_URI_PREFIX
           value: pvc://home-budget/receipts/derived/ocr-cache
         - name: OLLAMA_BASE_URL
-          value: http://192.168.2.201:11436
+          value: http://192.168.2.201:11434
         - name: OLLAMA_GPU_METRICS_URL
           value: http://192.168.2.201:11435/gpu
         - name: GPU_SAMPLE_INTERVAL_SECONDS
@@ -345,7 +345,7 @@ spec:
         - name: OCR_ARTIFACT_URI_PREFIX
           value: pvc://home-budget/receipts/derived/ocr-cache
         - name: OLLAMA_BASE_URL
-          value: http://192.168.2.201:11436
+          value: http://192.168.2.201:11434
         - name: OLLAMA_GPU_METRICS_URL
           value: http://192.168.2.201:11435/gpu
         - name: GPU_SAMPLE_INTERVAL_SECONDS

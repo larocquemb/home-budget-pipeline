@@ -1,6 +1,0 @@
----
-- name: Configure production CPU and development GPU Ollama services
-  hosts: ollama_hosts
-  become: true
-  roles:
-    - ollama

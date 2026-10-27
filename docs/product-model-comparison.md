@@ -143,21 +143,22 @@ finds no events, check log collection before rerunning the experiment.
 On Arsene, inspect the listener:
 
 ```sh
-ss -ltnp | grep 11436
+ss -ltnp | grep 11434
 ```
 
 The job must reach the service from Kubernetes. Manage Arsene's listener and
 source-restricted firewalld rules through the Git-controlled Ansible playbook:
 
 ```sh
-make ollama-gitops-check
-make ollama-gitops-apply
+cd /Users/paul/Developer/brownrook/brownrook-infra
+ansible-playbook ansible/playbooks/ollama.yml --check --ask-become-pass
+ansible-playbook ansible/playbooks/ollama.yml --ask-become-pass
 ```
 
-Run these Make commands on your Mac. The role configures the shared GPU service at
-`192.168.2.201:11436`; when firewalld is active it allows the private LAN and K3s
+Run the playbook from brownrook-infra on your Mac. The role configures the shared GPU service at
+`192.168.2.201:11434`; when firewalld is active it allows the private LAN and K3s
 pod network in the default zone. For a dedicated LAN zone, set
-`ollama_firewall_zone` in `ops/ollama/inventory/production.yml`. Other firewall
+`ollama_firewall_zone` in the `brownrook-infra` Ollama inventory. Other firewall
 implementations require their own managed rule. Keep the unauthenticated endpoint
 on the private network. Check reachability from your Mac before running the job:
 
@@ -526,7 +527,7 @@ run sequentially and keep a requested model loaded for five minutes after each
 call to reuse it across stages; Ollama manages replacement when another model
 is requested. The managed Ollama host
 limits loaded models and parallel requests to one. Apply the updated host role
-with `make ollama-gitops-check` / `make ollama-gitops-apply`. No new replica count or
+with `ansible-playbook ansible/playbooks/ollama.yml --check --ask-become-pass` / `ansible-playbook ansible/playbooks/ollama.yml --ask-become-pass`. No new replica count or
 worker CPU allocation is required.
 
 For different context sizes of the same Qwen model, set `RECEIPT_MODEL_PROFILES`

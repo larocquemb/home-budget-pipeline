@@ -189,15 +189,6 @@ cp "$validation_root/alloy/loki-client.crt" \
 cp "$validation_root/alloy/loki-client.crt" "$validation_root/alloy/tls/ca.crt"
 cp "$validation_root/alloy/loki-client.crt" "$validation_root/alloy/tls/client.crt"
 cp "$validation_root/alloy/loki-client.key" "$validation_root/alloy/tls/client.key"
-"$validation_python" - "$validation_root/alloy/ollama.alloy" <<'PY'
-from pathlib import Path
-import sys
-from jinja2 import Environment, StrictUndefined
-source = Path('ops/ollama/roles/ollama/templates/ollama.alloy.j2').read_text()
-rendered = Environment(undefined=StrictUndefined).from_string(source).render(
-    inventory_hostname='arsene', ollama_monitoring_host='monitoring.idc.brownrook.net')
-Path(sys.argv[1]).write_text(rendered)
-PY
 cp "$validation_root/alloy/loki-client.key" \
   "$validation_root/alloy/otel-server.key"
 cp "$validation_root/alloy/loki-client.crt" \
@@ -226,10 +217,6 @@ docker run --rm \
   --mount "type=bind,source=$validation_root/alloy,target=/etc/alloy,readonly" \
   grafana/alloy:v1.19.2 \
   validate /etc/alloy/config.alloy
-docker run --rm \
-  --mount "type=bind,source=$validation_root/alloy,target=/etc/alloy,readonly" \
-  grafana/alloy:v1.19.2 \
-  validate /etc/alloy/ollama.alloy
 docker run --rm \
   --mount "type=bind,source=$validation_root/alloy,target=/etc/alloy,readonly" \
   grafana/alloy:v1.19.0 \
