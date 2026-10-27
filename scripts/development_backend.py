@@ -39,7 +39,7 @@ def client_values(secret):
         'TEST_RABBITMQ_URL': f"amqp://home_budget_test:{secret['rabbit_test']}@{host}:15673/home-budget-test",
         'NEO4J_URI': f'bolt://{host}:17687',
         'NEO4J_USER': 'neo4j', 'NEO4J_PASSWORD': secret['neo4j'], 'NEO4J_DATABASE': 'neo4j',
-        'OLLAMA_HOST': f'http://{host}:11436', 'OLLAMA_BASE_URL': f'http://{host}:11436',
+        'OLLAMA_HOST': f'http://{host}:11434', 'OLLAMA_BASE_URL': f'http://{host}:11434',
         'OLLAMA_GPU_METRICS_URL': f'http://{host}:11435/gpu',
     }
 

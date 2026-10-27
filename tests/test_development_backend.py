@@ -27,6 +27,8 @@ def test_generated_connections_are_development_only():
     assert '/home-budget-dev' in configured['RABBITMQ_URL']
     assert '/home-budget-test' in configured['TEST_RABBITMQ_URL']
     assert configured['NEO4J_URI'].endswith(':17687')
+    assert configured['OLLAMA_HOST'] == 'http://arsene.brownrook.net:11434'
+    assert configured['OLLAMA_BASE_URL'] == configured['OLLAMA_HOST']
 
 
 @pytest.mark.parametrize('url', [
