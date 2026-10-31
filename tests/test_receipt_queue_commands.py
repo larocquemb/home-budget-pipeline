@@ -64,6 +64,18 @@ def test_consumer_enables_confirms_once_for_work_and_results(queued_cli, monkeyp
     assert {queue.Topology().work, ResultTopology().work} <= declared
 
 
+def test_consumer_can_isolate_work_while_retaining_shared_result_collector(queued_cli, monkeypatch):
+    _, broker = queued_cli
+    consume = MagicMock()
+    monkeypatch.setattr(queue, "consume_worker", consume)
+    assert cli.main(["receipts", "consume", "--queue-prefix", "receipts.review.v1"]) == 0
+    from home_budget_pipeline.receipts.ocr_collector import ResultTopology
+    declared = {call.kwargs["queue"] for call in broker.channel.return_value.queue_declare.call_args_list}
+    assert {"receipts.review.v1.work", ResultTopology().work} <= declared
+    assert queue.Topology().work not in declared
+    assert consume.call_args.args[3].work == "receipts.review.v1.work"
+
+
 def test_batch_retry_reuses_each_request_and_partial_failure_is_reported(queued_cli, capsys):
     source, broker = queued_cli
     (source.parent / "second.pdf").write_bytes(b"second")
@@ -140,6 +152,18 @@ def test_process_backlog_entry_points_publish(queued_cli, monkeypatch):
     from home_budget_pipeline.receipts import parallel_ingest
     assert parallel_ingest.main() == 0
     assert broker.channel.return_value.basic_publish.call_count == 3
+
+
+def test_process_publishes_to_selected_work_namespace(queued_cli, monkeypatch):
+    source, broker = queued_cli
+    monkeypatch.setenv("DATABASE_URL", "dbname=test")
+    conn = MagicMock()
+    monkeypatch.setattr(queue.backlog.scan, "_db_connect", lambda *a: conn)
+    candidate = queue.backlog.ReceiptCandidate(source, queue.backlog.scan.sha256_file(source))
+    monkeypatch.setattr(queue.backlog, "plan_unprocessed_receipts", lambda *a, **kw: queue.backlog.DiscoveryPlan((candidate,), (candidate,), ()))
+    conn.cursor.return_value.__enter__.return_value.fetchall.return_value = []
+    assert cli.main(["receipts", "process", "--queue-prefix", "receipts.review.v1"]) == 0
+    assert broker.channel.return_value.basic_publish.call_args.kwargs["exchange"] == "receipts.review.v1.work"
 
 
 def test_cache_contract_round_trip_and_retry_identity():

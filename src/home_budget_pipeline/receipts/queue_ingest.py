@@ -351,7 +351,7 @@ def publish_reprocess(args) -> int:
         connection = connect_broker(args.rabbitmq_url)
         try:
             channel = connection.channel()
-            topology = Topology()
+            topology = Topology(prefix=getattr(args, "queue_prefix", "receipts.v1"))
             declare_topology(channel, topology)
             publish_confirmed(
                 channel, topology.work, message.to_bytes(),
@@ -385,7 +385,7 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
     discovered = 0
     selected = 0
     skipped_existing = 0
-    topology = Topology()
+    topology = Topology(prefix=getattr(args, "queue_prefix", "receipts.v1"))
     try:
         if not args.rabbitmq_url:
             raise ValueError("RABBITMQ_URL or --rabbitmq-url is required")
@@ -793,6 +793,7 @@ def add_arguments(parser, mode: str) -> None:
     ))
     parser.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))
     parser.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))
+    parser.add_argument("--queue-prefix", default="receipts.v1", help="Work queue namespace; publishers and consumers must match.")
     parser.add_argument("--ingest-schema", default="ingest")
     parser.add_argument("--budget-schema", default="budget")
     parser.add_argument("--ocr-cache", default=backlog._default_path(
@@ -818,7 +819,7 @@ def run(args) -> int:
             "Missing " + "; ".join(missing)
             + ". When loading .env.dev, export its variables: set -a; source .env.dev; set +a"
         )
-    topology = Topology()
+    topology = Topology(prefix=getattr(args, "queue_prefix", "receipts.v1"))
     if args.queue_mode == "publish":
         conn = backlog.scan._db_connect(args.db_dsn)
         try:

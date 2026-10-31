@@ -148,6 +148,17 @@ ledger --env-file .env.dev receipts services logs
 Use `receipts process --verbose` instead of `ocr-cache rebuild` to import into an
 empty database or replace extraction for receipts with missing caches. Queue
 publication is not completion; workers run OCR and the collector commits results.
+For a scoped review alongside an existing backlog, pass the same
+`--queue-prefix receipts.review.v1` to `receipts process` and a foreground
+`receipts consume` command. This uses separate work/retry/dead queues in the
+selected development vhost while retaining the normal result collector and
+database. Existing default workers continue consuming `receipts.v1`.
+Use matching source roots and cache paths for the publisher and review consumer;
+retain source-folder paths when staging an October-only input set. A normal
+import reuses a matching cache; omit `--refresh-ocr-cache` when inspecting saved
+OCR. Reconstructed text-only caches must identify their source and missing
+page geometry/pass history; they are not evidence of a fresh OCR run.
+
 The Receipt processing page shows database records, including historical states,
 and is not a count of files in the cache or completion of a specific refresh batch.
 
