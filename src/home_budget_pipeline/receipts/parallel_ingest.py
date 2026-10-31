@@ -577,7 +577,8 @@ def _persist_transaction_datetime(conn, receipt: scan.ScannedReceipt, schema: st
         return
     with conn.cursor() as cur:
         cur.execute(
-            f"UPDATE {schema}.expenses SET transaction_datetime = %s WHERE source = 'scanned' AND order_id = %s",
+            f"UPDATE {schema}.expenses SET transaction_datetime = %s WHERE source = 'scanned' AND order_id = %s "
+            "AND NOT (COALESCE(raw_payload,'{}'::jsonb) ? 'receipt_date_correction')",
             (value, receipt.canonical_order_id),
         )
 

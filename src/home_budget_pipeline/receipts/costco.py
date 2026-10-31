@@ -968,13 +968,16 @@ def write_costco_to_postgres(
         ON CONFLICT (source, order_id)
         DO UPDATE SET
             receipt_filename = EXCLUDED.receipt_filename,
-            order_date = EXCLUDED.order_date,
+            order_date = CASE WHEN expenses.raw_payload ? 'receipt_date_correction'
+                THEN expenses.order_date ELSE EXCLUDED.order_date END,
             store_name = EXCLUDED.store_name,
             order_url = EXCLUDED.order_url,
             receipt_item_subtotal = EXCLUDED.receipt_item_subtotal,
             receipt_total_charged = EXCLUDED.receipt_total_charged,
             expense_total = EXCLUDED.expense_total,
-            raw_payload = EXCLUDED.raw_payload,
+            raw_payload = CASE WHEN expenses.raw_payload ? 'receipt_date_correction'
+                THEN EXCLUDED.raw_payload || jsonb_build_object('receipt_date_correction',expenses.raw_payload->'receipt_date_correction')
+                ELSE EXCLUDED.raw_payload END,
             extraction_status = EXCLUDED.extraction_status,
             extraction_confidence = EXCLUDED.extraction_confidence
         RETURNING id
@@ -1001,7 +1004,11 @@ def write_costco_to_postgres(
             evidence_type = EXCLUDED.evidence_type,
             source_reference = EXCLUDED.source_reference,
             mime_type = EXCLUDED.mime_type,
-            transaction_datetime = EXCLUDED.transaction_datetime,
+            transaction_datetime = CASE WHEN EXISTS (
+                SELECT 1 FROM {schema}.receipt_ocr_feedback f
+                 WHERE f.evidence_id={schema}.receipt_evidence.id
+                   AND f.corrected_fields ? 'transaction_datetime'
+            ) THEN {schema}.receipt_evidence.transaction_datetime ELSE EXCLUDED.transaction_datetime END,
             merchant = EXCLUDED.merchant,
             receipt_id = EXCLUDED.receipt_id,
             total = EXCLUDED.total,

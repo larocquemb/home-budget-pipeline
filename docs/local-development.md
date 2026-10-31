@@ -758,6 +758,18 @@ connection from Grafana after the PostgreSQL restart.
 
 ## Correcting item allocations
 
+For a date-only OCR error, use the original document's local timestamp:
+
+```bash
+ledger --env-file .env.dev receipts correct-date SOURCE_SHA256 --transaction-datetime ISO_LOCAL_DATETIME --reason "Verified against original"
+ledger --env-file .env.dev receipts correct-date SOURCE_SHA256 --transaction-datetime ISO_LOCAL_DATETIME --reason "Verified against original" --expected-version PREVIEW_VERSION --apply
+```
+
+The first command previews the change. Applying requires its version, writes an
+atomic before/after audit and date feedback, and updates linked accounting dates
+when present. Unlinked evidence can also be corrected. Original OCR, amounts and
+categories are retained. Verified dates survive later receipt imports.
+
 The receipt page shows item and header reconciliation separately. A balanced
 receipt total can still require item allocation review. Open **Correct allocations
 against the original receipt** to review purchase names, net amounts, subtotal

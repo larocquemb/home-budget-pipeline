@@ -4,6 +4,12 @@ from home_budget_pipeline.receipts.datetime import date_part, extract_transactio
 
 
 class ReceiptDatetimeTests(unittest.TestCase):
+    def test_product_decimal_and_signed_parameter_are_not_a_date(self):
+        text = '246810 OPTICAL 9.9 -4.60 119.99 N\n07/09/2026 11:25'
+        self.assertEqual(extract_transaction_datetime(text), '2026-07-09T11:25:00')
+        self.assertIsNone(extract_transaction_datetime('OPTICAL 9.9 -4.60 119.99 N'))
+        self.assertIsNone(extract_transaction_datetime('PARAMETER 9-4.60'))
+
     def test_month_name_with_time(self):
         self.assertEqual(
             extract_transaction_datetime("May 18, 2026 2:32 PM"),
