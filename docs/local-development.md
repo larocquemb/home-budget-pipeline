@@ -758,6 +758,13 @@ connection from Grafana after the PostgreSQL restart.
 
 ## Correcting item allocations
 
+On **Receipts**, select **Purchase month** to limit results to displayed receipt
+dates in that calendar month. Missing dates are excluded while a month is selected.
+The month stays selected when sorting or paging. An exact `YYYY-MM` search from
+an older link selects that purchase month automatically. Free-text search also
+matches source filenames/folders; use Receipt processing's source-month selector
+when reviewing an inbox batch rather than purchases in a calendar month.
+
 For a date-only OCR error, use the original document's local timestamp:
 
 ```bash
