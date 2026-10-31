@@ -35,10 +35,16 @@ loki.process "local_receipts" {
   stage.match {
     selector = "{app=\"receipt-progress\"}"
     stage.json {
-      expressions = {snapshot_environment = "environment"}
+      expressions = {
+        snapshot_environment = "environment",
+        snapshot_level = "level",
+      }
     }
     stage.labels {
-      values = {environment = "snapshot_environment"}
+      values = {
+        environment = "snapshot_environment",
+        level = "snapshot_level",
+      }
     }
   }
   stage.replace {
