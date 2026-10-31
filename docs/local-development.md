@@ -22,6 +22,63 @@ than using development or production data. Unit tests remain available through
 `make test`. Earlier test-database provisioning and validation notes below describe
 the retired setup. RabbitMQ test vhost configuration is unchanged.
 
+### Cache-only OCR results before receipt import
+
+Cache rebuilds persist independent OCR runs and passes, even when no receipt
+evidence exists. They do not create receipt evidence, expenses, or completed
+financial-import statuses. A later `receipts process` import links the existing
+OCR run to receipt evidence. Cache-ready and database receipt counts therefore
+remain separate. Existing extraction and reviewed financial data are preserved.
+
+For the known historical missing-evidence collector failures, retain original
+messages and recover only matching cache-only runs and their passes:
+
+```sh
+ledger --env-file .env.dev receipts services restart --only collector
+ledger --env-file .env.dev receipts recover-results \
+  --evidence-dir .validation/ocr-recovery-preview
+ledger --env-file .env.dev receipts recover-results --apply \
+  --evidence-dir .validation/ocr-recovery-applied
+```
+
+Each evidence directory must be new and remains private. Preview requeues every
+message. Recovery saves original bodies/headers, commits each result before ACK,
+and requeues unrelated or unsuccessful messages. It does not rerun OCR. This
+recovery command is guarded to the isolated Arsene development services.
+
+## Shared receipt progress in Grafana
+
+Open [Receipt progress](https://grafana.idc.brownrook.net/d/home-budget-dev-progress).
+Select **Environment: development or production**. The layout and queries stay the
+same; every count filters the selected environment. The main view has four batch
+progress cards plus combined Database receipts and Needs attention cards. Queue
+diagnostics and raw snapshots are collapsed by default. It refreshes every ten seconds
+and shows the latest observed cache-rebuild batch: total
+confirmed requests, waiting (including retries), running, OCR cache completed, failed
+and unknown. A heartbeat older than 90 seconds is unknown, not completed.
+Database receipt counts and development broker queue depths are separate; collector
+messages include individual OCR passes and must not be read as receipt counts.
+
+The read-only reporter uses guarded `.env.dev` and `.env.k3s` connections and emits aggregate
+snapshots to `.local-services/progress.log`. It never consumes or purges jobs.
+Alloy forwards that log using the existing mTLS pipeline, preserving each snapshot's environment label. Production reads use read-only SQL transactions and HTTPS
+RabbitMQ management GET requests; development queue inspection is passive AMQP.
+Both environments use the same snapshot fields and Grafana queries. Dashboard
+values become unavailable after 45 seconds without a fresh snapshot.
+
+```sh
+make dev-progress-start
+make dev-progress-status
+# Stop only progress reporting; receipt processing continues:
+make dev-progress-stop
+```
+
+The progress LaunchAgent starts at login. Queue panels show ready messages across
+the whole selected vhost, while batch counts deduplicate requests from durable
+lineage events. Database presence does not prove a particular OCR attempt was
+committed. Normal receipt imports without a batch ID affect the database totals;
+the batch summary tracks cache-rebuild requests with a batch ID.
+
 ## Command interface
 
 Use `make` for software builds, tests, documentation, and infrastructure setup.

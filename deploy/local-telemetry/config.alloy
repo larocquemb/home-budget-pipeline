@@ -9,6 +9,7 @@ local.file_match "local_receipts" {
     {__path__ = sys.env("LOCAL_WEB_LOG"), service = "home-budget-local-web", app = "ledger-web"},
     {__path__ = sys.env("LOCAL_ALLOY_LOG"), service = "home-budget-local-alloy", app = "alloy"},
     {__path__ = sys.env("LOCAL_PROBE_LOG"), service = "home-budget-local-telemetry-probe", app = "telemetry-probe"},
+    {__path__ = string.replace(sys.env("LOCAL_PROBE_LOG"), "telemetry-probe.log", "progress.log"), service = "home-budget-local-receipt-progress", app = "receipt-progress"},
   ]
   sync_period = "5s"
 }
@@ -28,6 +29,16 @@ loki.process "local_receipts" {
       namespace = "home-budget",
       host = sys.env("LOCAL_TELEMETRY_HOST"),
       node = sys.env("LOCAL_TELEMETRY_HOST"),
+    }
+  }
+  // Only the guarded progress reporter can override its environment label.
+  stage.match {
+    selector = "{app=\"receipt-progress\"}"
+    stage.json {
+      expressions = {snapshot_environment = "environment"}
+    }
+    stage.labels {
+      values = {environment = "snapshot_environment"}
     }
   }
   stage.replace {

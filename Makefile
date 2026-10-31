@@ -314,3 +314,11 @@ eval-rescore:
 .PHONY: ollama-dev-config
 ollama-dev-config:
 	$(PYTHON) scripts/configure_development_ollama.py
+
+.PHONY: dev-progress-start dev-progress-stop dev-progress-status
+dev-progress-start:
+	@$(PYTHON) scripts/progress_service.py start
+dev-progress-stop:
+	@$(PYTHON) scripts/progress_service.py stop
+dev-progress-status:
+	@$(PYTHON) scripts/progress_service.py status

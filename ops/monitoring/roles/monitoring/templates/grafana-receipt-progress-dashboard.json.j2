@@ -1,0 +1,1117 @@
+{
+  "apiVersion": "dashboard.grafana.app/v2",
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "home-budget-dev-progress",
+    "annotations": {
+      "grafana.app/folder": "{{ monitoring_grafana_home_budget_folder_uid_effective }}"
+    }
+  },
+  "spec": {
+    "annotations": [
+      {
+        "kind": "AnnotationQuery",
+        "spec": {
+          "query": {
+            "kind": "DataQuery",
+            "group": "grafana",
+            "version": "v0",
+            "datasource": {
+              "name": "-- Grafana --"
+            },
+            "spec": {}
+          },
+          "enable": true,
+          "hide": true,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "name": "Annotations & Alerts",
+          "builtIn": true,
+          "legacyOptions": {
+            "type": "dashboard"
+          }
+        }
+      }
+    ],
+    "cursorSync": "Crosshair",
+    "description": "Select Environment to use the same panels and queries for development or production. Latest recorded cache-rebuild batch: confirmed receipts, waiting, running, cache completed, failed and unknown. Stale workers and historical queue observations that cannot be reconciled are unknown. Database receipt presence and actual queue ready-message counts are separate. Collector messages include OCR passes, not only receipts. Snapshots refresh every 10 seconds and expire after 45 seconds.",
+    "editable": false,
+    "elements": {
+      "panel-1": {
+        "kind": "Panel",
+        "spec": {
+          "id": 1,
+          "title": "Batch total",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", total=\"total\" | event=\"receipt_progress_snapshot\" | unwrap total | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "Unavailable",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "blue"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-2": {
+        "kind": "Panel",
+        "spec": {
+          "id": 2,
+          "title": "Waiting",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", waiting=\"waiting\" | event=\"receipt_progress_snapshot\" | unwrap waiting | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "Unavailable",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "blue"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-3": {
+        "kind": "Panel",
+        "spec": {
+          "id": 3,
+          "title": "Running",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", running=\"running\" | event=\"receipt_progress_snapshot\" | unwrap running | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "Unavailable",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "blue"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-4": {
+        "kind": "Panel",
+        "spec": {
+          "id": 4,
+          "title": "OCR cache ready",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", completed=\"completed\", completed_known=\"completed_known\" | completed_known=\"1\" | event=\"receipt_progress_snapshot\" | unwrap completed | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "Unknown",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "green"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-20": {
+        "kind": "Panel",
+        "spec": {
+          "id": 20,
+          "title": "Latest batch identity and snapshot",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "{environment=~\"${environment:regex}\", app=\"receipt-progress\"}",
+                        "queryType": "range",
+                        "editorMode": "code"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": true,
+                "sortOrder": "Descending"
+              },
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-30": {
+        "kind": "Panel",
+        "spec": {
+          "id": 30,
+          "title": "Database receipts",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", batch_imported=\"batch_imported\" | event=\"receipt_progress_snapshot\" | unwrap batch_imported | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "From this batch"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", database_receipts=\"database_receipts\" | event=\"receipt_progress_snapshot\" | unwrap database_receipts | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "All database receipts"
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name",
+                "orientation": "horizontal",
+                "wideLayout": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "Unavailable",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "blue"
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "A"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "From this batch"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "B"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "All database receipts"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Database evidence counts, separate from OCR cache completion. Batch presence can predate this OCR attempt."
+        }
+      },
+      "panel-31": {
+        "kind": "Panel",
+        "spec": {
+          "id": 31,
+          "title": "Needs attention",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", database_failed=\"database_failed\" | event=\"receipt_progress_snapshot\" | unwrap database_failed | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "Receipt import failures"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", queue_failed=\"queue_failed\" | event=\"receipt_progress_snapshot\" | unwrap queue_failed | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "OCR dead-letter messages"
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", collector_failed=\"collector_failed\" | event=\"receipt_progress_snapshot\" | unwrap collector_failed | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "Rejected collector messages"
+                      }
+                    },
+                    "refId": "C",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", unknown=\"unknown\" | event=\"receipt_progress_snapshot\" | unwrap unknown | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "Unknown batch outcomes"
+                      }
+                    },
+                    "refId": "D",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name",
+                "orientation": "horizontal",
+                "wideLayout": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "Unavailable",
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      },
+                      {
+                        "color": "red",
+                        "value": 1
+                      }
+                    ]
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "A"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "Receipt import failures"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "B"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "OCR dead-letter messages"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "C"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "Rejected collector messages"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "D"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "Unknown batch outcomes"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Receipt import failures and broker dead letters are whole-environment counts. Unknown batch outcomes indicate missing historical/worker observations, not proven failures."
+        }
+      },
+      "panel-32": {
+        "kind": "Panel",
+        "spec": {
+          "id": 32,
+          "title": "Broker queues \u2014 all batches",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", queue_waiting=\"queue_waiting\" | event=\"receipt_progress_snapshot\" | unwrap queue_waiting | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "OCR waiting"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", queue_retry=\"queue_retry\" | event=\"receipt_progress_snapshot\" | unwrap queue_retry | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "OCR retry"
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", collector_waiting=\"collector_waiting\" | event=\"receipt_progress_snapshot\" | unwrap collector_waiting | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "Collector waiting"
+                      }
+                    },
+                    "refId": "D",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name",
+                "orientation": "horizontal",
+                "wideLayout": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "Unavailable"
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "A"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "OCR waiting"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "B"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "OCR retry"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "D"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "Collector waiting"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Whole-environment broker messages, not batch receipt counts. Collector messages include individual OCR passes."
+        }
+      },
+      "panel-22": {
+        "kind": "Panel",
+        "spec": {
+          "id": 22,
+          "title": "Batch identity",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "{environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json | event=\"receipt_progress_snapshot\" | line_format \"Batch {% raw %}{{.batch_id}}{% endraw %} | {% raw %}{{.batch_state}}{% endraw %} | started {% raw %}{{.batch_started_local}}{% endraw %}\"",
+                        "queryType": "range",
+                        "editorMode": "code",
+                        "maxLines": 1
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "logs",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "showTime": false,
+                "sortOrder": "Descending",
+                "showLabels": false,
+                "enableLogDetails": false,
+                "dedupStrategy": "exact"
+              },
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              }
+            }
+          }
+        }
+      }
+    },
+    "layout": {
+      "kind": "RowsLayout",
+      "spec": {
+        "rows": [
+          {
+            "kind": "RowsLayoutRow",
+            "spec": {
+              "title": "Latest recorded batch \u2014 OCR cache",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 24,
+                        "height": 2,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-22"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 2,
+                        "width": 6,
+                        "height": 5,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-1"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 6,
+                        "y": 2,
+                        "width": 6,
+                        "height": 5,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-2"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 12,
+                        "y": 2,
+                        "width": 6,
+                        "height": 5,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-3"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 18,
+                        "y": 2,
+                        "width": 6,
+                        "height": 5,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-4"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "kind": "RowsLayoutRow",
+            "spec": {
+              "title": "Database and attention",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 12,
+                        "height": 6,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-30"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 12,
+                        "y": 0,
+                        "width": 12,
+                        "height": 6,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-31"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "kind": "RowsLayoutRow",
+            "spec": {
+              "title": "Queue diagnostics",
+              "collapse": true,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 24,
+                        "height": 6,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-32"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 6,
+                        "width": 24,
+                        "height": 8,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-20"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "links": [],
+    "liveNow": false,
+    "preload": false,
+    "tags": [
+      "home-budget",
+      "opentelemetry",
+      "KAN-88",
+      "KAN-89",
+      "{{ monitoring_grafana_receipt_dashboard_revision }}"
+    ],
+    "timeSettings": {
+      "timezone": "browser",
+      "from": "now-6h",
+      "to": "now",
+      "autoRefresh": "10s",
+      "autoRefreshIntervals": [
+        "5s",
+        "10s",
+        "30s",
+        "1m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "1d"
+      ],
+      "hideTimepicker": false,
+      "fiscalYearStartMonth": 0
+    },
+    "title": "Receipt progress",
+    "variables": [
+      {
+        "kind": "QueryVariable",
+        "spec": {
+          "name": "environment",
+          "current": {
+            "text": "development",
+            "value": "development"
+          },
+          "label": "Environment",
+          "hide": "dontHide",
+          "refresh": "onDashboardLoad",
+          "skipUrlSync": false,
+          "query": {
+            "kind": "DataQuery",
+            "group": "prometheus",
+            "version": "v0",
+            "datasource": {
+              "name": "{{ monitoring_grafana_prometheus_datasource_uid }}"
+            },
+            "spec": {
+              "query": "label_values(brownrook_receipt_processed_total, environment)",
+              "refId": "VariableQuery-environment"
+            }
+          },
+          "regex": "",
+          "sort": "alphabeticalAsc",
+          "definition": "label_values(brownrook_receipt_processed_total, environment)",
+          "options": [],
+          "multi": false,
+          "includeAll": false,
+          "allowCustomValue": true
+        }
+      }
+    ]
+  }
+}
