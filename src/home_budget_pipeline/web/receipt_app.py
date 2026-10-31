@@ -6,6 +6,7 @@ import html
 import json
 import os
 import re
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode, urlparse
@@ -62,8 +63,27 @@ def receipt_label(expense_pk, merchant, receipt_date, total) -> str:
     return ' · '.join(parts)
 
 
+def _receipt_filters(q: str, month: str):
+    q, month = q.strip(), month.strip()
+    # Existing links used an exact month as free text. Give those links the
+    # explicit purchase-month semantics shown in the form after loading.
+    if not month and re.fullmatch(r'\d{4}-\d{2}', q):
+        month, q = q, ''
+    if month:
+        try:
+            if not re.fullmatch(r'\d{4}-\d{2}', month):
+                raise ValueError
+            start = date.fromisoformat(month + '-01')
+            end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        except (ValueError, OverflowError):
+            raise HTTPException(422, 'Purchase month must be a valid YYYY-MM') from None
+        return q, month, (start, end)
+    return q, month, None
+
+
 def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
-                  sort: str = 'date', direction: str = 'desc', q: str = '') -> Page:
+                  sort: str = 'date', direction: str = 'desc', q: str = '', month: str = '') -> Page:
+    q, month, bounds = _receipt_filters(q, month)
     sort_column = _RECEIPT_SORT_COLUMNS.get(sort, _RECEIPT_SORT_COLUMNS['date'])
     sort_direction = 'ASC' if direction == 'asc' else 'DESC'
     joins = f"""
@@ -80,6 +100,10 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
           LEFT JOIN budget.expenses e ON e.id = re.expense_pk
     """
     conditions, params = [], []
+    if bounds:
+        conditions.append('COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp) >= %s '
+                          'AND COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp) < %s')
+        params.extend(bounds)
     # Each word can match a different field (e.g. "Sobeys 2026-02-14").
     for word in q.split():
         pattern = '%' + word.removeprefix('$').replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
@@ -356,13 +380,14 @@ def receipts_page(
     sort: str = 'date',
     direction: str = 'desc',
     q: str = '',
+    month: str = '',
     service: LedgerQueryService = Depends(query_service),
     identity: dict[str, str] = Depends(authenticated_identity),
 ) -> str:
     sort = sort if sort in _RECEIPT_SORT_COLUMNS else 'date'
     direction = 'asc' if direction.lower() == 'asc' else 'desc'
-    q = q.strip()
-    result = _receipt_list(service, limit=limit, offset=offset, sort=sort, direction=direction, q=q)
+    q, month, _ = _receipt_filters(q, month)
+    result = _receipt_list(service, limit=limit, offset=offset, sort=sort, direction=direction, q=q, month=month)
     headers = []
     for key, label in [('expense_id', 'Expense ID'), ('receipt', 'Receipt'), ('merchant', 'Merchant'),
                        ('date', 'Date/time'), ('total', 'Total'), ('processing', 'Processing'),
@@ -371,6 +396,8 @@ def receipts_page(
         query = {'sort': key, 'direction': next_direction, 'limit': limit}
         if q:
             query['q'] = q
+        if month:
+            query['month'] = month
         sort_url = f'{BASE_PATH}/receipts?' + urlencode(query)
         indicator = (' ▲' if direction == 'asc' else ' ▼') if sort == key else ''
         aria_sort = ('ascending' if direction == 'asc' else 'descending') if sort == key else 'none'
@@ -403,13 +430,16 @@ def receipts_page(
         f'<form class="toolbar" method="get" action="{BASE_PATH}/receipts">'
         f'<input type="hidden" name="sort" value="{esc(sort)}">'
         f'<input type="hidden" name="direction" value="{direction}">'
+        f'<label>Purchase month<input type="month" name="month" value="{esc(month)}"></label>'
         f'<label>Search receipts<input type="search" name="q" value="{esc(q)}" '
         'placeholder="Merchant, date, total, filename, expense ID or item" size="48"></label>'
         f'<label>Rows<input name="limit" type="number" min="1" max="500" value="{limit}"></label>'
         '<button type="submit">Search</button>'
         f'<a href="{BASE_PATH}/receipts">Clear</a>'
-        f'<span><strong>{total:,}</strong> {"matching " if q else ""}{noun}</span>'
+        f'<span><strong>{total:,}</strong> {"matching " if q or month else ""}{noun}</span>'
         f'<a href="{BASE_PATH}/dashboard">Accounting &amp; review dashboard</a></form>'
+        '<p class="muted">Purchase month uses the displayed receipt date. Receipts without a date are excluded when a month is selected. '
+        'Search also matches filenames and folder names.</p>'
         '<table><thead><tr>' + ''.join(headers) + '</tr></thead><tbody>'
         + ("".join(rows) or '<tr><td colspan="7" class="muted">No receipts match your search.</td></tr>')
         + "</tbody></table>"
@@ -420,7 +450,7 @@ def receipts_page(
         offset=offset,
         row_count=len(result.rows),
         total_count=result.total_count,
-        query={'sort': sort, 'direction': direction, 'q': q},
+        query={'sort': sort, 'direction': direction, 'q': q, **({'month': month} if month else {})},
     )
     return page("Receipts", body, base_path=BASE_PATH, identity=identity)
 
