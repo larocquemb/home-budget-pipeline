@@ -73,6 +73,11 @@ make dev-progress-status
 make dev-progress-stop
 ```
 
+The batch header shows its ID, start time in Winnipeg, and active/idle/historical
+state. Historical batches with missing completion observations show **Unknown**,
+not zero completed. Needs attention separates whole-environment receipt import
+failures, OCR dead letters, collector rejections, and unknown batch outcomes.
+
 The progress LaunchAgent starts at login. Queue panels show ready messages across
 the whole selected vhost, while batch counts deduplicate requests from durable
 lineage events. Database presence does not prove a particular OCR attempt was
