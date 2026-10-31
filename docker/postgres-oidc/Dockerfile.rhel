@@ -1,0 +1,60 @@
+# Compatibility candidate only. Production continues to use Dockerfile.
+# Build context: docker/postgres-oidc (contains no application credentials).
+ARG POSTGRES_IMAGE=registry.redhat.io/rhel10/postgresql-18@sha256:58ccaa9e79771a94ae5a084f20062c0d7e9be489ec844142706fae860820f4f0
+
+FROM ${POSTGRES_IMAGE} AS validator-build
+USER 0
+
+ARG PG_OIDC_VALIDATOR_COMMIT=ba9c4cb2dc9bd2e9779c7a33f7a30c9bb8c97862
+
+# Require matching Red Hat server headers; never substitute PGDG/Percona RPMs.
+RUN set -eu; \
+    pg_release="$(rpm -q --qf '%{VERSION}-%{RELEASE}' postgresql18-server)"; \
+    dnf install -y gcc-c++ git make libcurl-devel openssl-devel \
+      redhat-rpm-config annobin-plugin-gcc \
+      "postgresql18-server-devel-${pg_release}"; \
+    dnf clean all
+
+WORKDIR /opt/validator-source
+RUN git init . \
+    && git remote add origin https://github.com/percona/pg_oidc_validator.git \
+    && git fetch --depth=1 origin "${PG_OIDC_VALIDATOR_COMMIT}" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "${PG_OIDC_VALIDATOR_COMMIT}" \
+    && git submodule update --init --recursive --depth=1
+
+COPY patches/0001-require-exact-audience-and-support-entra-v2.patch /opt/validator.patch
+
+RUN set -eu; \
+    git apply --check /opt/validator.patch; \
+    git apply /opt/validator.patch; \
+    pg_config_path="$(command -v pg_config)"; \
+    test -n "${pg_config_path}"; \
+    "${pg_config_path}" --version | grep -Fx 'PostgreSQL 18.6'; \
+    make USE_PGXS=1 PG_CONFIG="${pg_config_path}" with_llvm=no \
+      SHLIB_LINK='-lcurl -lstdc++' -j2; \
+    make USE_PGXS=1 PG_CONFIG="${pg_config_path}" with_llvm=no \
+      SHLIB_LINK='-lcurl -lstdc++' DESTDIR=/opt/validator-install install; \
+    install -D -m 0644 LICENSE.txt /opt/validator-install/usr/share/doc/pg_oidc_validator/LICENSE.txt; \
+    install -D -m 0644 jwt-cpp/LICENSE /opt/validator-install/usr/share/doc/pg_oidc_validator/LICENSE.jwt-cpp
+
+FROM ${POSTGRES_IMAGE} AS runtime
+USER 0
+RUN dnf install -y libstdc++ && dnf clean all
+COPY --from=validator-build /opt/validator-install/ /
+
+LABEL org.opencontainers.image.title="Brown Rook Red Hat PostgreSQL 18 OAuth compatibility candidate" \
+      org.opencontainers.image.source="https://github.com/larocquemb/home-budget-pipeline" \
+      org.opencontainers.image.vendor="Brown Rook" \
+      io.brownrook.pg_oidc_validator.commit="ba9c4cb2dc9bd2e9779c7a33f7a30c9bb8c97862" \
+      io.brownrook.validation="candidate-not-approved-for-production"
+
+RUN set -eu; \
+    library="$(find /usr/lib64 -name pg_oidc_validator.so -print -quit)"; \
+    test -n "${library}"; \
+    ldd "${library}" > /opt/validator-dependencies.txt; \
+    cat /opt/validator-dependencies.txt; \
+    ! grep -F 'not found' /opt/validator-dependencies.txt
+
+# Keep Red Hat's existing entrypoint, command, and unprivileged database user.
+USER 26
