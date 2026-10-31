@@ -44,10 +44,13 @@ def test_receipt_processing_page_shows_failure_and_attempts():
     assert ">2<" in text
 
 
-def test_receipt_processing_query_uses_status_table_and_pagination():
+def test_receipt_processing_query_keeps_unattempted_receipts_and_pagination():
     service = CapturingQueryService()
     page = service.receipt_processing_status(limit=25, offset=50)
-    assert "budget.receipt_processing_status" in service.sql
+    assert "FROM ingest.receipts" in service.sql
+    assert "FROM budget.receipt_evidence" in service.sql
+    assert "LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)" in service.sql
+    assert "THEN 'imported' ELSE 'not_started' END" in service.sql
     assert service.params == (25, 50)
     assert page.limit == 25
     assert page.offset == 50

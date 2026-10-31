@@ -5,6 +5,84 @@ from home_budget_pipeline.web.queries import Page
 IDENTITY = {"user": "Paul", "email": "paul@example.com"}
 
 
+def test_processing_headers_toggle_sort_and_pagination_retains_selection():
+    from html import unescape
+    from urllib.parse import parse_qs, urlsplit
+    import re
+
+    class ProcessingService:
+        def receipt_processing_status(self, **kwargs):
+            self.called = kwargs
+            return Page(({"source_reference": "receipt.pdf", "attempts": 2},) * 10, 10, 10)
+
+    service = ProcessingService()
+    text = web_app.receipt_processing_page(
+        service=service, identity=IDENTITY, limit=10, offset=10,
+        sort="attempts", direction="asc", month="2026-10",
+    )
+    assert service.called == {"limit": 10, "offset": 10, "sort": "attempts", "direction": "asc", "month": "2026-10"}
+    assert 'type="month" name="month" value="2026-10"' in text
+    assert "Source year-month" in text
+    assert "Attempts ▲" in text
+    heads = re.findall(r'<th><a href="([^"]+)">', text)
+    assert len(heads) == 6
+    for url in heads:
+        params = parse_qs(urlsplit(unescape(url)).query)
+        assert "offset" not in params
+        assert params["limit"] == ["10"]
+        assert params["month"] == ["2026-10"]
+        assert params["direction"] == (["desc"] if params["sort"] == ["attempts"] else ["asc"])
+    paging = text.split('<div class="pager">', 1)[1].split('</div>', 1)[0]
+    pages = [parse_qs(urlsplit(unescape(url)).query)
+             for url in re.findall(r'href="([^"]+)"', paging)]
+    assert [params["offset"] for params in pages] == [["0"], ["20"]]
+    for params in pages:
+        assert params["sort"] == ["attempts"]
+        assert params["direction"] == ["asc"]
+        assert params["month"] == ["2026-10"]
+
+
+def test_processing_unknown_sort_displays_safe_default_and_api_forwards_sort():
+    class ProcessingService:
+        def receipt_processing_status(self, **kwargs):
+            self.called = kwargs
+            return Page((), kwargs["limit"], kwargs["offset"])
+
+    service = ProcessingService()
+    text = web_app.receipt_processing_page(service=service, identity=IDENTITY, limit=10, offset=0,
+                                           sort="bad-column", direction="bad-direction")
+    assert "Last attempt ▼" in text
+    assert service.called["sort"] == "last_attempted_at"
+    assert service.called["direction"] == "desc"
+    web_app.api_receipt_processing(service=service, _=IDENTITY, limit=10, offset=20,
+                                   sort="completed_at", direction="asc")
+    assert service.called == {"limit": 10, "offset": 20, "sort": "completed_at", "direction": "asc", "month": None}
+
+
+def test_processing_all_and_unassigned_filters_survive_sorting():
+    class ProcessingService:
+        def receipt_processing_status(self, **kwargs):
+            self.called = kwargs
+            return Page((), kwargs["limit"], kwargs["offset"], 0)
+
+    for month, expected in (("all", None), ("unassigned", "unassigned")):
+        service = ProcessingService()
+        text = web_app.receipt_processing_page(service=service, identity=IDENTITY,
+                                               limit=10, offset=0, month=month)
+        assert service.called["month"] == expected
+        assert f'month={month}' in text.split('<thead>', 1)[1]
+        assert '<strong>0</strong> receipts' in text
+
+
+def test_processing_invalid_month_returns_bad_request():
+    import pytest
+    from fastapi import HTTPException
+    for handler in (web_app.api_receipt_processing, web_app.receipt_processing_page):
+        with pytest.raises(HTTPException) as exc:
+            handler(month="2026-13")
+        assert exc.value.status_code == 400
+
+
 class FakeService:
     def active_categories(self):
         return ("Groceries", "Indoor Supplies", "Outdoor Supplies")

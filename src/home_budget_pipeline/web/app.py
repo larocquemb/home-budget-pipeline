@@ -7,6 +7,8 @@ import html
 import io
 import mimetypes
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
@@ -22,7 +24,7 @@ from home_budget_pipeline.receipts.ingest import (
     receipt_info_from_filename,
 )
 
-from .queries import LedgerQueryService
+from .queries import LedgerQueryService, RECEIPT_PROCESSING_SORT_COLUMNS, processing_month
 from .render import esc, money, page, pager, table
 
 BASE_PATH = os.getenv("LEDGER_BASE_PATH", "/ledger").rstrip("/") or "/ledger"
@@ -270,8 +272,12 @@ def api_transactions(limit: int = Query(50, ge=1, le=200), offset: int = Query(0
 
 
 @app.get(f"{BASE_PATH}/api/receipt-processing")
-def api_receipt_processing(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
-    return service.receipt_processing_status(limit=limit, offset=offset)
+def api_receipt_processing(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), sort: str = "last_attempted_at", direction: str = "desc", month: Optional[str] = None, service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
+    try:
+        month = processing_month(month)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return service.receipt_processing_status(limit=limit, offset=offset, sort=sort, direction=direction, month=month)
 
 
 @app.get(f"{BASE_PATH}/api/evidence/{{evidence_id}}")
@@ -578,10 +584,34 @@ def transactions_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(
 
 
 @app.get(f"{BASE_PATH}/receipt-processing", response_class=HTMLResponse)
-def receipt_processing_page(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
-    result = service.receipt_processing_status(limit=limit, offset=offset)
-    body = table(result.rows, (("source_reference", "Receipt"), ("status", "Status"), ("attempts", "Attempts"), ("last_attempted_at", "Last attempt"), ("completed_at", "Completed"), ("last_error", "Last error")))
-    body += pager(f"{BASE_PATH}/receipt-processing", limit=limit, offset=offset, row_count=len(result.rows))
+def receipt_processing_page(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), sort: str = "last_attempted_at", direction: str = "desc", month: Optional[str] = None, service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
+    try:
+        month = processing_month(month if month is not None else datetime.now(ZoneInfo("America/Winnipeg")).strftime("%Y-%m"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    month_query = month or "all"
+    sort = sort if sort in RECEIPT_PROCESSING_SORT_COLUMNS else "last_attempted_at"
+    direction = "asc" if direction.lower() == "asc" else "desc"
+    result = service.receipt_processing_status(limit=limit, offset=offset, sort=sort, direction=direction, month=month)
+    columns = (("source_reference", "Receipt"), ("status", "Status"), ("attempts", "Attempts"), ("last_attempted_at", "Last attempt"), ("completed_at", "Completed"), ("last_error", "Last error"))
+    header_links = {}
+    for key, _ in columns:
+        next_direction = "asc" if key != sort or direction == "desc" else "desc"
+        header_links[key] = f"{BASE_PATH}/receipt-processing?{urlencode({'limit': limit, 'sort': key, 'direction': next_direction, 'month': month_query})}"
+    columns = tuple((key, f"{label} {'▲' if direction == 'asc' else '▼'}" if key == sort else label) for key, label in columns)
+    body = f"""<form class="toolbar" method="get">
+<label>Source year-month<input type="month" name="month" value="{esc(month if month != 'unassigned' else '')}"></label>
+<input type="hidden" name="sort" value="{esc(sort)}"><input type="hidden" name="direction" value="{direction}">
+<input type="hidden" name="limit" value="{limit}">
+<button type="submit">Show</button><a href="{BASE_PATH}/receipt-processing?month=all">All months</a>
+<a href="{BASE_PATH}/receipt-processing?month=unassigned">Unassigned month</a>
+</form><p class="muted">Month comes from the source folder name, not OCR or purchase dates. Files in YYYY-MM and YYYY-MM-DD folders belong to that source month. Registered receipts without a dated folder appear under Unassigned month. Purchase dates still need separate review.</p>"""
+    if month == "unassigned":
+        body += '<p><strong>Showing receipts without a source-folder month.</strong></p>'
+    if result.total_count is not None:
+        body += f'<p><strong>{result.total_count:,}</strong> receipts</p>'
+    body += table(result.rows, columns, header_links=header_links)
+    body += pager(f"{BASE_PATH}/receipt-processing", limit=limit, offset=offset, row_count=len(result.rows), total_count=result.total_count, query={"sort": sort, "direction": direction, "month": month_query})
     return page("Receipt processing", body, base_path=BASE_PATH, identity=identity)
 
 
