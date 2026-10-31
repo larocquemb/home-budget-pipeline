@@ -24,6 +24,7 @@ def values():
 def test_generated_connections_are_development_only():
     configured = values()
     validate_endpoints(configured)
+    assert configured['TEST_DATABASE_URL'] == ''
     assert '/home-budget-dev' in configured['RABBITMQ_URL']
     assert '/home-budget-test' in configured['TEST_RABBITMQ_URL']
     assert configured['NEO4J_URI'].endswith(':17687')

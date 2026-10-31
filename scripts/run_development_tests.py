@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_environment(values, inherited):
+    if not values.get('TEST_DATABASE_URL'):
+        raise ValueError('The isolated test database is retired; integration tests cannot use development or production data')
     validate_endpoints(values)
     env = {**inherited, **values}
     # Ambient libpq settings must not override the validated destination.

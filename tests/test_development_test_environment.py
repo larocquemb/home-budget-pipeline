@@ -16,7 +16,10 @@ def helper():
 
 
 def test_runner_uses_test_database_and_broker_and_removes_ambient_overrides(arsene_development_environment):
-    values = arsene_development_environment
+    values = dict(arsene_development_environment)
+    values['TEST_DATABASE_URL'] = (
+        'postgresql://home_budget_test:synthetic@arsene.brownrook.net:15432/home_budget_test'
+    )
     env = helper().test_environment(values, {'PGHOSTADDR': '192.0.2.1', 'TEST_NEO4J_URI': 'bolt://example.invalid:7687'})
     assert env['DATABASE_URL'] == env['TEST_DATABASE_URL'] == values['TEST_DATABASE_URL']
     assert env['RABBITMQ_URL'] == env['TEST_RABBITMQ_URL'] == values['TEST_RABBITMQ_URL']
@@ -29,3 +32,10 @@ def test_runner_rejects_wrong_test_database(arsene_development_environment):
     values['TEST_DATABASE_URL'] = values['DATABASE_URL']
     with pytest.raises(ValueError):
         helper().test_environment(values, {})
+
+
+def test_runner_refuses_retired_test_database(arsene_development_environment):
+    values = dict(arsene_development_environment)
+    values.pop('TEST_DATABASE_URL')
+    with pytest.raises(ValueError, match='retired'):
+        helper().test_environment(values, {'TEST_DATABASE_URL': 'ambient-value'})

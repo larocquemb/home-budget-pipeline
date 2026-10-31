@@ -34,7 +34,7 @@ def client_values(secret):
     return {
         'HOME_BUDGET_ENVIRONMENT': 'development',
         'DATABASE_URL': f"postgresql://home_budget_dev:{secret['postgres_dev']}@{host}:15432/home_budget_dev",
-        'TEST_DATABASE_URL': f"postgresql://home_budget_test:{secret['postgres_test']}@{host}:15432/home_budget_test",
+        'TEST_DATABASE_URL': '',
         'RABBITMQ_URL': f"amqp://home_budget_dev:{secret['rabbit_dev']}@{host}:15673/home-budget-dev",
         'TEST_RABBITMQ_URL': f"amqp://home_budget_test:{secret['rabbit_test']}@{host}:15673/home-budget-test",
         'NEO4J_URI': f'bolt://{host}:17687',
@@ -92,6 +92,8 @@ def main():
         return
     values = read_env(args.env_file)
     validate_endpoints(values)
+    if args.test and not values.get('TEST_DATABASE_URL'):
+        raise ValueError('The isolated test database is retired; no test schema operation is available')
     import psycopg
     dsn = values['TEST_DATABASE_URL' if args.test else 'DATABASE_URL']
     if args.command in ('bootstrap', 'reset'):
@@ -103,6 +105,8 @@ def main():
         print('Development schema operation committed.')
         return
     for test in (False, True):
+        if test and not values.get('TEST_DATABASE_URL'):
+            continue
         with psycopg.connect(values['TEST_DATABASE_URL' if test else 'DATABASE_URL'], connect_timeout=5) as conn:
             verify_database(conn, test=test)
     import pika
@@ -116,7 +120,7 @@ def main():
     from neo4j import GraphDatabase
     with GraphDatabase.driver(values['NEO4J_URI'], auth=(values['NEO4J_USER'], values['NEO4J_PASSWORD']), connection_timeout=5) as driver:
         driver.verify_connectivity()
-    print('Development/test PostgreSQL identities, RabbitMQ vhosts and development Neo4j are reachable.')
+    print('Configured development PostgreSQL identities, RabbitMQ vhosts and development Neo4j are reachable.')
 
 
 if __name__ == '__main__':

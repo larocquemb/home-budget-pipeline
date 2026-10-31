@@ -31,7 +31,8 @@ def verify_database(conn, *, test=False):
 
 def validate_endpoints(values):
     validate_database_url(values.get('DATABASE_URL', ''))
-    validate_database_url(values.get('TEST_DATABASE_URL', ''), test=True)
+    if values.get('TEST_DATABASE_URL'):
+        validate_database_url(values['TEST_DATABASE_URL'], test=True)
     for key, scheme, port, path, username in (
         ('RABBITMQ_URL', 'amqp', 15673, '/home-budget-dev', 'home_budget_dev'),
         ('TEST_RABBITMQ_URL', 'amqp', 15673, '/home-budget-test', 'home_budget_test'),

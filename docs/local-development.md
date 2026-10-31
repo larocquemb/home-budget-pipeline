@@ -11,6 +11,17 @@ The m4pro Mac mini workflow has been validated; work MacBook validation was
 waived. Receipt worker and collector background LAN access and physical restore
 checks remain pending.
 
+## Current database topology — October 31, 2026
+
+Paul directed deletion without backups of the native Mac `home_budget` and
+`home_budget_test` databases and Arsene `home_budget_test`. Native Homebrew
+PostgreSQL is stopped and disabled at login. The remaining application databases
+are Arsene `home_budget_dev` and Kubernetes production `home_budget`.
+`TEST_DATABASE_URL` is empty; local integration commands refuse to run rather
+than using development or production data. Unit tests remain available through
+`make test`. Earlier test-database provisioning and validation notes below describe
+the retired setup. RabbitMQ test vhost configuration is unchanged.
+
 ## Command interface
 
 Use `make` for software builds, tests, documentation, and infrastructure setup.
