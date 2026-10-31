@@ -284,3 +284,27 @@ def test_interrupted_cache_worker_is_replaced_without_duplicate_ocr_or_rows(
             cleanup.queue_delete(queue=name)
             cleanup.exchange_delete(exchange=name)
         replacement.close()
+
+
+def test_cache_only_new_source_then_normal_import_reuses_ocr_without_losing_financial_import(tmp_path):
+    from dataclasses import replace
+    import psycopg
+    run, pass_event = _events(tmp_path)
+    cache_run = replace(run, payload={**run.payload, 'persistence_mode': 'cache_only',
+                                     'request_id': str(uuid.uuid4())})
+    with psycopg.connect(os.environ['TEST_DATABASE_URL']) as conn:
+        baseline = conn.execute('SELECT count(*) FROM budget.expenses').fetchone()[0]
+        assert ocr_collector.persist_result(conn, cache_run) == 'cache_rebuilt'
+        assert ocr_collector.persist_result(conn, pass_event) == 'persisted'
+        assert ocr_collector.persist_result(conn, cache_run) == 'duplicate'
+        assert conn.execute('SELECT count(*) FROM budget.expenses').fetchone()[0] == baseline
+        assert conn.execute('SELECT expense_pk, merchant FROM budget.receipt_evidence WHERE source_sha256=%s',
+                            (run.source_sha256,)).fetchone() is None
+        assert conn.execute('SELECT evidence_id FROM budget.receipt_ocr_runs WHERE run_uuid=%s',
+                            (run.run_uuid,)).fetchone() == (None,)
+        assert conn.execute('SELECT count(*) FROM ingest.receipt_processing_status WHERE source_sha256=%s',
+                            (run.source_sha256,)).fetchone() == (0,)
+        assert ocr_collector.persist_result(conn, run) == 'succeeded'
+        assert ocr_collector.persist_result(conn, run) == 'duplicate'
+        assert conn.execute('SELECT expense_pk IS NOT NULL FROM budget.receipt_evidence WHERE source_sha256=%s',
+                            (run.source_sha256,)).fetchone() == (True,)

@@ -208,7 +208,7 @@ def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = 
     return evidence_id
 
 
-def persist_ocr_run(conn, evidence_id: int, receipt, schema: str = "budget") -> int:
+def persist_ocr_run(conn, evidence_id: int | None, receipt, schema: str = "budget") -> int:
     """Persist one immutable OCR run and its pass-level telemetry."""
     schema = _safe_schema(schema)
     run = getattr(receipt, "ocr_run", None) or {}
@@ -224,7 +224,9 @@ def persist_ocr_run(conn, evidence_id: int, receipt, schema: str = "budget") -> 
                 processed_at, processing_seconds, worker_host, worker_pid,
                 merchant, extraction_status, extraction_confidence, timings
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (run_uuid) DO NOTHING
+            ON CONFLICT (run_uuid) DO UPDATE SET
+                evidence_id = COALESCE({schema}.receipt_ocr_runs.evidence_id, EXCLUDED.evidence_id)
+            WHERE {schema}.receipt_ocr_runs.source_sha256 = EXCLUDED.source_sha256
             """,
             (
                 run_uuid, evidence_id, receipt.source_sha256,
