@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import html
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
+
+DISPLAY_TIMEZONE = ZoneInfo("America/Winnipeg")
 
 
 def esc(value: Any) -> str:
+    if isinstance(value, datetime) and value.utcoffset() is not None:
+        value = value.astimezone(DISPLAY_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S %Z")
     return html.escape("" if value is None else str(value))
 
 

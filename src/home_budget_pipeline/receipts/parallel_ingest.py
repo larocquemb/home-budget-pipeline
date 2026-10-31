@@ -599,7 +599,9 @@ def persist_evidence_first(
         }
         with telemetry.span("receipt.persistence", {**attributes, "receipt.persistence.phase": "evidence"}):
             receipt.merchant = resolve_merchant_alias(conn, receipt.merchant, schema)
-            evidence_id = upsert_evidence(conn, receipt, schema, evidence_type="scanned")
+            reference = getattr(receipt, "source_reference", "") or ""
+            evidence_type = "electronic" if reference.startswith("electronic/") else "scanned"
+            evidence_id = upsert_evidence(conn, receipt, schema, evidence_type=evidence_type)
         if replace_existing:
             with telemetry.span("receipt.reconciliation", {**attributes, "receipt.reprocess": True}):
                 with conn.cursor() as cur:

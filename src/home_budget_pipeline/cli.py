@@ -80,6 +80,7 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     process.add_argument("receipt_root", nargs="?", default=_receipt_root_default())
     process.add_argument("--workers", type=int, help="Deprecated; concurrency is controlled by RabbitMQ consumers.")
     process.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))
+    process.add_argument("--queue-prefix", default="receipts.v1", help="Work queue namespace; consumers must use the same prefix.")
     process.add_argument("--request-id", help="Reuse a batch UUID when retrying an uncertain refresh publication.")
     process.add_argument("--ocr-cache", default=_ocr_cache_default())
     process.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))

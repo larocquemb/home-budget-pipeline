@@ -7,17 +7,23 @@ import uuid
 LOG = logging.getLogger(__name__)
 
 
-def record(message, status, *, attempt_id=None, error_type=None, queue=None, result_runs=(), cache_hit=None):
+def record(message, status, *, attempt_id=None, error_type=None, queue=None, result_runs=(), cache_hit=None,
+           batch_id=None, batch_total=None):
     if message is None or not os.getenv('DATABASE_URL'):
         return
     payload = {'message_id': message.message_id, 'request_id': message.request_id,
-               'batch_id': message.batch_id, 'operation': message.message_type,
+               'batch_id': batch_id or message.batch_id, 'operation': message.message_type,
                'attempt': message.attempt, 'attempt_id': attempt_id,
                'status': status, 'worker_host': socket.gethostname(),
                'worker_pid': os.getpid(), 'worker_node': os.getenv('K8S_NODE_NAME'),
                'error_type': error_type, 'queue': queue, 'result_runs': list(result_runs)}
     if cache_hit is not None:
         payload['cache_hit'] = cache_hit
+    if batch_total is not None:
+        payload['batch_total'] = batch_total
+    if status == 'batch_started':
+        # A start event is not a confirmed publication of its first member.
+        payload['request_id'] = payload['message_id'] = None
     try:
         import psycopg
         from psycopg.types.json import Jsonb
@@ -29,3 +35,9 @@ def record(message, status, *, attempt_id=None, error_type=None, queue=None, res
         # Evidence failure is visible, but cannot turn confirmed work into failure.
         LOG.error('lineage_evidence_unavailable message_id=%s status=%s error_type=%s',
                   message.message_id, status, type(exc).__name__)
+
+
+def start_batch(message, batch_id, total, queue):
+    LOG.info('receipt_batch_started batch_id=%s total=%s queue=%s', batch_id, total, queue,
+             extra={'event': 'batch_started', 'batch_id': batch_id, 'batch_total': total, 'queue': queue})
+    record(message, 'batch_started', batch_id=batch_id, batch_total=total, queue=queue)

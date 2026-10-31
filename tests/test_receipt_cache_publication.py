@@ -89,7 +89,12 @@ def test_publisher_passes_configured_cache_and_reprocess_message_type(completed_
     assert publication["properties"].type == "receipt.reprocess.v2"
     output = capsys.readouterr().out
     assert len(output.splitlines()) == 1
-    assert json.loads(output) == {
+    import uuid
+    summary = json.loads(output)
+    batch_id = summary.pop("batch_id")
+    assert str(uuid.UUID(batch_id)) == batch_id
+    assert publication["properties"].headers["batch_id"] == batch_id
+    assert summary == {
         "discovered": 1,
         "skipped": 0,
         "exhausted": 0,

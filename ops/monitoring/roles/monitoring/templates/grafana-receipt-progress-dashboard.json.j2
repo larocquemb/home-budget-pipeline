@@ -40,7 +40,7 @@
         "kind": "Panel",
         "spec": {
           "id": 1,
-          "title": "Batch total",
+          "title": "Work total",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -364,7 +364,7 @@
         "kind": "Panel",
         "spec": {
           "id": 30,
-          "title": "Database receipts",
+          "title": "Database persistence",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -381,10 +381,10 @@
                         "name": "{{ monitoring_grafana_datasource_uid }}"
                       },
                       "spec": {
-                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", batch_imported=\"batch_imported\" | event=\"receipt_progress_snapshot\" | unwrap batch_imported | __error__=\"\" [45s])",
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", batch_persisted=\"batch_persisted\" | event=\"receipt_progress_snapshot\" | unwrap batch_persisted | __error__=\"\" [45s])",
                         "queryType": "instant",
                         "editorMode": "code",
-                        "legendFormat": "From this batch"
+                        "legendFormat": "Results saved"
                       }
                     },
                     "refId": "A",
@@ -456,7 +456,7 @@
                     "properties": [
                       {
                         "id": "displayName",
-                        "value": "From this batch"
+                        "value": "Results saved"
                       }
                     ]
                   },
@@ -828,7 +828,7 @@
         "kind": "Panel",
         "spec": {
           "id": 22,
-          "title": "Batch identity",
+          "title": "Work identity",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -845,7 +845,7 @@
                         "name": "{{ monitoring_grafana_datasource_uid }}"
                       },
                       "spec": {
-                        "expr": "{environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json | event=\"receipt_progress_snapshot\" | line_format \"Batch {% raw %}{{.batch_id}}{% endraw %} | {% raw %}{{.batch_state}}{% endraw %} | started {% raw %}{{.batch_started_local}}{% endraw %}\"",
+                        "expr": "{environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json | event=\"receipt_progress_snapshot\" | line_format \"{% raw %}{{.batch_label}}{% endraw %} | {% raw %}{{.batch_state}}{% endraw %} | started {% raw %}{{.batch_started_local}}{% endraw %}\"",
                         "queryType": "range",
                         "editorMode": "code",
                         "maxLines": 1
@@ -889,7 +889,7 @@
           {
             "kind": "RowsLayoutRow",
             "spec": {
-              "title": "Latest recorded batch \u2014 OCR cache",
+              "title": "Latest recorded work \u2014 OCR cache",
               "collapse": false,
               "layout": {
                 "kind": "GridLayout",
@@ -1059,7 +1059,7 @@
       "{{ monitoring_grafana_receipt_dashboard_revision }}"
     ],
     "timeSettings": {
-      "timezone": "browser",
+      "timezone": "America/Winnipeg",
       "from": "now-6h",
       "to": "now",
       "autoRefresh": "10s",
