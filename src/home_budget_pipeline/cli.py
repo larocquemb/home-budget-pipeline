@@ -118,6 +118,14 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     correction.add_argument('--apply', action='store_true')
     correction.set_defaults(handler=_correct_allocation)
 
+    date_correction = receipt_commands.add_parser('correct-date', help='Preview or audit a source-verified receipt date correction.')
+    date_correction.add_argument('source_sha256')
+    date_correction.add_argument('--transaction-datetime', required=True, help='ISO local date/datetime from the original receipt.')
+    date_correction.add_argument('--reason', required=True)
+    date_correction.add_argument('--expected-version')
+    date_correction.add_argument('--apply', action='store_true')
+    date_correction.set_defaults(handler=_correct_date)
+
     retry = receipt_commands.add_parser(
         "retry", help="Reset a failed or interrupted receipt for the next publish or process command.",
     )
@@ -195,6 +203,17 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     )
     setup.set_defaults(handler=_setup_database)
     return parser
+
+
+def _correct_date(args):
+    import getpass
+    from .web.queries import LedgerQueryService
+    from .receipts.date_correction import correct
+    result = correct(LedgerQueryService()._connect, args.source_sha256,
+                     args.transaction_datetime, args.reason, actor_user=getpass.getuser(),
+                     expected_version=args.expected_version, apply=args.apply)
+    print(json.dumps(result, default=str))
+    return 0
 
 
 def _correct_allocation(args):

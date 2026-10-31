@@ -19,7 +19,7 @@ MONTH_NAME_RE = re.compile(
 )
 YMD_RE = re.compile(r"(?<!\d)(20\d{2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})(?:\s+(\d{1,2})\s*:\s*(\d{2})(?:\s*:\s*(\d{2}))?)?(?!\d)")
 MDY_RE = re.compile(
-    r"(?<!\d)(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*"
+    r"(?<![\d.$])(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*"
     r"(?:[-/.]\s*|[,;]\s*['’]?\s*)['’]?(20\d{2}|\d{2})"
     r"(?:\s+(\d{1,2})\s*:\s*(\d{2})(?:\s*:\s*(\d{2}))?)?(?!\d)"
 )
@@ -67,6 +67,12 @@ def extract_transaction_datetime(text: str) -> Optional[str]:
             continue
         m = MDY_RE.search(line)
         if m:
+            # Mixed decimal/sign fragments in product attributes are not dates.
+            # Keep OCR comma/quote year separators, but ordinary separators agree.
+            first = line[m.end(1):m.start(2)].strip()
+            second = line[m.end(2):m.start(3)].strip().strip("'’").strip()
+            if second in {'-', '/', '.'} and first != second:
+                continue
             year = int(m.group(3))
             if year < 100:
                 year += 2000

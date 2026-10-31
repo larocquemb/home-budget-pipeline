@@ -1329,7 +1329,8 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                 receipt_filename = EXCLUDED.receipt_filename,
                 source_reference = EXCLUDED.source_reference,
                 source_sha256 = EXCLUDED.source_sha256,
-                order_date = EXCLUDED.order_date,
+                order_date = CASE WHEN expenses.raw_payload ? 'receipt_date_correction'
+                    THEN expenses.order_date ELSE EXCLUDED.order_date END,
                 store_name = EXCLUDED.store_name,
                 receipt_item_subtotal = EXCLUDED.receipt_item_subtotal,
                 receipt_gst = EXCLUDED.receipt_gst,
@@ -1340,7 +1341,9 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                 payment_method = EXCLUDED.payment_method,
                 card_last4 = EXCLUDED.card_last4,
                 payer = EXCLUDED.payer,
-                raw_payload = EXCLUDED.raw_payload
+                raw_payload = CASE WHEN expenses.raw_payload ? 'receipt_date_correction'
+                    THEN EXCLUDED.raw_payload || jsonb_build_object('receipt_date_correction',expenses.raw_payload->'receipt_date_correction')
+                    ELSE EXCLUDED.raw_payload END
             WHERE NOT (COALESCE(expenses.raw_payload, '{{}}'::jsonb) ? 'item_allocation_correction')
             RETURNING id
             """,

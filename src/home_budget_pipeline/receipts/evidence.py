@@ -181,7 +181,11 @@ def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = 
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source_sha256) DO UPDATE SET
                 expense_pk = COALESCE(EXCLUDED.expense_pk, {schema}.receipt_evidence.expense_pk),
-                transaction_datetime = EXCLUDED.transaction_datetime,
+                transaction_datetime = CASE WHEN EXISTS (
+                    SELECT 1 FROM {schema}.receipt_ocr_feedback f
+                     WHERE f.evidence_id={schema}.receipt_evidence.id
+                       AND f.corrected_fields ? 'transaction_datetime'
+                ) THEN {schema}.receipt_evidence.transaction_datetime ELSE EXCLUDED.transaction_datetime END,
                 merchant = EXCLUDED.merchant,
                 receipt_id = EXCLUDED.receipt_id,
                 total = EXCLUDED.total,
