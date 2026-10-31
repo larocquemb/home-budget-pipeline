@@ -159,6 +159,16 @@ import reuses a matching cache; omit `--refresh-ocr-cache` when inspecting saved
 OCR. Reconstructed text-only caches must identify their source and missing
 page geometry/pass history; they are not evidence of a fresh OCR run.
 
+An October inbox review includes both `scanned/inbox/2026-10-*` and
+`electronic/2026-10-*` under the raw receipt root. Select by source-folder month,
+not the purchase date guessed by OCR. Configure `ELECTRONIC_RECEIPT_SOURCE_ROOT`
+to the Mac's electronic receipt directory so the web GUI can open originals.
+When staging electronic documents for the common queue pipeline, keep the
+`electronic/` prefix in each relative source path. The collector retains their
+electronic evidence type, and the GUI resolves them against the electronic root.
+Count source documents separately from canonical purchases: multiple documents
+may support one expense or require duplicate review.
+
 The Receipt processing page shows database records, including historical states,
 and is not a count of files in the cache or completion of a specific refresh batch.
 

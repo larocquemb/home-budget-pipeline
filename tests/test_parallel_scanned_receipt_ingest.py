@@ -213,6 +213,22 @@ class ParallelScannedReceiptIngestTests(unittest.TestCase):
             result = parallel.parse_scans_parallel(paths, Path("."), workers=0)
         self.assertEqual(result, ["a.pdf"])
 
+    def test_electronic_source_keeps_type_when_linked_to_existing_purchase(self):
+        receipt = SimpleNamespace(merchant="Costco", source_reference="electronic/2026-10-27/receipt.pdf")
+        with (
+            patch.object(parallel, "resolve_merchant_alias", return_value="Costco"),
+            patch.object(parallel, "upsert_evidence", return_value=7) as evidence,
+            patch.object(parallel, "find_match", return_value=SimpleNamespace(disposition="matched", expense_pk=42)),
+            patch.object(parallel, "attach_evidence") as attach,
+            patch.object(parallel.scan, "upsert_receipt") as canonical,
+        ):
+            conn = MagicMock()
+            stats = parallel.persist_evidence_first(conn, [receipt], "budget")
+        evidence.assert_called_once_with(conn, receipt, "budget", evidence_type="electronic")
+        attach.assert_called_once_with(conn, 7, 42, "budget")
+        canonical.assert_not_called()
+        self.assertEqual(stats["matched"], 1)
+
     def test_refresh_replaces_items_for_existing_receipt_evidence(self):
         conn = MagicMock()
         cursor = conn.cursor.return_value.__enter__.return_value

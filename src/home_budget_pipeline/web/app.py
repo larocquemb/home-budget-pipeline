@@ -290,6 +290,8 @@ def api_evidence(evidence_id: int, service: LedgerQueryService = Depends(query_s
 
 def _receipt_document_path(source_reference: str, evidence_type: object = "scanned") -> Path:
     root = ELECTRONIC_RECEIPT_SOURCE_ROOT if evidence_type == "electronic" else RECEIPT_SOURCE_ROOT
+    if evidence_type == "electronic" and source_reference.startswith("electronic/"):
+        source_reference = source_reference.removeprefix("electronic/")
     candidate = (root / source_reference).resolve()
     if candidate != root and root not in candidate.parents:
         raise HTTPException(status_code=404, detail="receipt document not found")

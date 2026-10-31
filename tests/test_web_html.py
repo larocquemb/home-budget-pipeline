@@ -5,6 +5,22 @@ from home_budget_pipeline.web.queries import Page
 IDENTITY = {"user": "Paul", "email": "paul@example.com"}
 
 
+def test_electronic_pipeline_document_uses_electronic_root_and_blocks_escape(tmp_path, monkeypatch):
+    import pytest
+    root = tmp_path / "electronic"
+    receipt = root / "2026-10-27" / "receipt.pdf"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_bytes(b"pdf")
+    monkeypatch.setattr(web_app, "ELECTRONIC_RECEIPT_SOURCE_ROOT", root)
+    assert web_app._receipt_document_path("electronic/2026-10-27/receipt.pdf", "electronic") == receipt
+    assert web_app._receipt_document_path("2026-10-27/receipt.pdf", "electronic") == receipt
+    outside = tmp_path / "outside.pdf"
+    outside.write_bytes(b"private")
+    with pytest.raises(web_app.HTTPException) as error:
+        web_app._receipt_document_path("electronic/../outside.pdf", "electronic")
+    assert error.value.status_code == 404
+
+
 def test_processing_headers_toggle_sort_and_pagination_retains_selection():
     from html import unescape
     from urllib.parse import parse_qs, urlsplit
