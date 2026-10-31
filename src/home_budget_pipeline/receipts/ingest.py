@@ -81,6 +81,8 @@ TOTAL_LIKE_RE = re.compile(
 )
 
 MERCHANT_ALIASES = (
+    (re.compile(r"\bclearview\s+co[ -]?op\b", re.I), "Clearview Co-op"),
+    (re.compile(r"\b(?:m|rn)aurices\b", re.I), "maurices"),
     (re.compile(r"canad(?:ian|\s*tan|\w*)?\s+tire", re.I), "Canadian Tire"),
     (re.compile(r"(?:t|i|ti|im|tin|tim)\w*\s+hortons", re.I), "Tim Hortons"),
     (re.compile(r"wholesale", re.I), "Wholesale Club"),
@@ -882,6 +884,22 @@ def merge_page_text(pages: Sequence[str], max_overlap_lines: int = 25) -> str:
             if [_line_key(x) for x in merged[-n:]] == [_line_key(x) for x in lines[:n]]:
                 overlap = n
                 break
+        if not overlap:
+            # Scanner page overlap can repeat a department heading with OCR
+            # damage. Require two matching purchase rows; never deduplicate
+            # identical purchases within a page or guess from one fuzzy row.
+            for offset in (0, 1):
+                if offset and (not lines[0].isupper() or parse_money(lines[0]) is not None):
+                    continue
+                for n in range(min(limit, len(lines) - offset), 1, -1):
+                    left, right = merged[-n:], lines[offset:offset+n]
+                    products = sum(parse_money(x) is not None and not TOTAL_WORDS.search(x)
+                                   and not NON_ITEM_WORDS.search(x) and '@' not in x for x in left)
+                    if products >= 2 and all(_ocr_lines_match(a, b) for a, b in zip(left, right)):
+                        overlap = offset + n
+                        break
+                if overlap:
+                    break
         merged.extend(lines[overlap:])
     return "\n".join(merged)
 
@@ -1034,6 +1052,8 @@ def extract_merchant(text: str) -> Optional[str]:
 
 def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     subtotal = tax = total = None
+    taxes = {}
+    included_tax = False
     total_candidates: List[Tuple[float, bool]] = []
     tender_candidates: List[Tuple[float, bool]] = []
     for raw in text.splitlines():
@@ -1050,11 +1070,18 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
             tolerant = amount is not None
         if amount is None:
             continue
-        if re.search(r"\bsub\s*total\b", line, re.I):
+        if re.search(r"\b(?:sub\s*tota[l1]?|suptotal)\b", line, re.I):
             subtotal = amount
             continue
         if tax_like:
-            tax = (tax or 0.0) + amount
+            if re.search(r'\b(?:inc|incl|included)\b', line, re.I):
+                included_tax = True
+                continue
+            codes = set(re.findall(r'\b(?:gst|pst|rst|hst)\b', line, re.I))
+            key = next(iter(codes)).lower() if len(codes) == 1 else 'tax'
+            # Repeated receipt summaries are alternate observations, not
+            # additional taxes. Prefer named components over their summary.
+            taxes[key] = amount
             continue
         if total_like:
             if not re.search(r"\b(?:tax|items?|savings?|discount|points?)\b", line, re.I):
@@ -1073,6 +1100,10 @@ def extract_totals(text: str) -> Tuple[Optional[float], Optional[float], Optiona
                 total = tender
     elif tender_candidates:
         total = tender_candidates[-1][0]
+    components = [value for key, value in taxes.items() if key != 'tax']
+    tax = round(sum(components), 2) if components else taxes.get('tax', 0.0 if included_tax else None)
+    if subtotal is None and included_tax and total is not None:
+        subtotal = round(total - (tax or 0), 2)
     if subtotal is not None and total is not None and subtotal * total > 0:
         derived_tax = round(abs(total) - abs(subtotal), 2)
         if 0 <= derived_tax <= max(0.01, abs(subtotal) * 0.30) and (tax is None or abs(tax) < derived_tax):
@@ -1085,12 +1116,36 @@ def extract_items(text: str) -> List[ScannedItem]:
     raw_lines = text.splitlines()
     for index, raw in enumerate(raw_lines):
         line = normalize_leading_decimal_money(normalize_line(raw))
+        if re.match(r'^(?:sub\s*tota[l1]?|suptotal)\b', line, re.I) or (
+                re.match(r'^(?:total|tax\s+summary)\b', line, re.I)
+                and (items or parse_money(line) is not None)):
+            break
+        adjustment = re.match(r'^(?:INSTANT\s+SAVINGS|\+?EHC)\b', line, re.I)
+        if adjustment:
+            amount = parse_money(line)
+            if items and amount is not None:
+                direction = -1 if items[-1].line_total < 0 else 1
+                delta = -abs(amount) if 'savings' in line.lower() else abs(amount)
+                items[-1].line_total = round(items[-1].line_total + direction * delta, 2)
+            continue
+        if re.match(r'^(?:price\s*/|lit(?:er|re)s?\s*:|pump\s*[:\d]|fiscal\s+\d{4}\s+loyalty)', line, re.I) or re.search(r'loyalty\s+appeasement', line, re.I):
+            continue
         if not line or TOTAL_WORDS.search(line) or NON_ITEM_WORDS.search(line):
             continue
         if re.search(r"^\s*(?:\d+(?:\.\d+)?\s*(?:kg|lb)\s*@|\d+\s*@\s*\d+\s*/)", line, re.I):
             continue
         matches = list(MONEY_RE.finditer(line))
         if not matches:
+            if re.match(r'^\s*(?:\d+\s+)?(?:regular|premium|diesel|unleaded)\s+(?:gasoline|fuel)\b', line, re.I):
+                for candidate in raw_lines[index+1:index+9]:
+                    candidate = normalize_line(candidate)
+                    if TOTAL_WORDS.search(candidate):
+                        break
+                    if re.fullmatch(r'[\d$.,\s-]+', candidate) and len(MONEY_RE.findall(candidate)) >= 2:
+                        amount = parse_money(candidate)
+                        if amount is not None:
+                            items.append(ScannedItem(re.sub(r'^\d+\s+', '', line), amount))
+                            break
             # Some OCR splits a barcode/item line from its amount column.
             # Only join strong product rows so arbitrary receipt prose is not
             # turned into a line item.
@@ -1104,6 +1159,12 @@ def extract_items(text: str) -> List[ScannedItem]:
             continue
         last = matches[-1]
         name = clean_extracted_item_name(line[: last.start()].strip(" :-"))
+        if re.match(r'^\s*(?:\d+\s+)?(?:regular|premium|diesel|unleaded)\b', line, re.I) and len(matches) >= 2:
+            name = re.sub(r'^\d+\s+', '', line[:matches[0].start()].strip())
+        if re.match(r'^\d{6,14}\s+[1IlT](?:\s*ea)?\s+', line, re.I) and index:
+            previous = normalize_line(raw_lines[index - 1])
+            if parse_money(previous) is None and len(re.findall(r'[A-Za-z]', previous)) >= 3 and not TOTAL_WORDS.search(previous) and not NON_ITEM_WORDS.search(previous):
+                name = previous
         if len(re.sub(r"[^A-Za-z]", "", name)) < 2:
             continue
         amount = parse_money(line)
@@ -1160,6 +1221,9 @@ def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
         reasons.append("missing_items")
     if receipt.extraction_confidence < 0.65:
         reasons.append("low_confidence")
+    from .allocation import assess
+    reasons.extend(assess([asdict(i) for i in receipt.items], receipt.subtotal,
+                         receipt.tax, receipt.total)['reasons'])
     return reasons
 
 
@@ -1277,6 +1341,7 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                 card_last4 = EXCLUDED.card_last4,
                 payer = EXCLUDED.payer,
                 raw_payload = EXCLUDED.raw_payload
+            WHERE NOT (COALESCE(expenses.raw_payload, '{{}}'::jsonb) ? 'item_allocation_correction')
             RETURNING id
             """,
             (receipt.canonical_order_id, Path(receipt.path).name, receipt.source_reference,
@@ -1285,7 +1350,13 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
              receipt.extraction_confidence, receipt.payment_method, receipt.card_last4,
              receipt.payer, json.dumps(payload)),
         )
-        expense_pk = int(cur.fetchone()[0])
+        saved = cur.fetchone()
+        if saved is None:
+            # Human/image-verified canonical allocations survive later OCR.
+            cur.execute(f"SELECT id FROM {schema}.expenses WHERE source='scanned' AND order_id=%s",
+                        (receipt.canonical_order_id,))
+            return int(cur.fetchone()[0])
+        expense_pk = int(saved[0])
         cur.execute(f"DELETE FROM {schema}.expense_items WHERE expense_pk = %s", (expense_pk,))
         for item in receipt.items:
             cur.execute(

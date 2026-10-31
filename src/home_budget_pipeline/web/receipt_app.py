@@ -268,6 +268,51 @@ class AcceptRecommendationRequest(BaseModel):
     expected_url: str | None = Field(max_length=10000)
 
 
+@app.get(f"{BASE_PATH}/api/receipts/{{source_sha256}}/allocation")
+def allocation_detail(source_sha256: str, service: LedgerQueryService = Depends(query_service),
+                      _: dict[str, str] = Depends(authenticated_identity)):
+    if not _RECEIPT_KEY_RE.fullmatch(source_sha256):
+        raise HTTPException(422, 'Invalid receipt identity')
+    try:
+        return service.receipt_allocation(source_sha256)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+class AllocationCorrectionRequest(BaseModel):
+    model_config = {'extra': 'forbid'}
+    expected_version: str = Field(pattern=r'^[0-9a-f]{64}$')
+    merchant: str = Field(min_length=1, max_length=300)
+    subtotal: str | float
+    gst: str | float = '0'
+    pst: str | float = '0'
+    included_tax: str | float = '0'
+    reason: str = Field(min_length=1, max_length=2000)
+    items: list[dict[str, Any]] = Field(min_length=1, max_length=500)
+
+
+@app.post(f"{BASE_PATH}/api/receipts/{{source_sha256}}/allocation")
+def correct_allocation(source_sha256: str, request: AllocationCorrectionRequest,
+                       x_ledger_action: str | None = Header(default=None),
+                       service: LedgerQueryService = Depends(query_service),
+                       identity: dict[str, str] = Depends(authenticated_identity)):
+    from .allocation_corrections import AllocationConflict
+    if x_ledger_action != 'correct-receipt-allocation':
+        raise HTTPException(403, 'Allocation correction action header missing')
+    if not _RECEIPT_KEY_RE.fullmatch(source_sha256):
+        raise HTTPException(422, 'Invalid receipt identity')
+    try:
+        return service.correct_receipt_allocation(source_sha256, request.expected_version,
+            request.model_dump(exclude={'expected_version'}), actor_user=identity['user'],
+            actor_email=identity.get('email') or None)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except AllocationConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.post(f"{BASE_PATH}/api/receipts/{{source_sha256}}/accept-recommendation")
 def accept_recommendation(source_sha256: str, request: AcceptRecommendationRequest,
                           x_ledger_action: str | None = Header(default=None),
@@ -519,7 +564,7 @@ def receipt_page(
     filename = Path(source_reference).name or source_reference
     evidence_id = receipt.get("evidence_id")
     expense_pk = receipt.get("expense_pk") or expense.get("expense_pk")
-    merchant = evidence.get('merchant') or expense.get('store_name')
+    merchant = expense.get('store_name') or evidence.get('merchant')
     receipt_date = evidence.get('transaction_datetime') or expense.get('transaction_datetime') or expense.get('order_date')
     total = evidence.get('total')
     if total is None:
@@ -562,7 +607,13 @@ def receipt_page(
             f"<td>{esc(item.get('category_source'))}</td>"
             "</tr>"
         )
+    allocation_review = ''
+    if expense_pk and hasattr(service, 'receipt_allocation'):
+        from .allocation_html import allocation_html
+        allocation_review = allocation_html(service.receipt_allocation(source_sha256), source_sha256)
     items_html = (
+        allocation_review
+        +
         '<h2>Line items</h2>'
         + (f'<form id="refresh-items" data-receipt="{esc(source_sha256)}"><button type="submit">Apply accepted matches and category rules</button>'
            '<p>Fills empty product fields from previously accepted matches and categorizes unresolved items. Existing descriptions and categories are preserved. No model or search calls.</p>'
@@ -593,6 +644,27 @@ def receipt_page(
         + '<style>.receipt-recommendation{min-width:18rem;max-width:26rem;overflow-wrap:anywhere}.receipt-recommendation pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>'
         + items_html
         + """<script>
+const allocationForm=document.getElementById('allocation-correction');
+if(allocationForm){
+  document.getElementById('add-allocation-item').addEventListener('click',()=>{
+    const row=document.createElement('tr');row.dataset.item='';
+    row.innerHTML='<td><input class="allocation-name" maxlength="1000" required></td><td><input class="allocation-amount" type="number" step="0.01" required></td><td><input class="allocation-remove" type="checkbox" aria-label="Remove purchase from allocation"></td>';
+    document.getElementById('allocation-rows').append(row);
+  });
+  allocationForm.addEventListener('submit',async event=>{
+    event.preventDefault();const button=allocationForm.querySelector('button[type="submit"]'),status=document.getElementById('allocation-status');
+    button.disabled=true;status.textContent='Checking and saving allocations…';
+    const payload=Object.fromEntries(new FormData(allocationForm));payload.expected_version=allocationForm.dataset.version;
+    payload.items=[...document.querySelectorAll('#allocation-rows tr')].filter(row=>!row.querySelector('.allocation-remove').checked).map(row=>({
+      id:row.dataset.item?Number(row.dataset.item):null,item_name:row.querySelector('.allocation-name').value,line_total:row.querySelector('.allocation-amount').value}));
+    try{
+      const response=await fetch(""" + json.dumps(BASE_PATH) + """+'/api/receipts/'+encodeURIComponent(allocationForm.dataset.receipt)+'/allocation',{
+        method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Ledger-Action':'correct-receipt-allocation'},body:JSON.stringify(payload)});
+      const result=await response.json();if(!response.ok)throw Error(result.detail||'Unable to save allocations');
+      window.location.reload();
+    }catch(error){status.textContent=error.message;button.disabled=false;}
+  });
+}
 for(const form of document.querySelectorAll('.accept-recommendation')) {
   form.addEventListener('submit', async event => {
     event.preventDefault();const button=form.querySelector('button'),status=form.querySelector('.accept-status');

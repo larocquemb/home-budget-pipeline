@@ -49,7 +49,7 @@ TOTAL 11.48
         self.assertEqual(total, 11.48)
         self.assertEqual([(x.item_name, x.line_total) for x in scan.extract_items(text)], [("Milk", 5.94), ("Bread", 4.99)])
 
-    def test_instant_savings_is_not_extracted_as_a_product(self):
+    def test_instant_savings_and_fee_are_allocated_without_summary_double_count(self):
         text = """Baguette White $3.99 C
 INSTANT SAVINGS $0.50
 YOU SAVED $1.30
@@ -58,7 +58,7 @@ POINTS EARNED 200 PTS
 +EHC $0.12"""
         self.assertEqual(
             [(item.item_name, item.line_total) for item in scan.extract_items(text)],
-            [("Baguette White", 3.99)],
+            [("Baguette White", 3.61)],
         )
 
     def test_item_amount_wrapped_to_next_ocr_line_is_preserved(self):

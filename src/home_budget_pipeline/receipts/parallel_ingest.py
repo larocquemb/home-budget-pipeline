@@ -608,6 +608,12 @@ def persist_evidence_first(
                     cur.execute(f"SELECT expense_pk FROM {schema}.receipt_evidence WHERE id = %s", (evidence_id,))
                     existing_expense_pk = cur.fetchone()[0]
             if existing_expense_pk is not None:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT raw_payload FROM {schema}.expenses WHERE id=%s FOR UPDATE", (existing_expense_pk,))
+                    existing = cur.fetchone()
+                    if existing and isinstance(existing[0], dict) and existing[0].get('item_allocation_correction'):
+                        stats['matched'] += 1
+                        continue
                 with telemetry.span("receipt.persistence", {**attributes, "receipt.persistence.phase": "canonical"}):
                     expense_pk = scan.upsert_receipt(conn, receipt, schema)
                     _persist_transaction_datetime(conn, receipt, schema)

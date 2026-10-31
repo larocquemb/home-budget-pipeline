@@ -755,3 +755,27 @@ The Grafana datasource remains a separate configuration step: use
 private reader password, and TLS `verify-full` with the Brown Rook root CA.
 Query the projected view rather than raw receipt or expense tables. Test the
 connection from Grafana after the PostgreSQL restart.
+
+## Correcting item allocations
+
+The receipt page shows item and header reconciliation separately. A balanced
+receipt total can still require item allocation review. Open **Correct allocations
+against the original receipt** to review purchase names, net amounts, subtotal
+and additional taxes. Record tax already included in prices separately. Supply
+a correction reason; saving requires the original receipt total to reconcile.
+Product/category review remains a separate step.
+
+For an operator workflow, keep the correction JSON outside tracked source:
+
+```bash
+ledger --env-file .env.dev receipts correct-allocation SOURCE_SHA256 --plan /private/path/plan.json
+ledger --env-file .env.dev receipts correct-allocation SOURCE_SHA256 --plan /private/path/plan.json --apply
+```
+
+The plan contains `merchant`, `subtotal`, `gst`, `pst`, `included_tax`, `reason`
+and `items` (each with `item_name`, `line_total` and an existing `id`, or no `id`
+for a new purchase). Add the preview's `version` as `expected_version` before
+applying. A concurrent change requires a fresh review and preview. Corrections
+retain the receipt total/identity and original OCR evidence, write before/after
+audit snapshots, and protect existing reviewed items and their history from
+deletion. Later scanned imports preserve verified canonical allocations.

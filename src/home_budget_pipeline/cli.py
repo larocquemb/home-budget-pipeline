@@ -112,6 +112,12 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     from .receipts.recover_results import run_recovery
     recover.set_defaults(handler=run_recovery)
 
+    correction = receipt_commands.add_parser('correct-allocation', help='Preview or save an image-verified, audited receipt allocation correction.')
+    correction.add_argument('source_sha256')
+    correction.add_argument('--plan', required=True, type=Path, help='Private JSON correction plan; include expected_version before applying.')
+    correction.add_argument('--apply', action='store_true')
+    correction.set_defaults(handler=_correct_allocation)
+
     retry = receipt_commands.add_parser(
         "retry", help="Reset a failed or interrupted receipt for the next publish or process command.",
     )
@@ -189,6 +195,34 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     )
     setup.set_defaults(handler=_setup_database)
     return parser
+
+
+def _correct_allocation(args):
+    import getpass
+    from .web.queries import LedgerQueryService
+    from .web.allocation_corrections import normalize
+    from .receipts.allocation import assess, money
+    if not re.fullmatch(r'[0-9a-f]{64}', args.source_sha256):
+        raise ValueError('A valid receipt SHA-256 is required')
+    plan = json.loads(args.plan.read_text())
+    expected = plan.pop('expected_version', None)
+    service = LedgerQueryService()
+    state = service.receipt_allocation(args.source_sha256)
+    normalized = normalize(plan)
+    if args.apply:
+        if not expected:
+            raise ValueError('Include the preview allocation version before applying')
+        result = service.correct_receipt_allocation(args.source_sha256, expected, plan,
+                                                   actor_user=getpass.getuser())
+    else:
+        e = state['snapshot']['expense']
+        result = {'apply': False, 'version': state['version'],
+                  'assessment': assess(normalized['items'], normalized['subtotal'],
+                    normalized['gst'] + normalized['pst'], e['expense_total'],
+                    charges=sum(money(e.get(k) or 0) for k in ('receipt_tip', 'receipt_service_fee', 'receipt_recycling_fee', 'receipt_service_fee_tax')),
+                    discount=e.get('receipt_discount_total') or 0)}
+    print(json.dumps(result, default=str))
+    return 0
 
 
 def _receipt_services(args):

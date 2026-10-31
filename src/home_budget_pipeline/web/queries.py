@@ -86,6 +86,15 @@ class LedgerQueryService:
     def __init__(self, connect: Optional[Callable[[], object]] = None):
         self._connect = connect or self._default_connect
 
+    def receipt_allocation(self, source_sha256):
+        from .allocation_corrections import read
+        return read(self._connect, source_sha256)
+
+    def correct_receipt_allocation(self, source_sha256, expected_version, plan, *, actor_user, actor_email=None):
+        from .allocation_corrections import correct
+        return correct(self._connect, source_sha256, expected_version, plan,
+                       actor_user=actor_user, actor_email=actor_email)
+
     @staticmethod
     def _default_connect():
         import psycopg
