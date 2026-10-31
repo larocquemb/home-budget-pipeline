@@ -340,3 +340,38 @@ def test_cli_exposes_dedicated_collector(monkeypatch):
     args = build_parser().parse_args(["receipts", "collect"])
     assert args.handler is ocr_collector.run_collector
     assert args.db_dsn == "dbname=test"
+
+
+@pytest.mark.parametrize('existing', [False, True])
+def test_cache_only_saves_independent_run_without_creating_receipt_or_expenses(tmp_path, monkeypatch, existing):
+    source = tmp_path / 'receipt.pdf'
+    source.write_bytes(b'receipt')
+    event = ocr_results.result_messages_for_receipt(
+        result_receipt(source), persistence_mode='cache_only',
+        request_id='740023b1-a078-4914-b074-81bd7129bb75',
+        trace_context={'traceparent': '00-' + 'a' * 32 + '-' + 'b' * 16 + '-01'},
+    )[0]
+    class Connection:
+        def __init__(self):
+            self.exists = existing
+            self.calls = []
+        def cursor(self): return self
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            if 'INSERT INTO budget.receipt_evidence' in sql:
+                self.exists = True
+        def fetchone(self): return (42,) if self.exists else None
+    conn = Connection()
+    runs = []
+    monkeypatch.setattr(ocr_collector, 'persist_ocr_run', lambda c, evidence_id, receipt, schema: runs.append(evidence_id))
+    for _ in range(2):
+        ocr_collector._persist_cache_only(conn, event, result_receipt(source), 'budget')
+    inserts = [q for q, _ in conn.calls if 'INSERT INTO budget.receipt_evidence' in q]
+    assert inserts == []
+    assert runs == ([42, 42] if existing else [None, None])
+    for query, _ in conn.calls:
+        assert 'budget.expenses' not in query
+        assert 'receipt_processing_status' not in query
+        assert 'UPDATE budget.receipt_evidence' not in query
