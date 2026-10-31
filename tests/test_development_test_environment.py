@@ -17,9 +17,7 @@ def helper():
 
 def test_runner_uses_test_database_and_broker_and_removes_ambient_overrides(arsene_development_environment):
     values = dict(arsene_development_environment)
-    values['TEST_DATABASE_URL'] = (
-        'postgresql://home_budget_test:synthetic@arsene.brownrook.net:15432/home_budget_test'
-    )
+    values['TEST_DATABASE_URL'] = values['DATABASE_URL'].replace('home_budget_dev', 'home_budget_test')
     env = helper().test_environment(values, {'PGHOSTADDR': '192.0.2.1', 'TEST_NEO4J_URI': 'bolt://example.invalid:7687'})
     assert env['DATABASE_URL'] == env['TEST_DATABASE_URL'] == values['TEST_DATABASE_URL']
     assert env['RABBITMQ_URL'] == env['TEST_RABBITMQ_URL'] == values['TEST_RABBITMQ_URL']
