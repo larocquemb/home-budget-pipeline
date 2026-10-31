@@ -1,4 +1,57 @@
-from home_budget_pipeline.web.queries import LedgerQueryService
+import pytest
+
+from home_budget_pipeline.web.queries import LedgerQueryService, RECEIPT_PROCESSING_SORT_COLUMNS
+
+
+@pytest.mark.parametrize("sort", RECEIPT_PROCESSING_SORT_COLUMNS)
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_processing_sorts_before_pagination_with_stable_ties(sort, direction):
+    service, _, cursor = service_with()
+    service.receipt_processing_status(limit=10, offset=20, sort=sort, direction=direction)
+    sql, params = cursor.executed[3]
+    assert f"ORDER BY {sort} {direction.upper()} NULLS LAST, source_reference ASC, source_sha256 ASC LIMIT %s OFFSET %s" in sql
+    assert params == (10, 20)
+
+
+def test_processing_sort_rejects_sql_in_sort_and_direction():
+    service, _, cursor = service_with()
+    service.receipt_processing_status(sort="attempts; DROP TABLE budget.expenses", direction="asc; SELECT 1")
+    sql, _ = cursor.executed[3]
+    assert "ORDER BY last_attempted_at DESC NULLS LAST" in sql
+    assert "DROP" not in sql
+    assert "asc; SELECT 1" not in sql
+
+
+@pytest.mark.parametrize("month", ["2026-10", "2026-12", "2028-02"])
+def test_processing_month_uses_only_source_folder_and_parameterized_month(month):
+    service, _, cursor = service_with()
+    service.receipt_processing_status(limit=10, offset=20, month=month)
+    count_sql, count_params = cursor.executed[1]
+    sql, params = cursor.executed[3]
+    assert count_params == (month,)
+    assert params == (*count_params, 10, 20)
+    for query in (count_sql, sql):
+        assert "WHERE source_month = %s" in query
+        assert "substring(r.source_reference" in query
+        assert "transaction_datetime" not in query
+        assert "FROM budget.receipt_evidence" in query
+
+
+def test_processing_unassigned_and_all_months():
+    service, _, cursor = service_with()
+    service.receipt_processing_status(month="unassigned")
+    assert "WHERE source_month IS NULL" in cursor.executed[3][0]
+    service, _, cursor = service_with()
+    service.receipt_processing_status(month="all")
+    assert "WHERE source_month" not in cursor.executed[3][0]
+
+
+@pytest.mark.parametrize("month", ["2026-13", "2026-00", "2026-1", "0000-10", "2026-10' OR true--"])
+def test_processing_rejects_invalid_months_before_querying(month):
+    service, _, cursor = service_with()
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        service.receipt_processing_status(month=month)
+    assert not cursor.executed
 
 
 class FakeCursor:

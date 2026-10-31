@@ -1748,6 +1748,9 @@
 - name: Define native Grafana v2 dashboard resources
   ansible.builtin.set_fact:
     monitoring_grafana_dashboard_resources:
+      - label: receipt progress
+        resource: >-
+          {{ lookup('ansible.builtin.template', 'grafana-receipt-progress-dashboard.json.j2') | from_json }}
       - label: receipt telemetry
         resource: >-
           {{ lookup('ansible.builtin.template', 'grafana-receipt-telemetry-dashboard.json.j2') | from_json }}

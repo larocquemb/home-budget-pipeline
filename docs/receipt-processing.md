@@ -30,25 +30,45 @@ Mac development and K3s use separate OCR caches:
 | Mac | `.ocr_cache` in the local repository, configured by `HOME_BUDGET_OCR_CACHE` in `.env.dev`. |
 | K3s | `HOME_BUDGET_OCR_CACHE` in `.env.k3s`, currently `/data/receipts/derived/ocr-cache` on the `home-budget-data` PVC. |
 
-Load the Mac settings before running local processing or cache rebuilds:
+On the Mac, `/Volumes/brownrook/home-budget/receipts/derived/ocr-cache`
+is the shared production cache mounted by K3s at
+`/data/receipts/derived/ocr-cache`. It is separate from the development
+repository's `.ocr_cache`. The same source receipt can have a JSON result in
+each cache, with different OCR run IDs and processing times. These are separate
+environment results; do not merge them or delete one as a duplicate.
+
+Each result keeps the source filename and adds `.json`, for example
+`0050_261031035511_001.tif.json`. It contains extracted text, page results and
+OCR metadata. A cache file proves a saved OCR result exists; it does not prove
+that financial receipt import completed. Retired validation inputs and outputs
+belong in the private per-story evidence archive, outside the active cache root.
+
+Select Mac settings explicitly for application commands:
 
 ```bash
-set -a
-source .env.dev
-set +a
+ledger --env-file .env.dev receipts process --verbose
+ledger --env-file .env.dev ocr-cache rebuild --missing-only --verbose
 ```
+
+Use `ledger --env-file .env.dev ocr-cache clean --local` to empty the local
+cache while retaining prior outputs privately. It stops local receipt services;
+restart them with `ledger --env-file .env.dev receipts services start` before
+queueing work. `make` is used for build/test and infrastructure tooling; application
+operations use `ledger`. Commands without `--env-file` below assume their runtime
+already supplies the correct environment (for example a Kubernetes worker).
 
 Keep the Mac cache on local disk, even when reading source receipts from the
 shared SMB folder. OCR creates cache files as needed. Switching the Mac cache
 location leaves existing PV cache files intact; only K3s continues using them.
 Already-running Mac processes retain their previous environment until restarted.
 
-For Mac development, native PostgreSQL on port 5432 and native RabbitMQ on port
-5672 stay running as Homebrew services. Enable the worker and collector as
-background services with `make dev-receipts-start`, then submit work with
-`ledger receipts process --verbose`. Check them with `make dev-receipts-status`
-and follow their output with `make dev-receipts-logs`. After changing `.env.dev`,
-run `make dev-receipts-restart`. Do not load the obsolete
+For development, PostgreSQL and RabbitMQ run in isolated Podman services on
+Arsene (ports 15432 and 15673); Python workers and their OCR cache stay on the
+Mac. Enable the worker and collector as
+background services with `ledger --env-file .env.dev receipts services start`, then submit work with
+`ledger --env-file .env.dev receipts process --verbose`. Check them with `ledger --env-file .env.dev receipts services status`
+and follow their output with `ledger --env-file .env.dev receipts services logs`. After changing `.env.dev`,
+run `ledger --env-file .env.dev receipts services restart`. Do not load the obsolete
 `.local-postgres/runtime.env`. Enable local log forwarding with `make dev-telemetry-start`; see the
 [local development guide](local-development.md#send-local-logs-and-opentelemetry-to-grafana).
 See [local macOS development](local-development.md) for setup and lifecycle commands.

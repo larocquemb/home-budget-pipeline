@@ -1,5 +1,3 @@
-TEST_DB ?= home_budget_test
-TEST_DATABASE_URL ?= postgresql://localhost/$(TEST_DB)
 PYTHON ?= .venv/bin/python
 LEDGER ?= .venv/bin/ledger
 MKDOCS ?= .venv/bin/mkdocs
@@ -79,13 +77,15 @@ dev-postgres-tls-prepare:
 
 help:
 	@echo "Model evaluation: make eval-models BASELINE=MODEL CANDIDATE=MODEL [EVAL_REPEATS=3]"
-	@echo "Development: dev-up dev-down dev-web dev-cert-install dev-db-reset"
+	@echo "Development infrastructure: dev-up dev-down dev-cert-install"
+	@echo "Application operations: ledger --help (receipts, ocr-cache, database); see docs/local-development.md"
 	@echo "Local checks: check-local (unit tests, Python wheel, strict docs); build-local"
 	@echo "Local logs:  dev-logging-up dev-logging-test dev-logging-status dev-logging-logs dev-logging-down"
 	@echo "Documentation: docs-build docs-serve"
 	@echo "Tests:       test test-observability test-postgres-oidc-image test-db-setup test-db test-db-verbose test-rabbit test-all test-receipts"
-	@echo "Operations:  status otlp-demo enrich-products"
-	@echo "Receipts:    receipts-publish [NODE=name] [RECEIPT=relative/path.pdf] receipts-worker-test NODE=name"
+	@echo "Infrastructure status/demo: status otlp-demo"
+	@echo "Receipt infrastructure test: receipts-worker-test NODE=name"
+	@echo "Legacy application wrappers (prefer ledger): dev-db-reset dev-receipts-* receipts-publish enrich-products"
 	@echo "Deployment:  deploy-k3s k3s-config-check k3s-config-apply (uses .env.k3s)"
 	@echo "PostgreSQL:  postgres-config-check postgres-config-apply postgres-password-rotate"
 	@echo "Monitoring:  monitoring-gitops-syntax monitoring-gitops-check monitoring-gitops-apply log-collection-compare"
@@ -146,8 +146,39 @@ dev-web:
 	@test -f .env.dev || (echo "Copy .env.dev.example to .env.dev and fill in its values"; exit 2)
 	@bash scripts/run_local_web.sh
 
+.PHONY: dev-web-start dev-web-stop dev-web-restart dev-web-status dev-web-logs
+dev-web-start:
+	@$(PYTHON) scripts/web_service.py start
+dev-web-stop:
+	@$(PYTHON) scripts/web_service.py stop
+dev-web-restart:
+	@$(PYTHON) scripts/web_service.py restart
+dev-web-status:
+	@$(PYTHON) scripts/web_service.py status
+dev-web-logs:
+	@$(PYTHON) scripts/web_service.py logs
+
 dev-db-reset:
-	@./scripts/rebuild_local_database.sh .env.dev
+	@$(PYTHON) scripts/development_backend.py reset --confirm "$(CONFIRM)"
+
+.PHONY: dev-backend-credentials dev-backend-configure dev-backend-check dev-backend-bootstrap dev-test-db-bootstrap dev-test-db-reset
+dev-backend-credentials:
+	@$(PYTHON) scripts/development_backend.py credentials
+
+dev-backend-configure:
+	@$(PYTHON) scripts/development_backend.py configure $(if $(filter 1,$(APPLY)),--apply,)
+
+dev-backend-check:
+	@$(PYTHON) scripts/development_backend.py check
+
+dev-backend-bootstrap:
+	@$(PYTHON) scripts/development_backend.py bootstrap
+
+dev-test-db-bootstrap:
+	@$(PYTHON) scripts/development_backend.py bootstrap --test
+
+dev-test-db-reset:
+	@$(PYTHON) scripts/development_backend.py reset --test --confirm "$(CONFIRM)"
 
 dev-cert-install:
 	@mkdir -p .dev-certs
@@ -229,45 +260,16 @@ test-postgres-oidc-image:
 	@bash ./scripts/test_postgres_oidc_image.sh
 
 test-db-setup:
-	@echo "Resetting PostgreSQL test database..."
-	@psql postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='$(TEST_DB)'" | grep -q 1 || createdb $(TEST_DB)
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -c 'DROP SCHEMA IF EXISTS ingest_blue CASCADE; DROP SCHEMA IF EXISTS ingest_green CASCADE; DROP SCHEMA IF EXISTS ingest CASCADE; DROP SCHEMA IF EXISTS ops CASCADE; DROP SCHEMA IF EXISTS budget CASCADE;' >/dev/null
-	@echo "Loading schema..."
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/schema_phase1.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/receipt_processing.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/schema_constraints.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/product_enrichment.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/receipt_reprocess_requests.sql >/dev/null
-	@PGOPTIONS='--client-min-messages=warning' psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -q -f sql/ocr_result_collector.sql >/dev/null
+	@$(LEDGER) --env-file .env.dev database rebuild --target arsene-test --confirm home_budget_test
 
 test-db: test-db-setup
-	@if test -n "$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}"; then \
-		echo "Running PostgreSQL and RabbitMQ integration tests..."; \
-	else \
-		echo "Running PostgreSQL integration tests; RabbitMQ tests will be skipped (no broker URL)..."; \
-	fi
-	@TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
-		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
-		$(PYTHON) -m pytest -q -rA -m integration
+	@$(PYTHON) scripts/run_development_tests.py pytest -q -rA -m integration
 
-test-db-verbose:
-	@psql postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='$(TEST_DB)'" | grep -q 1 || createdb $(TEST_DB)
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -c 'DROP SCHEMA IF EXISTS ingest_blue CASCADE; DROP SCHEMA IF EXISTS ingest_green CASCADE; DROP SCHEMA IF EXISTS ingest CASCADE; DROP SCHEMA IF EXISTS ops CASCADE; DROP SCHEMA IF EXISTS budget CASCADE;'
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/schema_phase1.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/receipt_processing.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/schema_constraints.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/product_enrichment.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/receipt_reprocess_requests.sql
-	psql $(TEST_DATABASE_URL) -v ON_ERROR_STOP=1 -f sql/ocr_result_collector.sql
-	TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
-		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
-		$(PYTHON) -m pytest -q -m integration
+test-db-verbose: test-db-setup
+	@$(PYTHON) scripts/run_development_tests.py pytest -v -m integration
 
 test-rabbit: test-db-setup
-	@test -n "$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" || { echo "Export RABBITMQ_URL or TEST_RABBITMQ_URL"; exit 2; }
-	@TEST_DATABASE_URL=$(TEST_DATABASE_URL) \
-		TEST_RABBITMQ_URL="$${TEST_RABBITMQ_URL:-$${RABBITMQ_URL:-}}" \
-		$(PYTHON) -m pytest -v -m integration tests/test_receipt_queue_rabbitmq.py
+	@$(PYTHON) scripts/run_development_tests.py pytest -v -m integration tests/test_receipt_queue_rabbitmq.py
 
 test-all: test
 	@$(MAKE) test-db
@@ -279,9 +281,8 @@ test-receipts: test-db-setup
 	@rm -rf "$(RECEIPT_TEST_ROOT)"
 	@mkdir -p "$(RECEIPT_TEST_ROOT)/inbox" "$(RECEIPT_TEST_ROOT)/ocr-cache"
 	@rsync -a "$(RECEIPT_SOURCE_ROOT)/" "$(RECEIPT_TEST_ROOT)/inbox/"
-	@echo "Running receipt backlog against local PostgreSQL test database..."
-	@DATABASE_URL=$(TEST_DATABASE_URL) HOME_BUDGET_OCR_CACHE="$(RECEIPT_TEST_ROOT)/ocr-cache" \
-		$(LEDGER) receipts process "$(RECEIPT_TEST_ROOT)/inbox"
+	@echo "Queueing receipt backlog against the isolated Arsene test services..."
+	@$(PYTHON) scripts/run_development_tests.py publish "$(RECEIPT_TEST_ROOT)/inbox" "$(RECEIPT_TEST_ROOT)/ocr-cache"
 
 .PHONY: k3s-postgres-tls-prepare monitoring-receipt-postgres-both-apply
 k3s-postgres-tls-prepare:
@@ -313,3 +314,11 @@ eval-rescore:
 .PHONY: ollama-dev-config
 ollama-dev-config:
 	$(PYTHON) scripts/configure_development_ollama.py
+
+.PHONY: dev-progress-start dev-progress-stop dev-progress-status
+dev-progress-start:
+	@$(PYTHON) scripts/progress_service.py start
+dev-progress-stop:
+	@$(PYTHON) scripts/progress_service.py stop
+dev-progress-status:
+	@$(PYTHON) scripts/progress_service.py status

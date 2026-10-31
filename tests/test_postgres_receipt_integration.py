@@ -124,6 +124,7 @@ def test_web_category_override_creates_rule_and_updates_scoped_exact_matches():
                 """
                 INSERT INTO budget.expense_categories (category_name, group_id)
                 VALUES ('Groceries', %s), ('Indoor Supplies', %s)
+                ON CONFLICT (category_name) DO NOTHING
                 """,
                 (group_id, group_id),
             )

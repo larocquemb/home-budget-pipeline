@@ -12,6 +12,11 @@ esac
 set -a
 . "$repo_root/.env.dev"
 set +a
+"$repo_root/.venv/bin/python" - <<'PY'
+import os
+from home_budget_pipeline.development_backend import validate_endpoints
+validate_endpoints(os.environ)
+PY
 export PYTHONUNBUFFERED=1
 if [ "$mode" = consume ]; then
   if [ -n "${HOME_BUDGET_SERVICE_OCR_THREADS:-}" ]; then

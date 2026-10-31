@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import math
 import uuid
+import re
 from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from home_budget_pipeline.categorization.logic import normalize_for_match
 from ..product_labels import product_name
+from ..receipts.catalogue import RECEIPT_CATALOGUE
 
 
 EXPENSE_SORT_COLUMNS = {
@@ -23,6 +25,26 @@ EXPENSE_SORT_COLUMNS = {
     "extraction_status": "extraction_status",
     "requires_review": "requires_review",
 }
+
+RECEIPT_PROCESSING_SORT_COLUMNS = {
+    "source_reference": "source_reference",
+    "status": "status",
+    "attempts": "attempts",
+    "last_attempted_at": "last_attempted_at",
+    "completed_at": "completed_at",
+    "last_error": "last_error",
+}
+
+
+def processing_month(value: str | None) -> str | None:
+    """Validate a source-folder month, with explicit all/unassigned views."""
+    if value in (None, "", "all"):
+        return None
+    if value == "unassigned":
+        return value
+    if not re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])", value) or value.startswith("0000-"):
+        raise ValueError("Month must be YYYY-MM")
+    return value
 
 
 class RecommendationConflict(ValueError):
@@ -813,12 +835,48 @@ class LedgerQueryService:
         """
         return Page(self._fetch(sql, (limit, offset)), limit, offset)
 
-    def receipt_processing_status(self, *, limit: int = 100, offset: int = 0) -> Page:
-        sql = """
+    def receipt_processing_status(self, *, limit: int = 100, offset: int = 0,
+                                  sort: str = "last_attempted_at", direction: str = "desc",
+                                  month: str | None = None) -> Page:
+        sort_column = RECEIPT_PROCESSING_SORT_COLUMNS.get(sort, "last_attempted_at")
+        sort_direction = "ASC" if direction.lower() == "asc" else "DESC"
+        month = processing_month(month)
+        params: tuple[Any, ...] = ()
+        where = ""
+        if month == "unassigned":
+            where = "WHERE source_month IS NULL"
+        elif month:
+            where = "WHERE source_month = %s"
+            params = (month,)
+        catalogue = f"""WITH processing AS (
+            SELECT r.source_sha256, r.source_reference,
+                   COALESCE(s.status, CASE WHEN re.evidence_type = 'electronic'
+                            THEN 'imported' ELSE 'not_started' END) AS status,
+                   COALESCE(s.attempts, 0) AS attempts, s.last_error,
+                   s.first_attempted_at, s.last_attempted_at,
+                   COALESCE(s.completed_at, CASE WHEN re.evidence_type = 'electronic'
+                            THEN re.created_at END) AS completed_at,
+                   COALESCE(s.updated_at, r.updated_at) AS updated_at,
+                   substring(r.source_reference from
+                       '(?:^|/)([0-9]{{4}}-(?:0[1-9]|1[0-2]))(?:-[0-9]{{2}})?/') AS source_month
+              FROM {RECEIPT_CATALOGUE} r
+              LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
+              LEFT JOIN LATERAL (
+                  SELECT evidence_type, created_at
+                    FROM budget.receipt_evidence
+                   WHERE source_sha256 = r.source_sha256
+                   ORDER BY is_primary_source DESC, id LIMIT 1
+              ) re ON TRUE
+        )"""
+        count_rows = self._fetch(f"{catalogue} SELECT COUNT(*) AS total_count FROM processing {where}", params)
+        total_count = int(count_rows[0]["total_count"]) if count_rows else 0
+        sql = f"""{catalogue}
             SELECT source_sha256, source_reference, status, attempts, last_error,
-                   first_attempted_at, last_attempted_at, completed_at, updated_at
-              FROM budget.receipt_processing_status
-             ORDER BY COALESCE(last_attempted_at, updated_at) DESC, source_reference
+                   first_attempted_at, last_attempted_at, completed_at, updated_at, source_month
+              FROM processing
+              {where}
+             ORDER BY {sort_column} {sort_direction} NULLS LAST,
+                      source_reference ASC, source_sha256 ASC
              LIMIT %s OFFSET %s
         """
-        return Page(self._fetch(sql, (limit, offset)), limit, offset)
+        return Page(self._fetch(sql, (*params, limit, offset)), limit, offset, total_count)

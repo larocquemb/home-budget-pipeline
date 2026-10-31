@@ -9,6 +9,9 @@ from pathlib import Path
 import plistlib
 import subprocess
 import time
+import sys
+import site
+import shlex
 
 ROOT = Path(__file__).resolve().parents[1]
 NAMES = None
@@ -39,6 +42,40 @@ def service_label(name: str) -> str:
     return f'com.brownrook.home-budget.{name}'
 
 
+WEB_BUNDLE_ID = 'net.brownrook.ledger.webagent'
+
+
+def web_agent_bundle(root: Path) -> Path:
+    return root / '.local-services' / 'LedgerWebAgent.app'
+
+
+def prepare_web_agent(root: Path) -> None:
+    """Build a signed app identity for local-network access by the web agent."""
+    bundle = web_agent_bundle(root)
+    contents = bundle / 'Contents'
+    executable = contents / 'MacOS' / 'LedgerWebAgent'
+    metadata = contents / 'Info.plist'
+    marker = root / '.local-services' / 'ledger-web-agent-build.json'
+    source = root / 'scripts/mac_web_agent.c'
+    desired = {'python': sys.base_prefix, 'version': sys.version, 'source': source.read_text()}
+    if marker.exists() and executable.exists() and metadata.exists():
+        if json.loads(marker.read_text()) == desired:
+            return
+    executable.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    config = Path(sys.base_prefix) / 'bin' / f'python{sys.version_info.major}.{sys.version_info.minor}-config'
+    includes = shlex.split(subprocess.check_output([str(config), '--includes'], text=True))
+    libraries = shlex.split(subprocess.check_output([str(config), '--ldflags', '--embed'], text=True))
+    subprocess.run(['clang', *includes, str(source), '-o', str(executable), *libraries], check=True)
+    metadata.write_bytes(plistlib.dumps({
+        'CFBundleIdentifier': WEB_BUNDLE_ID, 'CFBundleExecutable': 'LedgerWebAgent',
+        'CFBundleName': 'Ledger Web Agent', 'CFBundlePackageType': 'APPL',
+        'NSLocalNetworkUsageDescription': 'Ledger needs local network access to reach the development services on Arsene.',
+    }))
+    subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(bundle)], check=True)
+    subprocess.run(['/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister', '-f', str(bundle)], check=True)
+    marker.write_text(json.dumps(desired))
+
+
 def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
     config = {
         'Label': service_label(name),
@@ -55,6 +92,24 @@ def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
         'StandardOutPath': str(root / '.local-services' / f'{name}.log'),
         'StandardErrorPath': str(root / '.local-services' / f'{name}.log'),
     }
+
+    # Associate agents with their actual Python.app so macOS can apply its
+    # existing Local Network permission (Apple TN3179). Terminal/SSH processes
+    # are treated differently from LaunchAgents by local-network privacy.
+    interpreter = (root / '.venv/bin/python').resolve()
+    for parent in interpreter.parents:
+        info = parent / 'Resources/Python.app/Contents/Info.plist'
+        if info.is_file():
+            bundle_id = plistlib.loads(info.read_bytes()).get('CFBundleIdentifier')
+            if bundle_id:
+                config['AssociatedBundleIdentifiers'] = [bundle_id]
+            break
+
+    if name in {'web', 'progress'}:
+        script = 'mac_web_agent.py' if name == 'web' else 'receipt_progress.py'
+        config['ProgramArguments'] = [str(web_agent_bundle(root) / 'Contents/MacOS/LedgerWebAgent'), str(root / 'scripts' / script)]
+        config['AssociatedBundleIdentifiers'] = [WEB_BUNDLE_ID]
+        config['EnvironmentVariables'].update({'PYTHONHOME': sys.base_prefix, 'PYTHONPATH': os.pathsep.join(site.getsitepackages())})
 
     if is_worker(name) and threads is not None:
         config['EnvironmentVariables']['HOME_BUDGET_SERVICE_OCR_THREADS'] = str(threads)
@@ -82,6 +137,7 @@ def main() -> int:
     parser.add_argument('action', choices=('start', 'stop', 'restart', 'status', 'logs'))
     parser.add_argument('--workers', type=positive_count, help='Number of receipt consumers; saved for subsequent commands')
     parser.add_argument('--ocr-threads', type=positive_count, help='CPU threads per OCR engine in each worker')
+    parser.add_argument('--only', choices=('collector',), help='Control the collector without interrupting OCR workers')
     args = parser.parse_args()
     if (args.workers is not None or args.ocr_threads is not None) and args.action not in {'start', 'restart'}:
         parser.error('Worker settings apply to start or restart only')
@@ -91,10 +147,10 @@ def main() -> int:
         settings['workers'] = args.workers
     if args.ocr_threads is not None:
         settings['ocr_threads'] = args.ocr_threads
-    names = NAMES if NAMES is not None else configured_names(settings['workers'])
+    names = (args.only,) if args.only else (NAMES if NAMES is not None else configured_names(settings['workers']))
     domain = f'gui/{os.getuid()}'
     agents = Path.home() / 'Library/LaunchAgents'
-    if NAMES is None and args.action in {'stop', 'status', 'logs'}:
+    if NAMES is None and not args.only and args.action in {'stop', 'status', 'logs'}:
         names = tuple(dict.fromkeys((*names, *sorted(installed_names(agents)))))
     if args.action == 'logs':
         subprocess.run(['tail', '-n', '30', '-F', *(str(ROOT / '.local-services' / f'{n}.log') for n in names)])
@@ -103,9 +159,11 @@ def main() -> int:
         if not (ROOT / '.env.dev').is_file() or not (ROOT / '.venv/bin/ledger').is_file():
             parser.error('Configure .env.dev and install the project in .venv first')
         agents.mkdir(parents=True, exist_ok=True)
+        if names in {('web',), ('progress',)}:
+            prepare_web_agent(ROOT)
         logs = ROOT / '.local-services'
         logs.mkdir(mode=0o700, exist_ok=True)
-        if NAMES is None:
+        if NAMES is None and not args.only:
             settings_path.write_text(json.dumps(settings) + '\n')
             settings_path.chmod(0o600)
             for stale in installed_names(agents) - set(names):
@@ -159,5 +217,5 @@ if __name__ == '__main__':
     try:
         raise SystemExit(main())
     except subprocess.CalledProcessError as exc:
-        print(exc.stderr.strip())
+        print((exc.stderr or str(exc)).strip())
         raise SystemExit(exc.returncode) from None
