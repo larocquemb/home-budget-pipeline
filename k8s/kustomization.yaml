@@ -22,4 +22,4 @@ patches:
 
 images:
   - name: ghcr.io/larocquemb/home-budget-pipeline
-    newTag: 5c0e94cfe1c0b6efd56f562621b6b849d8528199
+    newTag: a950ee3a238de5808067fe79972cca36edb97a49
