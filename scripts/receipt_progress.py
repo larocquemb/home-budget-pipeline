@@ -81,9 +81,10 @@ def main():
         for environment in environments:
             try:
                 result = snapshot(environment)
+                result['level'] = 'info'
             except Exception as exc:
                 # No stale counts or connection URLs on failure.
-                result = {'event': 'receipt_progress_error', 'environment': environment,
+                result = {'event': 'receipt_progress_error', 'level': 'error', 'environment': environment,
                           'error': type(exc).__name__}
                 success = False
             print(json.dumps(result, sort_keys=True), flush=True)
