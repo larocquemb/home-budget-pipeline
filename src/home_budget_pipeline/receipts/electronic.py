@@ -30,7 +30,7 @@ def matching_scanned_expense(conn, order, total):
     return next(iter(matches)) if len(matches) == 1 else None
 
 
-def import_receipts(root: Path, *, require_costco=False):
+def import_receipts(root: Path, *, require_costco=False, source_prefix='Costco'):
     result = {'imported': 0, 'linked_existing': 0, 'skipped': 0, 'review': [], 'unreadable': [], 'unsupported': []}
     # A session lock also protects manual imports from racing the scheduled job.
     with costco._connect_postgres('') as conn:
@@ -72,8 +72,7 @@ def import_receipts(root: Path, *, require_costco=False):
                 row = {'receipt_id': path.stem, 'order_id': order, 'subtotal_cad': subtotal,
                        'tax_cad': tax, 'total_cad': total, 'parsed_item_count': len(items),
                        'parsed_item_sum_cad': item_sum, 'source_path': str(path),
-                       'source_reference': (f'Costco/{relative.as_posix()}' if root.name == 'Costco'
-                                            else f'electronic/{relative.as_posix()}'), 'raw_text': text,
+                       'source_reference': f'{source_prefix}/{relative.as_posix()}', 'raw_text': text,
                        'extraction_status': 'complete' if complete else 'partial',
                        'extraction_confidence': 1 if complete else .5}
                 matched = matching_scanned_expense(conn, order, total)
@@ -116,7 +115,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not args.root.is_dir():
         raise RuntimeError(f'Electronic receipt directory does not exist: {args.root}')
-    print(json.dumps(import_receipts(args.root, require_costco=True)), flush=True)
+    print(json.dumps(import_receipts(args.root, require_costco=True,
+                                   source_prefix='Costco' if args.root.name == 'Costco' else 'electronic')), flush=True)
 
 
 if __name__ == '__main__':

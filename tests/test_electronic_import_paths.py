@@ -10,7 +10,7 @@ def test_default_cli_uses_shared_electronic_root(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(electronic, 'import_receipts',
                         lambda root, **options: calls.append((root, options)) or {'imported': 0})
     electronic.main([])
-    assert calls == [(tmp_path, {'require_costco': True})]
+    assert calls == [(tmp_path, {'require_costco': True, 'source_prefix': 'electronic'})]
     assert json.loads(capsys.readouterr().out) == {'imported': 0}
 
 
@@ -41,7 +41,7 @@ def test_recursive_import_preserves_paths_and_skips_other_merchants(tmp_path, mo
     monkeypatch.setattr(electronic.costco, 'parse_receipt_items', lambda *_: [])
     written = []
     monkeypatch.setattr(electronic.costco, 'write_costco_to_postgres', lambda rows, *_: written.extend(rows))
-    result = electronic.import_receipts(tmp_path, require_costco=True)
+    result = electronic.import_receipts(tmp_path, require_costco=True, source_prefix='electronic')
     assert result['imported'] == 1
     assert result['unsupported'] == ['2026-10-27/other.pdf']
     assert written[0]['source_reference'] == 'electronic/2026-10-27/costco.PDF'
