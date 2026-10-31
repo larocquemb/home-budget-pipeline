@@ -30,8 +30,8 @@ def matching_scanned_expense(conn, order, total):
     return next(iter(matches)) if len(matches) == 1 else None
 
 
-def import_receipts(root: Path):
-    result = {'imported': 0, 'linked_existing': 0, 'skipped': 0, 'review': [], 'unreadable': []}
+def import_receipts(root: Path, *, require_costco=False):
+    result = {'imported': 0, 'linked_existing': 0, 'skipped': 0, 'review': [], 'unreadable': [], 'unsupported': []}
     # A session lock also protects manual imports from racing the scheduled job.
     with costco._connect_postgres('') as conn:
         conn.autocommit = True
@@ -40,8 +40,9 @@ def import_receipts(root: Path):
             known = {row[0] for row in conn.execute('SELECT source_sha256 FROM budget.receipt_evidence')}
             orders = {row[0] for row in conn.execute("SELECT order_id FROM budget.expenses WHERE source='costco'")}
             costco.AI_ENGINE.enabled = False
-            for path in sorted(root.glob('*.pdf')):
-                if path.name.startswith('.'):
+            for path in sorted(root.rglob('*')):
+                relative = path.relative_to(root)
+                if not path.is_file() or path.suffix.lower() != '.pdf' or any(p.startswith('.') for p in relative.parts):
                     continue
                 sha = hashlib.sha256(path.read_bytes()).hexdigest()
                 if sha in known:
@@ -51,6 +52,11 @@ def import_receipts(root: Path):
                     text = costco.pdf_text(path)
                 except Exception as exc:
                     result['unreadable'].append({'file': path.name, 'error': type(exc).__name__})
+                    continue
+                # The shared electronic inbox also contains other merchants.
+                # Never turn their documents into Costco expenses.
+                if require_costco and not re.search(r'\bcostco\b', text, re.IGNORECASE):
+                    result['unsupported'].append(relative.as_posix())
                     continue
                 order = costco.parse_costco_order_id(text) or path.stem
                 if order in orders:
@@ -66,7 +72,8 @@ def import_receipts(root: Path):
                 row = {'receipt_id': path.stem, 'order_id': order, 'subtotal_cad': subtotal,
                        'tax_cad': tax, 'total_cad': total, 'parsed_item_count': len(items),
                        'parsed_item_sum_cad': item_sum, 'source_path': str(path),
-                       'source_reference': f'Costco/{path.name}', 'raw_text': text,
+                       'source_reference': (f'Costco/{relative.as_posix()}' if root.name == 'Costco'
+                                            else f'electronic/{relative.as_posix()}'), 'raw_text': text,
                        'extraction_status': 'complete' if complete else 'partial',
                        'extraction_confidence': 1 if complete else .5}
                 matched = matching_scanned_expense(conn, order, total)
@@ -102,14 +109,14 @@ def import_receipts(root: Path):
     return result
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path(os.getenv(
-        'ELECTRONIC_RECEIPT_SOURCE_ROOT', '/data/receipts/raw/electronic')) / 'Costco')
-    args = parser.parse_args()
+        'ELECTRONIC_RECEIPT_SOURCE_ROOT', '/data/receipts/raw/electronic')))
+    args = parser.parse_args(argv)
     if not args.root.is_dir():
         raise RuntimeError(f'Electronic receipt directory does not exist: {args.root}')
-    print(json.dumps(import_receipts(args.root)), flush=True)
+    print(json.dumps(import_receipts(args.root, require_costco=True)), flush=True)
 
 
 if __name__ == '__main__':

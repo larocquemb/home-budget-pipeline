@@ -72,7 +72,11 @@ their merchant-specific source. PDFs and images processed by the OCR pipeline
 use `scanned`, regardless of merchant, and retain their original file as receipt
 evidence.
 
-Costco electronic PDFs belong in `/data/receipts/raw/electronic/Costco`.
+Electronic PDFs belong under `/data/receipts/raw/electronic`, including dated
+inbox folders such as `2026-10-27`. The Costco importer searches recursively,
+requires Costco identification in the extracted text, and reports other merchants
+as unsupported for this merchant-specific importer. Original relative paths are
+retained; existing `Costco/` folders are also supported.
 The `electronic-receipt-import` CronJob checks for new files every 15 minutes;
 `home-budget-import-electronic --root /path/to/Costco` runs the same import
 manually with `DATABASE_URL` configured. Previously imported receipts are skipped
