@@ -10,6 +10,46 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
 
+def observe_workers(result, environment):
+    """Read existing worker logs, including workers without database credentials."""
+    from datetime import datetime, timezone, timedelta
+    import ssl
+    import urllib.parse
+    import urllib.request
+    from home_budget_pipeline.cli_environment import read_environment
+    from home_budget_pipeline.receipt_progress import apply_worker_observations
+    started = result.get('batch_started_at')
+    if '_requests' not in result:
+        return result
+    if not result['_requests']:
+        return apply_worker_observations(result)
+    if not started:
+        return apply_worker_observations(result, available=False, complete=False)
+    try:
+        values = read_environment(ROOT / '.local-services/telemetry/agent.env')
+        context = ssl.create_default_context(cafile=values['LOCAL_TELEMETRY_CA'])
+        context.load_cert_chain(values['LOCAL_LOKI_CERT'], values['LOCAL_LOKI_KEY'])
+        query = ('{environment="' + environment + '",namespace="home-budget",'
+                 'app=~"receipt-worker.*"} |~ "request_id=|receipt_processing_state"')
+        params = urllib.parse.urlencode({
+            'query': query, 'limit': 5000, 'direction': 'backward',
+            'start': str(int(max(datetime.fromisoformat(started), datetime.now(timezone.utc)-timedelta(days=1)).timestamp()*1_000_000_000)),
+        })
+        with urllib.request.urlopen(
+            'https://monitoring.idc.brownrook.net:3100/loki/api/v1/query_range?' + params,
+            context=context, timeout=5,
+        ) as response:
+            data = json.load(response)
+        if data.get('status') != 'success':
+            raise ValueError('Worker observation query failed')
+        streams = data['data']['result']
+        count = sum(len(stream['values']) for stream in streams)
+        return apply_worker_observations(result, streams, complete=count < 5000)
+    except Exception as exc:
+        result['worker_observation_error'] = type(exc).__name__
+        return apply_worker_observations(result, available=False, complete=False)
+
+
 def snapshot(environment="development"):
     import psycopg
     from psycopg.rows import dict_row
@@ -39,6 +79,7 @@ def snapshot(environment="development"):
                 raise ValueError('Unexpected progress database identity')
         result = database_snapshot(conn)
         result["environment"] = environment
+    result = observe_workers(result, environment)
     try:
         if environment == 'production':
             import base64

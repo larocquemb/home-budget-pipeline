@@ -230,6 +230,7 @@ def publish_confirmed(
     error_message: str | None = None,
     message_type: str = "receipt.process.v1",
     routing_key: str = "receipt",
+    batch_id: str | None = None,
 ) -> None:
     import pika
 
@@ -250,6 +251,7 @@ def publish_confirmed(
                 for key, value in {
                     "error_type": error,
                     "error_message": error_message,
+                    "batch_id": batch_id,
                 }.items()
                 if value
             },
@@ -261,7 +263,7 @@ def publish_confirmed(
         except InvalidReceiptMessage:
             pass
         else:
-            receipt_lineage.record(observed, 'queued', queue=exchange)
+            receipt_lineage.record(observed, 'queued', queue=exchange, batch_id=batch_id)
 
 
 def publication_plan(
@@ -353,9 +355,11 @@ def publish_reprocess(args) -> int:
             channel = connection.channel()
             topology = Topology(prefix=getattr(args, "queue_prefix", "receipts.v1"))
             declare_topology(channel, topology)
+            receipt_lineage.start_batch(message, request_id, 1, topology.work)
             publish_confirmed(
                 channel, topology.work, message.to_bytes(),
                 message_id=message.message_id, message_type=message.message_type,
+                batch_id=request_id,
             )
         finally:
             if connection.is_open:
@@ -370,6 +374,7 @@ def publish_reprocess(args) -> int:
         "source_reference": message.source_reference,
         "source_sha256": message.source_sha256,
         "request_id": request_id,
+        "batch_id": request_id,
         "queue": topology.work,
         "status": "queued",
     })
@@ -440,9 +445,12 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
                     batch_total=selected if cache_only else None,
                 )
                 request.resolve_source(root)
+                if index == 1:
+                    receipt_lineage.start_batch(request, batch_id, selected, topology.work)
                 publish_confirmed(
                     channel, topology.work, request.to_bytes(),
                     message_id=request.message_id, message_type=request.message_type,
+                    batch_id=batch_id,
                 )
                 published += 1
                 if args.verbose:
@@ -464,6 +472,7 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
         "selected": selected,
         "published": published,
         "request_id": batch_id,
+        "batch_id": batch_id,
         "queue": topology.work,
         "status": "queued",
     }
@@ -834,14 +843,18 @@ def run(args) -> int:
         channel = connection.channel()
         declare_topology(channel, topology)
         if args.queue_mode == "publish":
+            batch_id = str(uuid4()) if messages else None
+            if messages:
+                receipt_lineage.start_batch(messages[0], batch_id, len(messages), topology.work)
             for index, message in enumerate(messages, start=1):
                 publish_confirmed(
                     channel, topology.work, message.to_bytes(),
                     message_id=message.message_id, message_type=message.message_type,
+                    batch_id=batch_id,
                 )
                 if getattr(args, "verbose", False):
                     print(f"[{index}/{len(messages)}] Queued {message.source_reference}", file=sys.stderr, flush=True)
-            _print_json(summary)
+            _print_json(dict(summary, batch_id=batch_id))
         else:
             from .ocr_collector import ResultTopology, declare_result_topology
 

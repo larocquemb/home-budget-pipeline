@@ -50,19 +50,24 @@ recovery command is guarded to the isolated Arsene development services.
 
 Open [Receipt progress](https://grafana.idc.brownrook.net/d/home-budget-dev-progress).
 Select **Environment: development or production**. The layout and queries stay the
-same; every count filters the selected environment. The main view has four batch
-progress cards plus combined Database receipts and Needs attention cards. Queue
+same; every count filters the selected environment. The main view has four work
+progress cards plus Database persistence and Needs attention cards. Queue
 diagnostics and raw snapshots are collapsed by default. It refreshes every ten seconds
-and shows the latest observed cache-rebuild batch: total
+and shows the latest explicitly identified publication batch: total
 confirmed requests, waiting (including retries), running, OCR cache completed, failed
 and unknown. A heartbeat older than 90 seconds is unknown, not completed.
-Database receipt counts and development broker queue depths are separate; collector
+Results saved counts requests committed by the collector, including cache-only
+results. All database receipts counts financial source documents; existing receipt
+presence is not proof that this run saved its results. Broker queue depths are separate; collector
 messages include individual OCR passes and must not be read as receipt counts.
 
 The read-only reporter uses guarded `.env.dev` and `.env.k3s` connections and emits aggregate
 snapshots to `.local-services/progress.log`. It never consumes or purges jobs.
 Alloy forwards that log using the existing mTLS pipeline, preserving each snapshot's environment label. Production reads use read-only SQL transactions and HTTPS
 RabbitMQ management GET requests; development queue inspection is passive AMQP.
+Worker status/heartbeat observations come from existing Loki logs when workers
+have no database credentials. Requests and committed completion records remain
+the correlation keys. Missing or truncated observations remain explicit.
 Both environments use the same snapshot fields and Grafana queries. Dashboard
 values become unavailable after 45 seconds without a fresh snapshot.
 
@@ -74,9 +79,20 @@ make dev-progress-stop
 ```
 
 The batch header shows its ID, start time in Winnipeg, and active/idle/historical
-state. Historical batches with missing completion observations show **Unknown**,
+state, including **saving results** while OCR outputs await collector persistence.
+Historical batches with missing completion observations show **Unknown**,
 not zero completed. Needs attention separates whole-environment receipt import
 failures, OCR dead letters, collector rejections, and unknown batch outcomes.
+
+Every publisher run with selected work emits a structured `batch_started` log
+with a fresh batch UUID, planned request count and queue. The same start event
+is retained in PostgreSQL lineage; confirmed publications record that UUID and
+carry it in their RabbitMQ headers. This covers normal imports, automatic
+missing-cache repairs, explicit reprocessing and cache-only rebuilds. Retrying
+an explicit `--request-id` batch preserves its identity. Empty publication runs
+do not start a batch. A start event alone is not confirmation that jobs were
+queued; unconfirmed members are shown as unknown/publication incomplete.
+There is no inferred grouping of older requests without a recorded batch ID.
 
 The progress LaunchAgent starts at login. Queue panels show ready messages across
 the whole selected vhost, while batch counts deduplicate requests from durable

@@ -166,6 +166,30 @@ def test_process_publishes_to_selected_work_namespace(queued_cli, monkeypatch):
     assert broker.channel.return_value.basic_publish.call_args.kwargs["exchange"] == "receipts.review.v1.work"
 
 
+def test_normal_publication_start_and_confirmed_members_share_a_fresh_batch_uuid(queued_cli, monkeypatch, capsys):
+    import uuid
+    source, broker = queued_cli
+    monkeypatch.setenv("DATABASE_URL", "dbname=test")
+    conn = MagicMock()
+    monkeypatch.setattr(queue.backlog.scan, "_db_connect", lambda *a: conn)
+    candidate = queue.backlog.ReceiptCandidate(source, queue.backlog.scan.sha256_file(source))
+    monkeypatch.setattr(queue.backlog, "plan_unprocessed_receipts", lambda *a, **kw: queue.backlog.DiscoveryPlan((candidate,), (candidate,), ()))
+    conn.cursor.return_value.__enter__.return_value.fetchall.return_value = []
+    start, record = MagicMock(), MagicMock()
+    monkeypatch.setattr(queue.receipt_lineage, "start_batch", start)
+    monkeypatch.setattr(queue.receipt_lineage, "record", record)
+    ids = []
+    for _ in range(2):
+        assert cli.main(["receipts", "process"]) == 0
+        batch = json.loads(capsys.readouterr().out)['batch_id']
+        assert str(uuid.UUID(batch)) == batch
+        assert start.call_args.args[1] == batch
+        assert record.call_args.kwargs['batch_id'] == batch
+        assert broker.channel.return_value.basic_publish.call_args.kwargs['properties'].headers['batch_id'] == batch
+        ids.append(batch)
+    assert ids[0] != ids[1]
+
+
 def test_cache_contract_round_trip_and_retry_identity():
     message = ReceiptMessage("a" * 64, "receipt.pdf", version=3, request_id="740023b1-a078-4914-b074-81bd7129bb75")
     assert ReceiptMessage.from_bytes(message.to_bytes()) == message
