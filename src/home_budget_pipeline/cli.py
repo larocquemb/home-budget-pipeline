@@ -74,6 +74,7 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     services.add_argument("action", choices=("start", "stop", "restart", "status", "logs"))
     services.add_argument("--workers", type=int)
     services.add_argument("--ocr-threads", type=int)
+    services.add_argument("--only", choices=("collector",), help="Control only the collector, leaving OCR workers running.")
     services.set_defaults(handler=_receipt_services)
     process = receipt_commands.add_parser("process", help="Queue the receipt backlog through RabbitMQ.")
     process.add_argument("receipt_root", nargs="?", default=_receipt_root_default())
@@ -102,6 +103,13 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     collect.add_argument("--budget-schema", default="budget")
     from .receipts.ocr_collector import run_collector
     collect.set_defaults(handler=run_collector)
+
+    recover = receipt_commands.add_parser('recover-results', help='Recover the known missing-evidence cache-only result failures on development.')
+    recover.add_argument('--apply', action='store_true', help='Persist eligible results and acknowledge only after commit; otherwise preview.')
+    recover.add_argument('--limit', type=int, default=1000)
+    recover.add_argument('--evidence-dir', required=True, help='Private directory retaining original rejected messages and headers.')
+    from .receipts.recover_results import run_recovery
+    recover.set_defaults(handler=run_recovery)
 
     retry = receipt_commands.add_parser(
         "retry", help="Reset a failed or interrupted receipt for the next publish or process command.",

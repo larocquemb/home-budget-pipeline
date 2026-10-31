@@ -80,7 +80,7 @@ def run_receipt_services(args):
     if _env_path(args) != ROOT / '.env.dev':
         raise ValueError('Native receipt services use the repository .env.dev; select that file')
     command = [sys.executable, str(ROOT / 'scripts/receipt_services.py'), args.action]
-    for name in ('workers', 'ocr_threads'):
+    for name in ('workers', 'ocr_threads', 'only'):
         value = getattr(args, name, None)
         if value is not None:
             command.extend(['--' + name.replace('_', '-'), str(value)])

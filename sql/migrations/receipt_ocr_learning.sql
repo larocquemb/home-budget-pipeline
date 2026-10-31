@@ -2,7 +2,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS budget.receipt_ocr_runs (
     run_uuid UUID PRIMARY KEY,
-    evidence_id BIGINT NOT NULL REFERENCES budget.receipt_evidence(id) ON DELETE CASCADE,
+    evidence_id BIGINT REFERENCES budget.receipt_evidence(id) ON DELETE CASCADE,
     source_sha256 TEXT NOT NULL,
     source_reference TEXT NOT NULL,
     cache_version INTEGER NOT NULL,

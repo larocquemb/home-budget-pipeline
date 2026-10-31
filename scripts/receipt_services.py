@@ -105,8 +105,9 @@ def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
                 config['AssociatedBundleIdentifiers'] = [bundle_id]
             break
 
-    if name == 'web':
-        config['ProgramArguments'] = [str(web_agent_bundle(root) / 'Contents/MacOS/LedgerWebAgent'), str(root / 'scripts/mac_web_agent.py')]
+    if name in {'web', 'progress'}:
+        script = 'mac_web_agent.py' if name == 'web' else 'receipt_progress.py'
+        config['ProgramArguments'] = [str(web_agent_bundle(root) / 'Contents/MacOS/LedgerWebAgent'), str(root / 'scripts' / script)]
         config['AssociatedBundleIdentifiers'] = [WEB_BUNDLE_ID]
         config['EnvironmentVariables'].update({'PYTHONHOME': sys.base_prefix, 'PYTHONPATH': os.pathsep.join(site.getsitepackages())})
 
@@ -136,6 +137,7 @@ def main() -> int:
     parser.add_argument('action', choices=('start', 'stop', 'restart', 'status', 'logs'))
     parser.add_argument('--workers', type=positive_count, help='Number of receipt consumers; saved for subsequent commands')
     parser.add_argument('--ocr-threads', type=positive_count, help='CPU threads per OCR engine in each worker')
+    parser.add_argument('--only', choices=('collector',), help='Control the collector without interrupting OCR workers')
     args = parser.parse_args()
     if (args.workers is not None or args.ocr_threads is not None) and args.action not in {'start', 'restart'}:
         parser.error('Worker settings apply to start or restart only')
@@ -145,10 +147,10 @@ def main() -> int:
         settings['workers'] = args.workers
     if args.ocr_threads is not None:
         settings['ocr_threads'] = args.ocr_threads
-    names = NAMES if NAMES is not None else configured_names(settings['workers'])
+    names = (args.only,) if args.only else (NAMES if NAMES is not None else configured_names(settings['workers']))
     domain = f'gui/{os.getuid()}'
     agents = Path.home() / 'Library/LaunchAgents'
-    if NAMES is None and args.action in {'stop', 'status', 'logs'}:
+    if NAMES is None and not args.only and args.action in {'stop', 'status', 'logs'}:
         names = tuple(dict.fromkeys((*names, *sorted(installed_names(agents)))))
     if args.action == 'logs':
         subprocess.run(['tail', '-n', '30', '-F', *(str(ROOT / '.local-services' / f'{n}.log') for n in names)])
@@ -157,11 +159,11 @@ def main() -> int:
         if not (ROOT / '.env.dev').is_file() or not (ROOT / '.venv/bin/ledger').is_file():
             parser.error('Configure .env.dev and install the project in .venv first')
         agents.mkdir(parents=True, exist_ok=True)
-        if names == ('web',):
+        if names in {('web',), ('progress',)}:
             prepare_web_agent(ROOT)
         logs = ROOT / '.local-services'
         logs.mkdir(mode=0o700, exist_ok=True)
-        if NAMES is None:
+        if NAMES is None and not args.only:
             settings_path.write_text(json.dumps(settings) + '\n')
             settings_path.chmod(0o600)
             for stale in installed_names(agents) - set(names):

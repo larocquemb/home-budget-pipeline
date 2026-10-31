@@ -173,9 +173,9 @@ def _persist_cache_only(conn, message: OcrResultMessage, receipt, schema: str) -
             (message.source_sha256,),
         )
         row = cur.fetchone()
-    if row is None:
-        raise InvalidOcrResultMessage("cache-only result has no existing receipt evidence")
-    persist_ocr_run(conn, int(row[0]), receipt, schema)
+    # OCR can precede receipt import. Keep an independent run until source
+    # evidence exists; cache-only operations never create financial receipt rows.
+    persist_ocr_run(conn, int(row[0]) if row is not None else None, receipt, schema)
     request_id = message.payload["request_id"]
     if request_id:
         with conn.cursor() as cur:
@@ -203,8 +203,28 @@ def _persist_run(
     mode = message.payload["persistence_mode"]
     with backlog.receipt_lock(conn, message.source_sha256):
         if _already_persisted(conn, message.message_id, budget_schema):
-            conn.commit()
-            return "duplicate"
+            # Cache-only recording does not complete the later financial import,
+            # even when that import reuses the same cached OCR run/message ID.
+            completed = mode == 'cache_only'
+            if mode == 'normal':
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"SELECT 1 FROM {ingest_schema}.receipt_processing_status "
+                        "WHERE source_sha256 = %s AND status IN ('succeeded', 'review_required')",
+                        (message.source_sha256,),
+                    )
+                    completed = cur.fetchone() is not None
+            elif mode == 'reprocess':
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"SELECT 1 FROM {budget_schema}.receipt_reprocess_requests "
+                        "WHERE source_sha256 = %s AND request_id = %s AND completed_at IS NOT NULL",
+                        (message.source_sha256, message.payload['request_id']),
+                    )
+                    completed = cur.fetchone() is not None
+            if completed:
+                conn.commit()
+                return "duplicate"
         if mode == "cache_only":
             _persist_cache_only(conn, message, receipt, budget_schema)
             status = "cache_rebuilt"
