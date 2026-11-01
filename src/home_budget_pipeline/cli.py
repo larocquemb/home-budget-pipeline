@@ -137,6 +137,13 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     duplicates.add_argument('--apply', action='store_true', help='Save; default is a read-only preview.')
     duplicates.set_defaults(handler=_receipt_duplicates)
 
+    sources = receipt_commands.add_parser('reconcile-sources', help='Preview or archive missing source documents, preserving purchases and history.')
+    sources.add_argument('--source-prefix', required=True, help='Explicit source folder, e.g. electronic/2026-10-27/.')
+    sources.add_argument('--expected-version')
+    sources.add_argument('--reviewer', default='Paul La Rocque')
+    sources.add_argument('--apply', action='store_true')
+    sources.set_defaults(handler=_reconcile_sources)
+
     retry = receipt_commands.add_parser(
         "retry", help="Reset a failed or interrupted receipt for the next publish or process command.",
     )
@@ -214,6 +221,17 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     )
     setup.set_defaults(handler=_setup_database)
     return parser
+
+
+def _reconcile_sources(args):
+    from .web.queries import LedgerQueryService
+    from .receipts.source_reconciliation import reconcile
+    result = reconcile(LedgerQueryService()._connect, args.source_prefix,
+        scanned_root=os.getenv('RECEIPT_SOURCE_ROOT', ''),
+        electronic_root=os.getenv('ELECTRONIC_RECEIPT_SOURCE_ROOT', ''),
+        actor=args.reviewer, apply=args.apply, expected_version=args.expected_version)
+    print(json.dumps(result, default=str))
+    return 0
 
 
 def _receipt_duplicates(args):

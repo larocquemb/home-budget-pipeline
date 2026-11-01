@@ -755,7 +755,7 @@ class LedgerQueryService:
     def receipt_evidence(self, evidence_id: int) -> dict[str, Any] | None:
         rows = self._fetch(
             """
-            SELECT id, expense_pk, evidence_type, source_reference, mime_type,
+            SELECT id, expense_pk, evidence_type, source_reference, source_sha256, raw_payload, mime_type,
                    transaction_datetime, merchant, receipt_id, total,
                    payment_method, card_last4, extraction_status,
                    extraction_confidence, raw_text, page_text,
@@ -831,6 +831,8 @@ class LedgerQueryService:
               JOIN budget.receipt_evidence l ON l.id=d.left_evidence_id
               JOIN budget.receipt_evidence r ON r.id=d.right_evidence_id
              WHERE resolution_status = 'pending'
+               AND COALESCE(l.raw_payload->>'source_archived','false') <> 'true'
+               AND COALESCE(r.raw_payload->>'source_archived','false') <> 'true'
              ORDER BY score DESC, d.id
              LIMIT %s OFFSET %s
         """

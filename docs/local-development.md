@@ -832,3 +832,25 @@ The authenticated **Duplicates** page offers the same preview/apply workflow.
 Confirmation preserves both source documents, receipt fields, expense items and
 categories. Reviewer, reason, original links and resulting links are retained in
 a durable audit event. Confirmation does not approve OCR or category choices.
+
+## Reconcile deleted or renamed source documents
+
+Deleting an inbox PDF does not delete its saved purchase or extraction history.
+To reconcile one source folder on isolated development, preview first:
+
+```bash
+ledger --env-file .env.dev receipts reconcile-sources --source-prefix electronic/2026-10-27/
+ledger --env-file .env.dev receipts reconcile-sources --source-prefix electronic/2026-10-27/ --apply --expected-version VERSION_FROM_PREVIEW
+```
+
+The command locates moved files by SHA-256, archives records whose source is
+missing or replaced, and records every change in the audit history. Purchases,
+items, categories and OCR caches remain intact. The receipt list and duplicate review queue
+hide archived source copies by default. Select **Show archived sources** on the
+receipt list to inspect retained history. Reconcile again after restoring an
+original file to reactivate that source record. An unavailable source folder
+aborts the operation; a changed folder or record requires a fresh preview.
+Document and image-preview requests refuse files with a different SHA-256 from
+the recorded evidence, preventing reuse of a filename from displaying a
+replacement PDF against older receipt data. No OCR refresh is needed for source
+location reconciliation.
