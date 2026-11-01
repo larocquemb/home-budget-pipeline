@@ -196,6 +196,23 @@ resolves originals against the corresponding configured root.
 Count source documents separately from canonical purchases: multiple documents
 may support one expense or require duplicate review.
 
+Normal `receipts process`/`receipts publish` intake checks durable publication
+records as well as completed extraction. Its summary reports `skipped_inflight`
+for the same work already reserved, queued, running, retrying or awaiting result
+persistence. Normal publishers serialize their discovery/publication decisions;
+rerunning intake does not create another copy of the same pending job. Queue
+namespaces remain independent. This guard does not remove previously queued
+duplicates or change RabbitMQ's at-least-once delivery behavior.
+
+A reservation is committed before publishing to RabbitMQ. If publication or its
+confirmation is interrupted, inspect processing/queue status before explicitly
+recovering: `receipts retry SOURCE_REFERENCE` resets a known failed/interrupted
+ingest attempt and releases its old reservations atomically. If publication
+stopped before an ingest attempt existed, use `receipts reprocess SOURCE_REFERENCE`
+after verifying that no worker is handling it. Explicit reprocess/refresh commands
+request fresh work and bypass normal intake suppression; do not use them merely
+to check progress. Reservations do not expire automatically during long OCR runs.
+
 The Receipt processing page shows database records, including historical states,
 and is not a count of files in the cache or completion of a specific refresh batch.
 

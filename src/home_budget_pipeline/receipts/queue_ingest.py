@@ -834,6 +834,46 @@ def add_arguments(parser, mode: str) -> None:
     ))
 
 
+def _publish_normal(args, topology):
+    from . import publication_guard as guard
+    conn = backlog.scan._db_connect(args.db_dsn)
+    try:
+        with guard.serialized(conn):
+            messages, summary = publication_plan(
+                conn, Path(args.receipt_root).expanduser().resolve(), args.ingest_schema,
+                cache_dir=Path(args.ocr_cache).expanduser().resolve())
+            messages, skipped = guard.eligible(conn, messages, topology.work)
+            summary.update(published=len(messages), skipped_inflight=skipped)
+            batch_id = str(uuid4()) if messages else None
+            if messages:
+                connection = connect_broker(args.rabbitmq_url)
+                try:
+                    channel = connection.channel()
+                    declare_topology(channel, topology)
+                    receipt_lineage.start_batch(messages[0], batch_id, len(messages), topology.work)
+                    for index, message in enumerate(messages, start=1):
+                        guard.reserve(conn, message, topology.work, batch_id)
+                        try:
+                            publish_confirmed(channel, topology.work, message.to_bytes(),
+                                              message_id=message.message_id,
+                                              message_type=message.message_type, batch_id=batch_id)
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f'Publication interrupted for {message.source_reference}; reservation retained. '
+                                'Inspect receipt status before explicit receipts retry/reprocess recovery.'
+                            ) from exc
+                        if getattr(args, 'verbose', False):
+                            print(f'[{index}/{len(messages)}] Queued {message.source_reference}', file=sys.stderr, flush=True)
+                finally:
+                    if connection.is_open:
+                        connection.close()
+            _print_json(dict(summary, batch_id=batch_id))
+    finally:
+        conn.close()
+        telemetry.shutdown_telemetry()
+    return 0
+
+
 def run(args) -> int:
     telemetry.configure_logging()
     telemetry.configure_telemetry()
@@ -854,51 +894,30 @@ def run(args) -> int:
         )
     topology = Topology(prefix=getattr(args, "queue_prefix", "receipts.v1"))
     if args.queue_mode == "publish":
-        conn = backlog.scan._db_connect(args.db_dsn)
-        try:
-            messages, summary = publication_plan(
-                conn, Path(args.receipt_root).expanduser().resolve(), args.ingest_schema,
-                cache_dir=Path(args.ocr_cache).expanduser().resolve(),
-            )
-        finally:
-            conn.close()
+        return _publish_normal(args, topology)
     connection = connect_broker(args.rabbitmq_url)
     try:
         channel = connection.channel()
         declare_topology(channel, topology)
-        if args.queue_mode == "publish":
-            batch_id = str(uuid4()) if messages else None
-            if messages:
-                receipt_lineage.start_batch(messages[0], batch_id, len(messages), topology.work)
-            for index, message in enumerate(messages, start=1):
-                publish_confirmed(
-                    channel, topology.work, message.to_bytes(),
-                    message_id=message.message_id, message_type=message.message_type,
-                    batch_id=batch_id,
-                )
-                if getattr(args, "verbose", False):
-                    print(f"[{index}/{len(messages)}] Queued {message.source_reference}", file=sys.stderr, flush=True)
-            _print_json(dict(summary, batch_id=batch_id))
-        else:
-            from .ocr_collector import ResultTopology, declare_result_topology
+        from .ocr_collector import ResultTopology, declare_result_topology
 
-            result_topology = ResultTopology()
-            # Work topology already enabled confirmations on this same channel.
-            declare_result_topology(channel, result_topology, enable_confirms=False)
-            stop = Event()
-            previous = {sig: signal.signal(sig, lambda signum, frame: stop.set()) for sig in (signal.SIGINT, signal.SIGTERM)}
-            try:
-                consume_worker(
-                    connection,
-                    channel,
-                    lambda message: produce_result_messages(message, args),
-                    topology,
-                    result_topology,
-                    stop,
-                )
-            finally:
-                for sig, handler in previous.items():
-                    signal.signal(sig, handler)
+        result_topology = ResultTopology()
+        # Work topology already enabled confirmations on this same channel.
+        declare_result_topology(channel, result_topology, enable_confirms=False)
+        stop = Event()
+        previous = {sig: signal.signal(sig, lambda signum, frame: stop.set()) for sig in (signal.SIGINT, signal.SIGTERM)}
+        try:
+            consume_worker(
+                connection,
+                channel,
+                lambda message: produce_result_messages(message, args),
+                topology,
+                result_topology,
+                stop,
+            )
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
     finally:
         if connection.is_open:
             connection.close()
