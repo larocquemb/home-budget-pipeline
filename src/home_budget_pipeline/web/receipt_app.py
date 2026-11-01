@@ -428,19 +428,16 @@ def receipts_page(
         source_sha256 = str(receipt.get("source_sha256") or "")
         source_reference = str(receipt.get("source_reference") or "")
         expense_pk = receipt.get('expense_pk')
-        label = receipt_label(expense_pk, receipt.get('merchant'),
-                              receipt.get('transaction_datetime'), receipt.get('total'))
         expense_link = (
             f'<a href="{BASE_PATH}/expenses/{esc(expense_pk)}">{esc(expense_pk)}</a>'
             if expense_pk is not None else '<span class="muted">Pending</span>'
         )
-        archive_note = ' · Archived source' if receipt.get('source_archived') else ''
         if receipt.get('source_archived') and expense_pk is None:
             expense_link = '<span class="muted">Archived</span>'
         rows.append(
             "<tr>"
             f'<td>{expense_link}</td>'
-            f'<td><a href="{receipt_url(source_sha256)}">{esc(label)}</a> · <a href="{receipt_graph_url(source_sha256)}">Processing graph</a><br><small class="muted">{esc(source_reference)}{archive_note}</small></td>'
+            f'<td><a href="{receipt_url(source_sha256)}">{esc(source_reference)}</a></td>'
             f"<td>{esc(receipt.get('merchant'))}</td>"
             f"<td>{esc(receipt.get('store'))}</td>"
             f"<td>{esc(receipt.get('transaction_datetime'))}</td>"
