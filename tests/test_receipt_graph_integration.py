@@ -91,9 +91,34 @@ def test_real_neo4j_atomic_replay_and_out_of_order_snapshot(monkeypatch):
             assert {n['id'] for n in story['nodes']} == {item, run, b, decision}
             assert {e['kind'] for e in story['edges']} == {'ANALYZES', 'USES_MODEL', 'RESULTED_IN'}
 
+            # Production uses bounded staging commits rather than one receipt-
+            # sized transaction. Interrupt halfway through and verify readers
+            # continue seeing the last published snapshot, then replay twice.
+            from home_budget_pipeline import receipt_graph as projector
+            statement = projector._statement
+            def interrupted(tx, query, params):
+                if 'members' in params:
+                    raise ConnectionError('injected projection transport failure')
+                return statement(tx, query, params)
+            with monkeypatch.context() as patch:
+                patch.setattr(projector, '_statement', interrupted)
+                with pytest.raises(ConnectionError):
+                    projector.write_snapshot(session, sha, data, '2026-10-05T15:00:00+00:00')
+            assert session.run('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time', sha=sha).single()['time'] == time
+            for _ in range(2):
+                assert projector.write_snapshot(session, sha, data, '2026-10-06T15:00:00+00:00')
+            assert not projector.write_snapshot(session, sha, data, '2026-10-04T15:00:00+00:00')
+            page = web.receipt(sha, perspective='lineage', offset=0, limit=2)
+            assert len(page['nodes']) == 2 and page['total_nodes'] == len(data['nodes'])
+            assert page['next_offset'] == 2
+            assert page['observed_at'] == '2026-10-06T15:00:00+00:00'
+            assert session.run('MATCH (s:ReceiptSnapshot {sha:$sha})-[r:HAS_ENTITY]->() RETURN count(r) AS count', sha=sha).single()['count'] == len(data['nodes'])
+            assert session.run('MATCH (n:ReceiptFlowEntity) WHERE n.id IN $ids RETURN count(n) AS count', ids=[a,b,item,run,decision]).single()['count'] == 5
+
         finally:
             session.run('MATCH (n:ReceiptFlowEntity) WHERE n.id IN $ids DETACH DELETE n', ids=[a,b,item,run,decision]).consume()
             session.run('MATCH (s:ReceiptSnapshot {sha:$sha}) DETACH DELETE s', sha=sha).consume()
+            session.run('MATCH (l:ReceiptProjectionLock {sha:$sha}) DELETE l', sha=sha).consume()
 
 
 def test_postgres_graph_load_scopes_queued_tasks_and_omits_task_inputs(pg_conn):

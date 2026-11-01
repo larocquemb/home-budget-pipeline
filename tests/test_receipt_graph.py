@@ -130,7 +130,21 @@ def test_retry_requires_an_observed_retry_not_merely_multiple_runs():
 
 def test_web_graph_is_bounded_and_handles_missing_backend(monkeypatch):
     graph = g.build(evidence())
-    monkeypatch.setattr(web, 'snapshot_index', lambda sha: (graph, 'now'))
+    def read(query, **params):
+        if 's.version AS version' in query:
+            return [{'version': g.VERSION, 'time': 'now'}]
+        nodes = [n for n in graph['nodes'] if n['kind'] in web.PERSPECTIVES['domain']]
+        page = nodes[:3]
+        if 'RETURN s.observed_at AS time' in query:
+            return [{'time': 'now'}]
+        if 'count(r) AS count' in query:
+            return [{'count': len(nodes)}]
+        if 'SKIP $offset LIMIT $limit' in query:
+            return [{'id': n['id'], 'chars': len(json.dumps(n)), 'edge_chars': 0} for n in page]
+        if 'RETURN r.edges_json AS edges' in query:
+            return [{'edges': json.dumps([e for e in graph['edges'] if e['source'] == n['id']])} for n in page]
+        raise AssertionError(query)
+    monkeypatch.setattr(web, 'read', read)
     monkeypatch.setattr(web, 'snapshot_nodes', lambda sha, time, ids: [n for n in graph['nodes'] if n['id'] in ids])
     result = web.receipt('a'*64, perspective='domain', offset=0, limit=3)
     assert len(result['nodes']) == 3
@@ -581,3 +595,139 @@ def test_story_loads_selected_run_without_full_receipt_index(monkeypatch):
     assert {n['id'] for n in actual['nodes']} == {n['id'] for n in expected['nodes']}
     assert {e['id'] for e in actual['edges']} == {e['id'] for e in expected['edges']}
     assert len(metadata_ids) < 100
+
+
+def test_staged_projection_bounds_transactions_and_never_exposes_partial_snapshot(monkeypatch):
+    calls, transactions, activated, discarded = [], [], [], []
+    class Result:
+        def consume(self): pass
+    class Transaction:
+        def run(self, query, **params):
+            calls.append((query, params))
+            return Result()
+    class Session:
+        def execute_write(self, function, *args):
+            before = len(calls)
+            result = function(Transaction(), *args)
+            transactions.append(len(calls) - before)
+            return result
+    monkeypatch.setattr(g, '_activate', lambda tx, *args: activated.append(args) or True)
+    monkeypatch.setattr(g, '_discard_stage', lambda session, stage: discarded.append(stage))
+    full = g.build(evidence())
+    assert g.write_snapshot(Session(), 'a'*64, full, 'now')
+    assert len(transactions) > 3 and max(transactions) <= 1
+    assert len(activated) == 1 and len(discarded) == 1
+    assert all(':ReceiptSnapshot' not in q for q, _ in calls)
+    assert all(p['edges'] is None for _, p in calls if 'edges' in p)
+    class Interrupted(Session):
+        def execute_write(self, function, *args):
+            if function is g._statement and 'members' in args[-1]:
+                raise ConnectionError('simulated backend outage')
+            return super().execute_write(function, *args)
+    activated.clear()
+    with pytest.raises(ConnectionError):
+        g.write_snapshot(Interrupted(), 'a'*64, full, 'later')
+    assert activated == []
+    assert len(discarded) == 2
+
+
+@pytest.mark.parametrize('prior,ready,expected', [
+    ({'time': '2026-11-02', 'projection_id': 'new'}, {'time': '2026-11-01'}, False),
+    ({'time': '2026-11-01', 'projection_id': 'stage'}, None, True),
+    ({'time': '2026-11-02', 'projection_id': 'other'}, None, False),
+    (None, {'time': '2026-11-01'}, True),
+])
+def test_activation_rejects_older_work_and_retries_without_retiring_published_snapshot(prior, ready, expected):
+    mutations = []
+    class Result:
+        def __init__(self, value=None): self.value = value
+        def consume(self): pass
+        def single(self): return self.value
+    class Transaction:
+        def run(self, query, **params):
+            if 'RETURN s.observed_at' in query:
+                return Result(ready if ':ReceiptProjectionStage' in query else prior)
+            if 'REMOVE' in query:
+                mutations.append(query)
+            return Result()
+    assert g._activate(Transaction(), 'sha', 'stage', 'retired', '2026-11-01') is expected
+    assert len(mutations) == (2 if ready and expected else 0)
+
+
+def test_page_guards_selected_evidence_without_loading_full_receipt_index(monkeypatch):
+    queries = []
+    def read(query, **params):
+        queries.append(query)
+        assert 's.edges_json' not in query and 'collect(' not in query
+        if 's.version AS version' in query:
+            return [{'time': 'now', 'version': g.VERSION}]
+        if 'count(r)' in query:
+            return [{'count': 100000}]
+        assert 'SKIP $offset LIMIT $limit' in query
+        assert params['offset'] == 50000 and params['limit'] == 1
+        return [{'id': 'large', 'chars': web.MAX_DETAIL_CHARS + 1, 'edge_chars': 0}]
+    monkeypatch.setattr(web, 'read', read)
+    with pytest.raises(HTTPException) as exc:
+        web.snapshot_page('a'*64, 'lineage', 50000, 1)
+    assert exc.value.status_code == 413
+    assert len(queries) == 3
+
+
+def test_page_continuation_never_skips_nodes_when_evidence_budget_shortens_page(monkeypatch):
+    requested = []
+    def read(query, **params):
+        if 's.version AS version' in query:
+            return [{'time': 'now', 'version': g.VERSION}]
+        if 'count(r)' in query:
+            return [{'count': 20000}]
+        if 'SKIP $offset' in query:
+            return [{'id': str(i), 'chars': 400000, 'edge_chars': 0} for i in range(20, 23)]
+        if 'RETURN r.edges_json' in query:
+            return [{'edges': '[]'} for _ in params['ids']]
+        return [{'time': 'now'}]
+    def nodes(sha, time, ids):
+        requested.extend(ids)
+        return [{'id': key, 'kind': 'Model', 'properties': {}} for key in ids]
+    monkeypatch.setattr(web, 'read', read)
+    monkeypatch.setattr(web, 'snapshot_nodes', nodes)
+    result = web.snapshot_page('a'*64, 'lineage', 20, 3)
+    assert requested == ['20', '21']
+    assert result['total_nodes'] == 20000 and result['next_offset'] == 22
+
+
+def test_page_rejects_snapshot_replacement_even_for_empty_result(monkeypatch):
+    def read(query, **params):
+        if 's.version AS version' in query:
+            return [{'time': 'old', 'version': g.VERSION}]
+        if 'count(r)' in query:
+            return [{'count': 0}]
+        return []
+    monkeypatch.setattr(web, 'read', read)
+    with pytest.raises(HTTPException) as exc:
+        web.snapshot_page('a'*64, 'lineage', 0, 20)
+    assert exc.value.status_code == 409
+
+
+def test_source_audit_without_queue_identity_is_retained_without_fabricating_message():
+    data = evidence()
+    data['events'] = [{'id': 'source-audit', 'occurred_at': '2026-10-04',
+                       'payload': {'operation': 'receipt.identity-extraction.v1', 'status': 'identity_refreshed',
+                                   'changed_fields': ['merchant'], 'actor': 'audited-command'}}]
+    result = g.build(data)
+    audit = next(n for n in result['nodes'] if n['kind'] == 'LineageEvent')
+    assert audit['properties']['operation'] == 'receipt.identity-extraction.v1'
+    assert json.loads(audit['properties']['changed_fields']) == ['merchant']
+    assert not any(n['kind'] in {'Message', 'ProcessingAttempt'} for n in result['nodes'])
+    assert any(e['kind'] == 'PERSISTED_AS' and e['source'] == audit['id'] for e in result['edges'])
+
+
+def test_full_scan_advances_after_failed_receipt_and_reports_failure(monkeypatch):
+    calls = []
+    def project(dsn, **kwargs):
+        calls.append(kwargs['after'])
+        return ({'projected': 0, 'failed': 1, 'scanned': 1, 'after': 'next'} if len(calls) == 1
+                else {'projected': 0, 'failed': 0, 'scanned': 0, 'after': 'next'})
+    monkeypatch.setattr(g, 'project', project)
+    monkeypatch.setenv('DATABASE_URL', 'unused-by-mock')
+    assert g.main(['--all', '--limit', '1']) == 1
+    assert calls == ['', 'next']
