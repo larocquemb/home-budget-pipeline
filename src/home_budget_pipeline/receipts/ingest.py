@@ -328,7 +328,7 @@ def _has_literal_valid_timestamp(text: str) -> bool:
 
 def _looks_like_tesseract_tsv(text: str) -> bool:
     """Detect a flattened Tesseract TSV layer masquerading as receipt text."""
-    if "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num" in text:
+    if re.search(r'\blevel\s+page_num\s+block_num\s+par_num\s+line_num\s+word_num\b', text):
         return True
     return len(TESSERACT_TSV_ROW_RE.findall(text)) >= 3
 
@@ -363,7 +363,9 @@ def _ocr_supplement_score(text: str) -> int:
 
 def _select_ocr_candidate(candidates: Sequence[OCRCandidate]) -> OCRCandidate:
     """Prefer coherent receipt fields over text volume and OCR noise."""
+    candidates = [c for c in candidates if c.text and not _looks_like_tesseract_tsv(c.text)]
     merchants = [extract_merchant(candidate.text) for candidate in candidates]
+    totals = [extract_totals(candidate.text, infer_tax=False)[2] for candidate in candidates]
 
     def rank(candidate):
         subtotal, tax, total = extract_totals(candidate.text, infer_tax=False)
@@ -378,7 +380,18 @@ def _select_ocr_candidate(candidates: Sequence[OCRCandidate]) -> OCRCandidate:
                       and SequenceMatcher(None, key, _line_key(other)).ratio() >= .85)
         confidence = (sum(line.confidence for line in candidate.lines) / len(candidate.lines)
                       if candidate.lines else 0)
-        return (header_ok, items_ok, support if header_ok else 0, confidence if header_ok else 0,
+        total_support = sum(1 for other in totals if total is not None and other is not None
+                            and abs(round(total - other, 2)) <= .01)
+        direction_ok = True
+        if subtotal is not None and total is not None:
+            direction_ok = subtotal * total >= 0
+            expected_tax = round(total - subtotal, 2)
+            if tax is not None:
+                direction_ok = direction_ok and (abs(tax) <= .01 if abs(expected_tax) <= .01
+                                                  else tax * expected_tax >= 0)
+        return (header_ok, direction_ok, total_support if not header_ok else 0,
+                items_ok, total_support if header_ok else 0,
+                support if header_ok else 0, confidence if header_ok else 0,
                 _ocr_candidate_score(candidate.text), candidate.dpi, candidate.psm)
 
     return max(
@@ -446,6 +459,7 @@ def _reconcile_duplicate_ocr_lines(lines: list[Tuple[str, float, str]]) -> list[
 
 def _line_consensus_text(candidates: Sequence[OCRCandidate]) -> str:
     """Choose each base line using aligned OCR confidence and resolution evidence."""
+    candidates = [c for c in candidates if c.text and not _looks_like_tesseract_tsv(c.text)]
     base = _select_ocr_candidate(candidates)
     if not base.lines:
         return base.text
@@ -499,6 +513,7 @@ def _line_consensus_text(candidates: Sequence[OCRCandidate]) -> str:
 
 def select_ocr_page(candidates: Sequence[OCRCandidate]) -> str:
     """Select and supplement observations without receipt-specific answers."""
+    candidates = [c for c in candidates if c.text and not _looks_like_tesseract_tsv(c.text)]
     text = _line_consensus_text(candidates)
     for candidate in sorted(candidates, key=lambda item: _ocr_supplement_score(item.text), reverse=True):
         text = _supplement_missing_receipt_summary(text, candidate.text)
@@ -754,7 +769,10 @@ def _ocr_pdf_pages(
 
 def _supplement_missing_receipt_summary(primary: str, alternative: str) -> str:
     """Add only missing summary/payment lines from another OCR layer."""
+    if _looks_like_tesseract_tsv(alternative):
+        return primary
     values = list(extract_totals(primary, infer_tax=False))
+    original = tuple(values)
     components = extract_tax_components(primary)
     payment = extract_payment_provenance(primary)
     additions: List[str] = []
@@ -765,7 +783,16 @@ def _supplement_missing_receipt_summary(primary: str, alternative: str) -> str:
         candidate = extract_totals(line)
         candidate_payment = extract_payment_provenance(line)
         supplied = False
-        for code, amount in extract_tax_components(line).items():
+        line_components = extract_tax_components(line)
+        new_components = {code: amount for code, amount in line_components.items() if code not in components}
+        target_tax = values[1] if not components else None
+        if values[0] is not None and values[2] is not None and values[0] * values[2] > 0:
+            target_tax = round(values[2] - values[0], 2)
+        if new_components and target_tax is not None:
+            tentative = round(sum(components.values()) + sum(new_components.values()), 2)
+            if tentative * target_tax < 0 or abs(tentative) > abs(target_tax) + .01:
+                continue
+        for code, amount in line_components.items():
             if code not in components:
                 components[code] = amount
                 supplied = True
@@ -781,7 +808,12 @@ def _supplement_missing_receipt_summary(primary: str, alternative: str) -> str:
             supplied = True
         if supplied:
             additions.append(line)
-    return primary + (("\n" + "\n".join(additions)) if additions else "")
+    result = primary + (("\n" + "\n".join(additions)) if additions else "")
+    if (all(value is not None for value in original)
+            and abs(round(original[0] + original[1] - original[2], 2)) <= .01
+            and extract_totals(result, infer_tax=False) != original):
+        return primary
+    return result
 
 
 def extract_page_text(
@@ -1038,16 +1070,33 @@ def extract_merchant(text: str) -> Optional[str]:
     return None
 
 
+def _tax_code(line: str) -> Optional[str]:
+    codes = set(re.findall(r'\b(?:gst|pst|rst|hst|qst)\b', line.lower()))
+    if codes and codes <= {'gst', 'hst'}:
+        return 'gst'
+    if codes and codes <= {'pst', 'rst', 'qst'}:
+        return 'pst'
+    return None
+
+
+def _tax_amount_text(line: str) -> str:
+    # Remove identifier/rate tokens, retaining an adjacent printed money value.
+    line = re.sub(r'(\b(?:gst|pst|rst|hst|qst))\s*(?:#|registration|reg\b|number)\s*[:#]?\s*[A-Z0-9_.-]+', r'\1', line, flags=re.I)
+    line = re.sub(r'\b[A-Z]{1,6}\d{6,}[A-Z0-9]*\b', '', line, flags=re.I)
+    return re.sub(r'\b\d+(?:\.\d+)?\s*%', '', line)
+
+
 def _summary_lines(text: str) -> List[str]:
     """Associate a standalone financial label only with its adjacent amount."""
     lines = text.splitlines()
     result = []
     index = 0
-    label = re.compile(r'^(?:sub\s*total|total(?:\s+tax)?|tax|(?:[A-Z]\s+)?(?:gst|pst|rst|hst)(?:\s+\d+(?:\.\d+)?\s*%)?)\s*[:=-]?$', re.I)
+    label = re.compile(r'^(?:sub\s*total|total(?:\s+tax)?|tax|(?:[A-Z]\s+)?(?:gst|pst|rst|hst|qst)(?:\s*/\s*(?:gst|pst|rst|hst|qst))?)\s*[:=-]?$', re.I)
     amount = re.compile(r"^[-(]?\$?\s*\d[\d ,.'’]*[.)-]?\s*[A-Z]{0,2}$", re.I)
     while index < len(lines):
         line = normalize_line(lines[index])
-        if label.fullmatch(line) and index + 1 < len(lines):
+        match_line = normalize_line(_tax_amount_text(line)) if re.search(r'\b(?:gst|pst|rst|hst|qst)\b', line, re.I) else line
+        if label.fullmatch(match_line) and index + 1 < len(lines):
             following = normalize_line(lines[index + 1])
             if amount.fullmatch(following) and parse_money_tolerant(following) is not None:
                 result.append(line + ' ' + following)
@@ -1068,13 +1117,11 @@ def extract_totals(text: str, *, infer_tax: bool = True) -> Tuple[Optional[float
         line = normalize_line(raw)
         total_like = bool(TOTAL_LIKE_RE.search(line))
         subtotal_like = bool(re.search(r"\b(?:sub\s*tota[l1]?|suptotal)\b", line, re.I))
-        tax_like = bool(re.search(r"\b(?:total\s+tax|tax|gst|pst|rst|hst)\b", line, re.I))
-        if tax_like and re.search(r'\b(?:gst|pst|rst|hst)\s*(?:#|registration|reg\b|number)', line, re.I):
-            continue
+        tax_like = bool(re.search(r"\b(?:total\s+tax|tax|gst|pst|rst|hst|qst)\b", line, re.I))
         tender_like = bool(TENDER_LINE_RE.search(line)) and not re.search(
             r"\b(?:change|auth|reference|card\s+number)\b", line, re.I
         )
-        amount_line = re.sub(r'\b\d+(?:\.\d+)?\s*%', '', line) if tax_like else line
+        amount_line = _tax_amount_text(line) if tax_like else line
         amount = parse_money(amount_line)
         tolerant = False
         if amount is None and (subtotal_like or total_like or tender_like or tax_like):
@@ -1089,8 +1136,7 @@ def extract_totals(text: str, *, infer_tax: bool = True) -> Tuple[Optional[float
             if re.search(r'\b(?:inc|incl|included)\b', line, re.I):
                 included_tax = True
                 continue
-            codes = set(re.findall(r'\b(?:gst|pst|rst|hst)\b', line, re.I))
-            key = next(iter(codes)).lower() if len(codes) == 1 else 'tax'
+            key = _tax_code(line) or 'tax'
             # Repeated receipt summaries are alternate observations, not
             # additional taxes. Prefer named components over their summary.
             taxes[key] = amount
@@ -1127,18 +1173,15 @@ def extract_tax_components(text: str) -> dict[str, float]:
     """Read printed named taxes; rates and registration numbers are not amounts."""
     components = {}
     for line in _summary_lines(text):
-        codes = set(re.findall(r'\b(?:gst|pst|rst|hst)\b', line, re.I))
-        if len(codes) != 1 or re.search(r'\b(?:inc|incl|included)\b', line, re.I):
+        code = _tax_code(line)
+        if code is None or re.search(r'\b(?:inc|incl|included)\b', line, re.I):
             continue
-        if re.search(r'\b(?:gst|pst|rst|hst)\s*(?:#|registration|reg\b|number)', line, re.I):
-            continue
-        amount_line = re.sub(r'\b\d+(?:\.\d+)?\s*%', '', line)
+        amount_line = _tax_amount_text(line)
         amount = parse_money(amount_line)
         if amount is None:
             amount = parse_money_tolerant(amount_line)
         if amount is not None:
-            code = next(iter(codes)).lower()
-            components['pst' if code == 'rst' else code] = amount
+            components[code] = amount
     return components
 
 

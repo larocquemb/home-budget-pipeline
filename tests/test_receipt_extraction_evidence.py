@@ -89,3 +89,48 @@ def test_high_field_coverage_does_not_accept_uncorroborated_merchant(merchant,ex
     assert receipt.extraction_confidence == 1.
     assert scan.status_for(receipt) == expected
     assert ('uncorroborated_merchant' in scan.review_reasons_for(receipt)) == (expected=='review')
+
+
+def test_slash_tax_names_are_aliases_not_duplicate_or_missing_components():
+    text='SUBTOTAL 20.00\nGST/HST 1.00\nPST/QST 1.40\nTOTAL 22.40'
+    assert scan.extract_totals(text,infer_tax=False) == (20.,2.4,22.4)
+    assert scan.extract_tax_components(text) == {'gst':1.,'pst':1.4}
+
+
+def test_refund_tax_label_with_registration_and_split_value_keeps_sign():
+    text='RETURNS\nSUBTOTAL\n20.00-\nGST R123456789 5%\n1.00-\nRST 7%\n1.40-\nTOTAL\n22.40-'
+    assert scan.extract_totals(text,infer_tax=False) == (-20.,-2.4,-22.4)
+    assert scan.extract_tax_components(text) == {'gst':-1.,'pst':-1.4}
+
+
+def test_supplement_does_not_add_tax_again_to_coherent_included_tax_header():
+    primary='SUBTOTAL 20.00\nGST (Incl) 1.00\nTOTAL 20.00'
+    alternative='GST (Ine) 1.00\nTOTAL 20.00'
+    result=scan._supplement_missing_receipt_summary(primary,alternative)
+    assert scan.extract_totals(result,infer_tax=False) == (20.,0.,20.)
+
+
+def test_tsv_engine_metadata_cannot_supply_prices_or_tax():
+    tsv='level page_num block_num par_num line_num word_num left top width height conf text\n5 1 1 1 1 1 10 20 30 40 99.123456 GST'
+    primary='EXAMPLE SHOP\nSUBTOTAL 20.00\nTAX 1.00\nTOTAL 21.00'
+    assert scan._looks_like_tesseract_tsv(tsv)
+    assert scan._supplement_missing_receipt_summary(primary,tsv) == primary
+    assert scan._select_ocr_candidate([candidate(tsv,confidence=100),candidate(primary)]).text == primary
+
+
+def test_refund_total_support_and_signed_components_survive_alternatives():
+    positive=candidate('EXAMPLE SHOP\n123 PRODUCT 20.00-\nSUBTOTAL 20.00-\nGST 1.00\nPST 1.40\nTOTAL 22.40',confidence=99,dpi=450)
+    negative=candidate('EXAMPLE SHOP\n123 PRODUCT 20.00-\nSUBTOTAL 20.00-\nTOTAL 22.40-')
+    partial=candidate('EXAMPLE SHOP\nGST 1.00-\nPST 1.40-\nTOTAL 22.40-',confidence=95)
+    text=scan.select_ocr_page([positive,negative,partial])
+    assert scan.extract_totals(text,infer_tax=False) == (-20.,-2.4,-22.4)
+    assert scan.extract_tax_components(text) == {'gst':-1.,'pst':-1.4}
+
+
+def test_consistent_refund_direction_outranks_balanced_items_with_positive_total():
+    wrong_direction=candidate('EXAMPLE SHOP\n123 PRODUCT 20.00-\nSUBTOTAL 20.00-\nGST 1.00\nTOTAL 22.40',confidence=99,dpi=450)
+    negative=candidate('EXAMPLE SHOP\n123 PRODUCT 19.98-\nSUBTOTAL 20.00-\nTOTAL 22.40-')
+    support=candidate('EXAMPLE SHOP\nGST 1.00-\nPST 1.40-\nTOTAL 22.40-')
+    selected=scan._select_ocr_candidate([wrong_direction,negative,support])
+    assert selected is not wrong_direction
+    assert scan.extract_totals(selected.text,infer_tax=False)[2] == -22.4
