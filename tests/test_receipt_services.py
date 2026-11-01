@@ -123,6 +123,7 @@ def test_paddle_receives_explicit_thread_count_only_when_configured(monkeypatch)
             monkeypatch.delenv('HOME_BUDGET_OCR_THREADS', raising=False)
         candidate = ingest._run_paddle_candidate(image, dpi=300)
         assert candidate.text == 'Milk'
+    assert all(option['enable_mkldnn'] == ingest.paddle_mkldnn_enabled() for option in options)
     assert 'cpu_threads' not in options[0]
     assert options[1]['cpu_threads'] == 4
 

@@ -478,3 +478,17 @@ uses this same publication policy. `--refresh-ocr-cache` explicitly queues
 full reprocessing for every discovered receipt.
 
 Receipt processing status is operational metadata only. Canonical expenses, evidence, duplicate review, and reconciliation remain available through their existing Ledger pages.
+
+## Paddle CPU runtime and acceleration
+
+Linux/x86 production uses PaddlePaddle 3.2.2 with MKL-DNN/oneDNN enabled.
+PaddlePaddle 3.3.1 regresses the PIR oneDNN attribute converter used by the
+PP-OCRv6 models; the application pins the compatible CPU wheel instead of
+turning acceleration off. Other platforms retain their existing runtime pin.
+See the [upstream regression](https://github.com/PaddlePaddle/Paddle/issues/77340).
+
+The application image runs actual detection and recognition on synthetic text
+as part of its build. Loading the model alone did not expose this failure.
+Run the same check locally with `make test-paddle-runtime`. OCR pass metadata
+records `enable_mkldnn` alongside model names. Old failed pass evidence remains
+retained; a runtime upgrade does not rewrite existing OCR caches or history.

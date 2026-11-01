@@ -25,6 +25,7 @@ import hashlib
 import io
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -233,6 +234,11 @@ def _paddle_ocr_enabled() -> bool:
     return os.getenv("HOME_BUDGET_PADDLE_OCR", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def paddle_mkldnn_enabled() -> bool:
+    """Enable oneDNN on the Linux/x86 runtime pinned for production CPU OCR."""
+    return platform.system() == "Linux" and platform.machine().lower() == "x86_64"
+
+
 def _run_paddle_candidate(image, *, dpi: int) -> OCRCandidate:
     """Run the optional Paddle engine and retain its line confidence."""
     global _PADDLE_OCR
@@ -254,6 +260,9 @@ def _run_paddle_candidate(image, *, dpi: int) -> OCRCandidate:
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
+                # Linux/x86 pins Paddle 3.2.2: 3.3.1 regresses the oneDNN
+                # PIR converter used by PP-OCRv6. Keep acceleration enabled.
+                enable_mkldnn=paddle_mkldnn_enabled(),
                 **thread_options,
             )
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
@@ -531,6 +540,7 @@ def _ocr_pass_metric(candidate: OCRCandidate, *, page: int, variant: str, second
         {
             "detection_model": os.getenv("HOME_BUDGET_PADDLE_DET_MODEL", "PP-OCRv6_medium_det"),
             "recognition_model": os.getenv("HOME_BUDGET_PADDLE_REC_MODEL", "PP-OCRv6_medium_rec"),
+            "enable_mkldnn": paddle_mkldnn_enabled(),
         }
         if candidate.engine == "paddle"
         else {"psm": candidate.psm}
