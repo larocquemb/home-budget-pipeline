@@ -329,3 +329,7 @@ dev-progress-status:
 
 production-db-rebuild:
 	$(PYTHON) scripts/production_rebuild.py
+
+.PHONY: test-paddle-runtime
+test-paddle-runtime:
+	$(PYTHON) -m home_budget_pipeline.receipts.ocr_smoke

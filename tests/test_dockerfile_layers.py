@@ -30,6 +30,6 @@ def test_paddle_native_runtime_is_installed_before_model_preload():
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
 
     native_libraries = dockerfile.index("microdnf install -y libgomp mesa-libGL")
-    paddle_preload = dockerfile.index("from paddleocr import PaddleOCR")
+    paddle_preload = dockerfile.index("python -m home_budget_pipeline.receipts.ocr_smoke")
 
     assert native_libraries < paddle_preload

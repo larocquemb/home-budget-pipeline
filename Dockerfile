@@ -43,7 +43,7 @@ USER 1001
 
 RUN tesseract --version \
     && tesseract --list-langs | grep -qx eng \
-    && python -c "from paddleocr import PaddleOCR; PaddleOCR(text_detection_model_name='PP-OCRv6_medium_det', text_recognition_model_name='PP-OCRv6_medium_rec', use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False)"
+    && python -m home_budget_pipeline.receipts.ocr_smoke
 
 ENTRYPOINT ["python", "-m"]
 CMD ["home_budget_pipeline.receipts.queue_ingest", "publish", "/data/receipts/raw/scanned/inbox"]
