@@ -61,3 +61,50 @@ def test_tax_rate_join_never_crosses_registration_or_unrelated_rows():
 ])
 def test_preserves_observed_time_without_using_print_time(text, expected):
     assert extract_transaction_datetime(text) == expected
+
+
+@pytest.mark.parametrize('name', ['AB&CD', 'A&B', 'H+M', 'AB+CD'])
+def test_short_punctuated_retailer_logos_are_valid_names(name):
+    assert ingest.extract_merchant('“'+name+'\nStore 123\n500 Example Rd') == name
+
+
+@pytest.mark.parametrize('header', [
+    "EXAMPLE CENTRE 1234 ST. SAMPLE ROAD, UNIT 21\nNORTHVILLE, MB R2M5E5\nTelephone: 204-555-0101",
+    "1234 EXAMPLE BLVD\nNORTHVILLE, MB R2M5E5\nReg Price: 19.%\nGroup Discount -15%",
+])
+def test_address_and_contact_metadata_cannot_become_merchant(header):
+    assert ingest.extract_merchant(header) is None
+
+
+def observation(text,page=1,status='success'):
+    return {'text':text,'page_number':page,'status':status}
+
+
+def test_alternative_headers_require_repeated_name_and_matching_printed_domain():
+    primary='EXAMPLE CENTRE 1234 SAMPLE ROAD, UNIT 21\nNORTHVILLE, MB R2M5E5\nTOTAL 10.00'
+    alternate='AB&CD\nStore 123\nVisit our website at www.ab-cd.com\nTOTAL 10.00'
+    assert ingest.extract_merchant_store(primary,observations=[observation(alternate),observation(alternate)])[0]=='AB&CD'
+    assert ingest.extract_merchant_store(primary,observations=[observation(alternate)])[0] is None
+    assert ingest.extract_merchant_store(primary,observations=[observation(alternate,page=2),observation(alternate,page=2)])[0] is None
+    unrelated=alternate.replace('ab-cd.com','another-shop.com')
+    assert ingest.extract_merchant_store(primary,observations=[observation(unrelated),observation(unrelated)])[0] is None
+    assert ingest.extract_merchant_store(primary,observations=[observation(alternate,status='failed'),observation(alternate,status='failed')])[0] is None
+
+
+def test_footer_merchant_alone_is_never_promoted_and_tied_names_remain_unknown():
+    primary='1234 Example Road\nVisit our website at www.ab-cd.com'
+    assert ingest.merchant_from_observations(primary,[observation(primary),observation(primary)]) is None
+    a='AB&CD\nVisit us at www.ab-cd.com'
+    b='EF&GH\nVisit us at www.ef-gh.com'
+    assert ingest.merchant_from_observations(primary,[observation(a),observation(a),observation(b),observation(b)]) is None
+
+
+def test_checkout_timestamp_and_transaction_code_are_not_a_line_item_price():
+    text='NOISE 09:21AM Reg x Trans..8877\n123456 REG FIT PANTS 40.00\nSubtotal 40.00\nTOTAL 42.00'
+    assert [(i.item_name,i.line_total) for i in ingest.extract_items(text)]==[('123456 REG FIT PANTS',40.0)]
+    assert ingest.extract_items('09:21AM Register 2 Transaction..8877')==[]
+
+
+def test_corroborating_website_accepts_protocol_and_www_prefix():
+    text='AB&CD\nVisit https://www.ab-cd.com'
+    assert ingest.merchant_from_observations('123 Example Road',[observation(text),observation(text)])=='AB&CD'

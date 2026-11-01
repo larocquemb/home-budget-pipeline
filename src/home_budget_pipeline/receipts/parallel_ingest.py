@@ -459,9 +459,12 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool, *
         source_reference,
         **({"require_cache": True} if require_cache else {}),
     )
+    run = _ocr_run_metadata(_cache_path(cache_dir, source_reference, source_sha256))
     with telemetry.span("receipt.parsing", {"receipt.cache.hit": cache_hit}):
         text = scan.merge_page_text(pages)
-        merchant, store = scan.extract_merchant_store(text, scan.pdf_merchant_hint(path))
+        merchant, store = scan.extract_merchant_store(
+            text, scan.pdf_merchant_hint(path), observations=run.get('ocr_passes', []),
+        )
         subtotal, tax, total = scan.extract_totals(text)
         total = reconcile_total_from_text(text, total)
         filename_date, filename_merchant, filename_total = scan.receipt_info_from_filename(path)
@@ -490,7 +493,7 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool, *
             ocr_layout=_structured_layout(_cache_path(cache_dir, source_reference, source_sha256)),
             text=text,
         )
-    receipt.ocr_run = _ocr_run_metadata(_cache_path(cache_dir, source_reference, source_sha256))
+    receipt.ocr_run = run
     receipt.transaction_datetime = transaction_datetime
     receipt.worker_pid = os.getpid()
     receipt.worker_host = socket.gethostname()

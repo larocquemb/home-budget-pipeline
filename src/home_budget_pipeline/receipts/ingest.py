@@ -1073,6 +1073,52 @@ def _merchant_name_from_store_header(text: str, header: str) -> Optional[str]:
     return anchor
 
 
+def _merchant_address_line(line: str) -> bool:
+    """Reject location/contact metadata when considering a retailer name."""
+    return bool(
+        re.search(r"\b\d{1,6}\b.*\b(?:rd|road|street|st|ave|avenue|blvd|boulevard|drive|dr|lane|ln|unit|suite)\b", line, re.I)
+        or re.search(r",\s*[A-Z]{2}\s+[A-Z]\d[A-Z][A-Z0-9 ]{3,}\b", line)
+        or re.match(r"^(?:telephone|phone|fax|tel)\b", line, re.I)
+    )
+
+
+def _merchant_logo(line: str) -> Optional[str]:
+    line = normalize_line(line).strip(" \"'“”‘’~_=|.,:;-")
+    if re.fullmatch(r"[A-Za-z]{1,4}\s*[&+]\s*[A-Za-z]{1,4}\.?", line):
+        return re.sub(r"\s+", "", line).rstrip('.')
+    return None
+
+
+def merchant_from_observations(text: str, observations) -> Optional[str]:
+    """Require repeated header readings and matching printed website evidence."""
+    readings = []
+    texts = [text]
+    for observation in observations or ():
+        if not isinstance(observation, dict):
+            continue
+        value = observation.get('text') or ''
+        if not isinstance(value, str):
+            continue
+        if (observation.get('page_number') != 1
+                or observation.get('status') not in (None, 'success')
+                or not value or _looks_like_tesseract_tsv(value)):
+            continue
+        texts.append(value)
+        if merchant := extract_merchant(value):
+            readings.append(merchant)
+    # A footer URL corroborates a retailer already read in the header; it never
+    # introduces an otherwise unobserved merchant or a payment-card partner.
+    hosts = re.findall(r'(?:https?://(?:www\s*\.\s*)?|www\s*[.,])\s*([A-Za-z0-9-]+)\s*\.', '\n'.join(texts), re.I)
+    keys = {_line_key(host) for host in hosts}
+    counts = Counter(_line_key(name) for name in readings if _line_key(name) in keys)
+    if not counts:
+        return None
+    best = counts.most_common()
+    if best[0][1] < 2 or len(best) > 1 and best[0][1] == best[1][1]:
+        return None
+    return next(name for name in readings if _line_key(name) == best[0][0])
+
+
 def extract_merchant(text: str) -> Optional[str]:
     header_lines = text.splitlines()[:12]
     # Email PDFs can repeat each header glyph in overlapping text layers.
@@ -1098,6 +1144,9 @@ def extract_merchant(text: str) -> Optional[str]:
         for pattern, replacement in MERCHANT_ALIASES:
             if pattern.search(line):
                 return replacement or normalize_merchant(line)
+    for raw in header_lines:
+        if logo := _merchant_logo(raw):
+            return logo
     for raw in header_lines:
         line = normalize_line(raw)
         if re.search(r"\b(?:store|location|branch)\s*[:#]?\s*[A-Z]*\d[\w-]*\b", line, re.I) and re.search(r"[A-Za-z]{3}", line):
@@ -1126,10 +1175,12 @@ def extract_merchant(text: str) -> Optional[str]:
         if re.search(r'\b(?:ship\s+to|bill\s+to|sold\s+to)\b',line,re.I):
             break
         if (not line or MONEY_RE.search(line) or len(line) > 70
+                or _merchant_address_line(line)
+                or re.match(r'^\d{3,14}\s+.*[A-Za-z]', line)
                 or '@' in line
                 or not re.search(r'[A-Za-z]{4}', line) and not re.fullmatch(r'[A-Z]{3}', line)):
             continue
-        if re.search(r"[A-Za-z]{3}", line) and not re.search(r"\b(receipt|invoice|date|time|tel|phone|store|register|location|branch|cashier|customer|loyalty|member|purchases?|orders?|transaction|subtotal|total|gst|pst|hst|gift\s+cards?|thank\s+you|delivered|delivery|subject|payment)\b", line, re.I):
+        if re.search(r"[A-Za-z]{3}", line) and not re.search(r"\b(receipt|invoice|date|time|tel|telephone|phone|store|register|reg|price|discount|location|branch|cashier|customer|loyalty|member|purchases?|orders?|transaction|subtotal|total|gst|pst|hst|gift\s+cards?|thank\s+you|delivered|delivery|subject|payment)\b", line, re.I):
             return normalize_merchant(line)
     return None
 
@@ -1165,13 +1216,13 @@ def pdf_merchant_hint(path: Path) -> Optional[str]:
     return merchant_title_hint(title) or filename_hint
 
 
-def extract_merchant_store(text: str, merchant_hint: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+def extract_merchant_store(text: str, merchant_hint: Optional[str] = None, *, observations=()) -> Tuple[Optional[str], Optional[str]]:
     """Separate the retailer from printed branch/location evidence.
 
     A merchant hint is existing canonical/source metadata, never a guess from a
     co-branded payment card. Store labels and retailer suffixes remain distinct.
     """
-    merchant = extract_merchant(text)
+    merchant = merchant_from_observations(text, observations) or extract_merchant(text)
     header = [normalize_line(line) for line in text.splitlines()[:20]]
     stores = {}
     for line in header:
@@ -1333,6 +1384,11 @@ def extract_items(text: str) -> List[ScannedItem]:
                 re.match(r'^(?:total|tax\s+summary)\b', line, re.I)
                 and (items or parse_money(line) is not None)):
             break
+        # Checkout timestamps/register/transaction identifiers are metadata,
+        # even when OCR punctuation makes an identifier resemble a price.
+        if (re.search(r'\b\d{1,2}:\d{2}', line)
+                and re.search(r'\b(?:reg(?:ister)?|trans(?:action)?)\b', line, re.I)):
+            continue
         adjustment = re.match(r'^(?:INSTANT\s+SAVINGS|\+?EHC)\b', line, re.I)
         if adjustment:
             amount = parse_money(line)

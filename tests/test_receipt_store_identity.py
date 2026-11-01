@@ -68,3 +68,17 @@ def test_store_result_round_trip_and_old_results_remain_readable(tmp_path):
     legacy = {**message.payload, 'receipt': {k:v for k,v in message.payload['receipt'].items() if k!='store'}}
     from dataclasses import replace
     assert receipt_from_message(replace(message,payload=legacy)).store is None
+
+
+def test_identity_plan_uses_retained_passes_and_versions_its_evidence():
+    before=row()
+    before.update(raw_text='EXAMPLE CENTRE 1234 SAMPLE ROAD\nTOTAL 12.00',merchant='EXAMPLE CENTRE',merchant_hint=None)
+    text='AB&CD\nVisit our website at www.ab-cd.com\nTOTAL 12.00'
+    before['ocr_observations']=[{'text':text,'page_number':1,'status':'success','pass_id':n} for n in (1,2)]
+    plan=identity_plan([before])
+    assert plan['changes'][0]['after']['merchant']=='AB&CD'
+    assert plan['changes'][0]['ocr_observations_sha256']
+    altered=copy.deepcopy(before);altered['ocr_observations'][0]['pass_id']=3
+    assert identity_plan([altered])['version']!=plan['version']
+    before['feedback_fields']=[{'merchant':'Image verified'}]
+    assert all(c['after']['merchant']=='EXAMPLE CENTRE' for c in identity_plan([before])['changes'])

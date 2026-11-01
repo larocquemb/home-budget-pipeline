@@ -56,6 +56,15 @@ uncertainty. Evidence capture does not imply tax eligibility.
 KAN-139 stays To Do until annual claim preparation starts or Paul directs
 otherwise. Its status does not suspend time/evidence capture on working stories.
 
+## Receipt extraction changes
+
+Never add receipt-specific code, exceptions or field overrides. Do not branch
+on an individual filename/path, source hash, amount, transaction, store/address
+or evidence/expense ID to obtain an expected answer. Fix general parsing,
+selection and validation rules using source evidence. Test generalized cases;
+retain receipt-specific diagnostic evidence privately. Use generic audited
+refresh/reprocessing workflows to apply a corrected extractor.
+
 ## Command interface
 
 `ledger` must not orchestrate or invoke Kubernetes/K3s. Keep Kubernetes lifecycle,

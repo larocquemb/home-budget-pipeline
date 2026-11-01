@@ -101,3 +101,14 @@ def test_persisted_text_never_requires_or_gets_replaced_by_cache(tmp_path, monke
         def execute(self, *args): raise AssertionError('No cache lookup needed')
     assert shared.recover_pass_text(Connection(), [document], [metric]) == []
     assert metric['extracted_text'] == 'Stored pass text'
+
+
+def test_explicit_local_cache_mount_preserves_artifact_verification(tmp_path,monkeypatch):
+    artifact,document,metric,_=cache(tmp_path,monkeypatch)
+    monkeypatch.setenv('HOME_BUDGET_OCR_CACHE',str(tmp_path/'unmounted'))
+    monkeypatch.setenv('OCR_ARTIFACT_URI_PREFIX','pvc://other')
+    assert shared.verified_pass_text(artifact,document,[metric],
+        cache_root=tmp_path,uri_prefix='pvc://receipt-ocr')[10]=='Oep Pic Med'
+    with pytest.raises(shared.CacheEvidenceError,match='cache_hash_mismatch'):
+        shared.verified_pass_text({**artifact,'sha256':'0'*64},document,[metric],
+            cache_root=tmp_path,uri_prefix='pvc://receipt-ocr')
