@@ -1025,13 +1025,16 @@ def normalize_merchant(raw: Optional[str]) -> Optional[str]:
     return line or None
 
 
-def _merchant_name_from_store_header(text: str, header: str) -> str:
+def _merchant_name_from_store_header(text: str, header: str) -> Optional[str]:
     """Recover a merchant spelling from repeated, similar words on a receipt."""
     marker = re.search(r"\b(?:store|location|branch)\b", header, re.I)
     prefix = header[:marker.start()] if marker else header
     prefix_words = re.findall(r"[A-Za-z][A-Za-z'’]{3,}", prefix)
     if not prefix_words:
-        return header
+        suffix = re.match(r"\s*[:#]?\s*[A-Z]*\d[\w-]*\s+(.+)", header[marker.end():], re.I) if marker else None
+        if suffix and not re.search(r"\b(?:register|terminal|trans(?:action)?|cashier)\b", suffix[1], re.I):
+            return normalize_merchant(suffix[1])
+        return None
     anchor = max(prefix_words, key=len)
     anchor_norm = re.sub(r"[^a-z]", "", anchor.lower())
     variants: Counter[str] = Counter()
@@ -1050,6 +1053,15 @@ def _merchant_name_from_store_header(text: str, header: str) -> str:
 
 def extract_merchant(text: str) -> Optional[str]:
     header_lines = text.splitlines()[:12]
+    # Browser exports can prepend a timestamp and page title. Keep only the
+    # title's merchant when its spelling is supported by the document URL.
+    hosts = re.findall(r'(?:https?://|www\.)([A-Za-z0-9.-]+)', text, re.I)
+    host_labels = {re.sub(r'[^a-z0-9]', '', host.lower().removeprefix('www.').split('.')[0]) for host in hosts}
+    for raw in header_lines:
+        if '|' in raw:
+            name = normalize_line(raw.rsplit('|', 1)[1])
+            if re.search(r'[A-Za-z]{3}', name) and re.sub(r'[^a-z0-9]', '', name.lower()) in host_labels:
+                return normalize_merchant(name)
     # Prefer a recognized merchant anywhere in the header over a preceding
     # slogan or tagline.
     for raw in header_lines:
@@ -1059,13 +1071,33 @@ def extract_merchant(text: str) -> Optional[str]:
                 return replacement or normalize_merchant(line)
     for raw in header_lines:
         line = normalize_line(raw)
-        if re.search(r"\b(?:store|location|branch)\s*#?\s*[A-Z0-9-]*", line, re.I) and re.search(r"[A-Za-z]{3}", line):
-            return _merchant_name_from_store_header(text, line)
+        if re.search(r"\b(?:store|location|branch)\s*[:#]?\s*[A-Z]*\d[\w-]*\b", line, re.I) and re.search(r"[A-Za-z]{3}", line):
+            merchant = _merchant_name_from_store_header(text, line)
+            if merchant:
+                return merchant
+    # A closing acknowledgement can corroborate a name already visible in the
+    # header. Never introduce a merchant found only in footer advertising.
+    for match in re.finditer(r"\bthank\s+you\s+for\s+shopping\s+(?:at|with)\s+([^,\n.!]+)", text, re.I):
+        name = normalize_line(match.group(1)).strip()
+        if re.fullmatch(r"(?:our|this|the)\s+store", name, re.I):
+            continue
+        for raw in header_lines:
+            line = normalize_line(raw)
+            if _line_key(line) == _line_key(name) and re.search(r"[A-Za-z]{3}", name):
+                return normalize_merchant(line)
     for raw in header_lines:
         line = normalize_line(raw)
-        if not line or MONEY_RE.search(line) or len(line) > 70:
+        business_suffix = re.search(r"\b(?:co-?op(?:erative)?|incorporated|inc|limited|ltd|llc|corporation)\.?$", line, re.I)
+        if (not MONEY_RE.search(line) and len(line) <= 70
+                and business_suffix
+                and len(re.sub(r'[^A-Za-z]', '', line[:business_suffix.start()])) >= 3):
+            return normalize_merchant(line)
+    for raw in header_lines:
+        line = normalize_line(raw)
+        if (not line or MONEY_RE.search(line) or len(line) > 70
+                or not re.search(r'[A-Za-z]{4}', line) and not re.fullmatch(r'[A-Z]{3}', line)):
             continue
-        if re.search(r"[A-Za-z]{3}", line) and not re.search(r"\b(receipt|invoice|date|tel|phone|transaction\s+record)\b", line, re.I):
+        if re.search(r"[A-Za-z]{3}", line) and not re.search(r"\b(receipt|invoice|date|time|tel|phone|store|register|location|branch|cashier|customer|loyalty|member|purchases?|orders?|transaction|subtotal|total|gst|pst|hst|gift\s+cards?|thank\s+you)\b", line, re.I):
             return normalize_merchant(line)
     return None
 
@@ -1091,13 +1123,23 @@ def _summary_lines(text: str) -> List[str]:
     lines = text.splitlines()
     result = []
     index = 0
-    label = re.compile(r'^(?:sub\s*total|total(?:\s+tax)?|tax|(?:[A-Z]\s+)?(?:gst|pst|rst|hst|qst)(?:\s*/\s*(?:gst|pst|rst|hst|qst))?)\s*[:=-]?$', re.I)
+    label = re.compile(r'^(?:sub\s*total|total(?:\s+tax)?|tax|(?:[A-Z]\s+)?(?:gst|pst|rst|hst|qst)(?:\s*/\s*(?:gst|pst|rst|hst|qst))?(?:\s*\([A-Z]{2,3}\))?)\s*[:=-]?$', re.I)
     amount = re.compile(r"^[-(]?\$?\s*\d[\d ,.'’]*[.)-]?\s*[A-Z]{0,2}$", re.I)
     while index < len(lines):
         line = normalize_line(lines[index])
         match_line = normalize_line(_tax_amount_text(line)) if re.search(r'\b(?:gst|pst|rst|hst|qst)\b', line, re.I) else line
         if label.fullmatch(match_line) and index + 1 < len(lines):
             following = normalize_line(lines[index + 1])
+            # Tax rates are not money. A rate-only row may separate the printed
+            # tax label from its amount; never cross an identifier or other row.
+            if (re.search(r'\b(?:gst|pst|rst|hst|qst)\b', line, re.I)
+                    and re.fullmatch(r'\d+(?:\.\d+)?\s*%', following)
+                    and index + 2 < len(lines)):
+                following_amount = normalize_line(lines[index + 2])
+                if amount.fullmatch(following_amount) and parse_money(following_amount) is not None:
+                    result.append(line + ' ' + following + ' ' + following_amount)
+                    index += 3
+                    continue
             if amount.fullmatch(following) and parse_money_tolerant(following) is not None:
                 result.append(line + ' ' + following)
                 index += 2
@@ -1142,7 +1184,7 @@ def extract_totals(text: str, *, infer_tax: bool = True) -> Tuple[Optional[float
             taxes[key] = amount
             continue
         if total_like:
-            if not re.search(r"\b(?:tax|items?|savings?|discount|points?)\b", line, re.I):
+            if not re.search(r"\b(?:tax|items?|savings?|discount|points?|purchased)\b", line, re.I):
                 total_candidates.append((amount, tolerant))
                 continue
         if tender_like:

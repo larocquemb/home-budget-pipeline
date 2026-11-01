@@ -327,12 +327,15 @@ def _read_or_create_pages(
     cache_dir: Path,
     refresh: bool,
     source_reference: str | None = None,
+    *,
+    require_cache: bool = False,
 ) -> tuple[list[str], bool]:
     cache_path = _cache_path(cache_dir, source_reference, source_sha256)
     legacy_cache_path = cache_dir / f"{source_sha256}.json"
     with telemetry.span("receipt.cache.lookup", {"receipt.cache.refresh": refresh}) as cache_span:
         if not refresh:
-            for candidate in dict.fromkeys((cache_path, legacy_cache_path)):
+            candidates = (cache_path,) if require_cache else (cache_path, legacy_cache_path)
+            for candidate in dict.fromkeys(candidates):
                 try:
                     data = json.loads(candidate.read_text(encoding="utf-8"))
                     pages = _cached_pages(data)
@@ -346,6 +349,9 @@ def _read_or_create_pages(
                 except (FileNotFoundError, json.JSONDecodeError, OSError):
                     continue
         cache_span.set_attribute("receipt.cache.hit", False)
+
+    if require_cache:
+        raise ValueError("No readable OCR cache matches the receipt source hash; run a full reprocess instead")
 
     started = time.perf_counter()
     ocr_passes: list[dict] = []
@@ -439,7 +445,7 @@ def _read_or_create_pages(
     return ["\n".join(_line_texts(page["lines"])) for page in cache_pages], False
 
 
-def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -> tuple[scan.ScannedReceipt, bool]:
+def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool, *, require_cache: bool = False) -> tuple[scan.ScannedReceipt, bool]:
     source_sha256 = scan.sha256_file(path)
     try:
         source_reference = reference_for(path, root) if root.is_dir() else path.name
@@ -451,6 +457,7 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
         cache_dir,
         refresh,
         source_reference,
+        **({"require_cache": True} if require_cache else {}),
     )
     with telemetry.span("receipt.parsing", {"receipt.cache.hit": cache_hit}):
         text = scan.merge_page_text(pages)

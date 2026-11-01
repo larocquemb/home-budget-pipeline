@@ -14,14 +14,14 @@ MONTHS = {
 
 MONTH_NAME_RE = re.compile(
     r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
-    r"\s+(\d{1,2})(?:,\s*|\s+)(20\d{2})(?:\s+(\d{1,2}):(\d{2})(?:\s*([AP]M))?)?\b",
+    r"\s+(\d{1,2})(?:,\s*|\s+)(20\d{2})(?:(?:,\s*|\s+)(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([AP]M))?)?\b",
     re.I,
 )
 YMD_RE = re.compile(r"(?<!\d)(20\d{2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})(?:\s+(\d{1,2})\s*:\s*(\d{2})(?:\s*:\s*(\d{2}))?)?(?!\d)")
 MDY_RE = re.compile(
     r"(?<![\d.$])(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*"
     r"(?:[-/.]\s*|[,;]\s*['’]?\s*)['’]?(20\d{2}|\d{2})"
-    r"(?:\s+(\d{1,2})\s*:\s*(\d{2})(?:\s*:\s*(\d{2}))?)?(?!\d)"
+    r"(?:\s+(\d{1,2})\s*:\s*(\d{2})(?:\s*:\s*(\d{2}))?(?:\s*([AP]M))?)?(?!\d)", re.I
 )
 YMD2_RE = re.compile(r"\b(\d{2})/\s*(\d{1,2})\s*[,']?\s*/?\s*[,']?\s*(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\b")
 
@@ -94,9 +94,9 @@ def _purpose_segments(text):
 def _date_candidates(text, *, labeled=False):
     full_date_spans = []
     for m in MONTH_NAME_RE.finditer(text):
-        hour = _hour_12_to_24(int(m.group(4) or 0), m.group(6))
+        hour = _hour_12_to_24(int(m.group(4) or 0), m.group(7))
         value = _iso(int(m.group(3)), MONTHS[m.group(1)[:3].lower()], int(m.group(2)),
-                     hour, int(m.group(5) or 0), has_time=m.group(4) is not None)
+                     hour, int(m.group(5) or 0), int(m.group(6) or 0), has_time=m.group(4) is not None)
         if value:
             yield 0, m.start(), value
     for m in YMD_RE.finditer(text):
@@ -112,7 +112,7 @@ def _date_candidates(text, *, labeled=False):
             continue
         year = int(m.group(3))
         value = _iso(year + 2000 if year < 100 else year, int(m.group(1)), int(m.group(2)),
-                     int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), m.group(4) is not None)
+                     _hour_12_to_24(int(m.group(4) or 0), m.group(7)), int(m.group(5) or 0), int(m.group(6) or 0), m.group(4) is not None)
         if value:
             full_date_spans.append(m.span())
             yield 2, m.start(), value
@@ -136,6 +136,26 @@ def _date_candidates(text, *, labeled=False):
                 yield 5, digits.start()+m.start(), value
 
 
+def _with_labeled_time(value: str, line_number: int, lines: list[str]) -> str:
+    """Join a date to an explicit time on its own or an adjacent time-only row."""
+    if 'T' in value:
+        return value
+    time_re = re.compile(r'\btime\s*[:;]?\s*(\d{1,2}):\s*(\d{2})(?::\s*(\d{2}))?\s*([AP]M)?\b', re.I)
+    for index in (line_number, line_number + 1, line_number - 1):
+        if not 0 <= index < len(lines):
+            continue
+        line = lines[index].strip()
+        if any(m.lastgroup == 'metadata' for m in DATE_PURPOSE_RE.finditer(line)):
+            continue
+        match = time_re.search(line) if index == line_number else time_re.fullmatch(line)
+        if match:
+            timestamp = _iso(int(value[:4]), int(value[5:7]), int(value[8:10]),
+                             _hour_12_to_24(int(match[1]), match[4]), int(match[2]), int(match[3] or 0), True)
+            if timestamp:
+                return timestamp
+    return value
+
+
 def extract_transaction_datetime(text: str) -> Optional[str]:
     """Choose dates by their purpose, never by print order or a merchant rule.
 
@@ -143,10 +163,11 @@ def extract_transaction_datetime(text: str) -> Optional[str]:
     original text is untouched, retaining print/receipt/completion provenance.
     """
     candidates = []
+    lines = text.splitlines()
     for rank, line_number, segment in _purpose_segments(text):
         if rank < 0:
             continue
-        candidates.extend((rank, fmt, line_number, position, value)
+        candidates.extend((rank, fmt, line_number, position, _with_labeled_time(value, line_number, lines))
                           for fmt, position, value in _date_candidates(segment, labeled=rank < 3))
     if not candidates:
         return None
