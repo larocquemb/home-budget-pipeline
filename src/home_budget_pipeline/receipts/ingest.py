@@ -52,16 +52,6 @@ OCR_MONEY_RE = re.compile(
 TESSERACT_TSV_ROW_RE = re.compile(
     r"(?:^|\s)[1-5](?:\s+\d+){9}\s+-?\d+(?:\.\d+)?(?:\s|$)"
 )
-DATE_PATTERNS = (
-    re.compile(r"\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b"),
-    re.compile(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})\b"),
-)
-DATE_TIME_YYMMDD_RE = re.compile(r"\b(?:DATE\s*/?\s*TIME|DATE)\s*[:#-]?\s*(\d{2})/(\d{2})/(\d{2})\b", re.I)
-MONTH_NAME_DATE_RE = re.compile(
-    r"\b(\d{1,2})[- ](Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[- ,]+(20\d{2})\b",
-    re.I,
-)
-EMBEDDED_YYYYMMDD_RE = re.compile(r"(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])")
 ID_PATTERNS = (
     re.compile(r"\b(?:receipt|transaction|trans|order|invoice)\s*(?:#|no\.?|number|id)?\s*[:#-]?\s*([A-Z0-9-]{4,})\b", re.I),
 )
@@ -939,49 +929,9 @@ def parse_money_tolerant(line: str) -> Optional[float]:
     return -value if m.group("lead") or m.group("trail") else value
 
 
-def _valid_date(year: int, month: int, day: int) -> Optional[str]:
-    try:
-        return datetime(year, month, day).date().isoformat()
-    except ValueError:
-        return None
-
-
 def extract_date(text: str) -> Optional[str]:
-    for line in text.splitlines():
-        m = DATE_TIME_YYMMDD_RE.search(line)
-        if m:
-            value = _valid_date(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)))
-            if value:
-                return value
-
-    month_map = {
-        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
-    }
-    for line in text.splitlines():
-        m = MONTH_NAME_DATE_RE.search(line)
-        if m:
-            value = _valid_date(int(m.group(3)), month_map[m.group(2)[:3].lower()], int(m.group(1)))
-            if value:
-                return value
-
-    for line in text.splitlines():
-        for idx, pattern in enumerate(DATE_PATTERNS):
-            m = pattern.search(line)
-            if not m:
-                continue
-            if idx == 0:
-                value = _valid_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-            else:
-                value = _valid_date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
-            if value:
-                return value
-
-    for m in EMBEDDED_YYYYMMDD_RE.finditer(text):
-        value = _valid_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        if value:
-            return value
-    return None
+    from .datetime import date_part, extract_transaction_datetime
+    return date_part(extract_transaction_datetime(text))
 
 
 def extract_receipt_id(text: str) -> Optional[str]:
@@ -1260,6 +1210,7 @@ def prefer_filename_merchant(extracted: Optional[str], filename_merchant: Option
 
 
 def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt:
+    from .datetime import allows_filename_date
     pages = extract_page_text(path)
     text = merge_page_text(pages)
     subtotal, tax, total = extract_totals(text)
@@ -1272,7 +1223,7 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
     receipt = ScannedReceipt(
         path=str(path), source_reference=reference, source_sha256=sha256_file(path),
         merchant=prefer_filename_merchant(extract_merchant(text), filename_merchant),
-        transaction_date=extract_date(text) or filename_date,
+        transaction_date=extract_date(text) or (filename_date if allows_filename_date(text) else None),
         receipt_id=extract_receipt_id(text), subtotal=subtotal, tax=tax, total=total,
         payment_method=payment.payment_method, card_last4=payment.card_last4,
         items=normalize_item_signs(extract_items(text), total), page_text=list(pages), text=text,

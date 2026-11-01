@@ -801,6 +801,19 @@ deletion. Later scanned imports preserve verified canonical allocations.
 
 ## Review duplicate receipt evidence
 
+Receipt date extraction uses the same purpose rules for direct and cached imports.
+An explicit transaction, purchase, sale, invoice or order date takes precedence,
+followed by a service/completion date, then a payment date. Print/reprint,
+delivery, received, due and policy dates describe the document or other events
+and do not determine the purchase month. Labels can share a line or precede
+their date on the next line; the date format and document order do not override
+the purpose. Conflicting dates at the strongest explicit purpose remain unknown.
+A filename date cannot fill a missing or conflicting labeled date.
+
+Existing stored dates are not rewritten by a parser update. Review the original
+document and use the versioned `ledger --env-file .env.dev receipts correct-date`
+preview/apply command for a date-only correction, preserving OCR and allocations.
+
 For an existing database, `ledger --env-file .env.dev database setup` adds the
 duplicate tables without rebuilding receipt history. Fresh bootstrap and CI load
 the same idempotent schema.

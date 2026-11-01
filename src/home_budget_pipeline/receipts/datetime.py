@@ -14,7 +14,7 @@ MONTHS = {
 
 MONTH_NAME_RE = re.compile(
     r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
-    r"\s+(\d{1,2}),\s*(20\d{2})(?:\s+(\d{1,2}):(\d{2})(?:\s*([AP]M))?)?\b",
+    r"\s+(\d{1,2})(?:,\s*|\s+)(20\d{2})(?:\s+(\d{1,2}):(\d{2})(?:\s*([AP]M))?)?\b",
     re.I,
 )
 YMD_RE = re.compile(r"(?<!\d)(20\d{2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})(?:\s+(\d{1,2})\s*:\s*(\d{2})(?:\s*:\s*(\d{2}))?)?(?!\d)")
@@ -44,52 +44,117 @@ def _hour_12_to_24(hour: int, ampm: Optional[str]) -> int:
     return 12 if hour == 12 else hour + 12
 
 
-def extract_transaction_datetime(text: str) -> Optional[str]:
-    """Return ISO local datetime when time exists, otherwise ISO date."""
-    for line in text.splitlines():
-        m = MONTH_NAME_RE.search(line)
-        if m:
-            hour = int(m.group(4) or 0)
-            has_time = m.group(4) is not None
-            hour = _hour_12_to_24(hour, m.group(6))
-            value = _iso(int(m.group(3)), MONTHS[m.group(1)[:3].lower()], int(m.group(2)), hour, int(m.group(5) or 0), has_time=has_time)
-            if value:
-                return value
-    for line in text.splitlines():
-        m = YMD_RE.search(line)
-        if m:
-            has_time = m.group(4) is not None
-            value = _iso(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), has_time)
-            if value:
-                return value
-    for line in text.splitlines():
-        if re.search(r"\b(?:effective|policy|policies|expires?|clearance)\b", line, re.I):
+# Date purpose is independent of merchant, source filename and document ID.
+# Explicit purchase/invoice dates outrank service completion; payment dates are
+# a fallback. Print, delivery, policy and other document metadata are excluded.
+DATE_PURPOSE_RE = re.compile(r"""
+    (?P<transaction>\b(?:(?:transaction|purchase|sale|invoice|order)\s+date(?:/time)?
+        |date\s+of\s+(?:purchase|sale|invoice|order)|purchased\s+on)\b)
+  | (?P<completion>\b(?:(?:work|service)\s+completed|(?:completion|service)\s+date)\b)
+  | (?P<payment>\b(?:payment\s+date|cashier\s+date|date\s+paid|paid\s+on)\b)
+  | (?P<metadata>\b(?:(?:date|time)\s*(?:printed|reprinted|generated|downloaded|exported)
+        |(?:print(?:ed)?|reprint(?:ed)?|generated|downloaded|exported)(?:\s*(?:date|time|on|at)|(?=\s*[:#0-9])|(?=\s*$))
+        |due(?:\s+date)?|delivery(?:\s+date)?|shipped(?:\s+on)?|ship\s+date
+        |date\s+promised|promised(?:\s+(?:date|on))?
+        |effective|polic(?:y|ies)|expires?|expiry|expiration|clearance|warranty
+        |vehicle\s+received)\b)
+""", re.I | re.X | re.M)
+DAY_MONTH_NAME_RE = re.compile(
+    r"\b(\d{1,2})[- ](Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[- ,]+(20\d{2})"
+    r"(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\b", re.I)
+EMBEDDED_YMD_RE = re.compile(r"(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])")
+
+
+def allows_filename_date(text: str) -> bool:
+    """Do not mask missing/conflicting labeled dates with a filename guess."""
+    return DATE_PURPOSE_RE.search(text) is None
+
+
+def _purpose_segments(text):
+    pending = None
+    ranks = {'transaction': 0, 'completion': 1, 'payment': 2, 'metadata': -1}
+    for line_number, line in enumerate(text.splitlines()):
+        if not line.strip():
             continue
-        m = MDY_RE.search(line)
-        if m:
-            # Mixed decimal/sign fragments in product attributes are not dates.
-            # Keep OCR comma/quote year separators, but ordinary separators agree.
-            first = line[m.end(1):m.start(2)].strip()
-            second = line[m.end(2):m.start(3)].strip().strip("'’").strip()
-            if second in {'-', '/', '.'} and first != second:
+        labels = list(DATE_PURPOSE_RE.finditer(line))
+        if not labels:
+            yield pending if pending is not None else 3, line_number, line
+            pending = None
+            continue
+        pending = None
+        yield 3, line_number, line[:labels[0].start()]
+        for i, label in enumerate(labels):
+            value = line[label.end():labels[i+1].start() if i+1 < len(labels) else len(line)]
+            rank = ranks[label.lastgroup]
+            yield rank, line_number, value
+            if i == len(labels)-1 and not value.strip(' :#=-\t'):
+                pending = rank
+
+
+def _date_candidates(text, *, labeled=False):
+    full_date_spans = []
+    for m in MONTH_NAME_RE.finditer(text):
+        hour = _hour_12_to_24(int(m.group(4) or 0), m.group(6))
+        value = _iso(int(m.group(3)), MONTHS[m.group(1)[:3].lower()], int(m.group(2)),
+                     hour, int(m.group(5) or 0), has_time=m.group(4) is not None)
+        if value:
+            yield 0, m.start(), value
+    for m in YMD_RE.finditer(text):
+        value = _iso(int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                     int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), m.group(4) is not None)
+        if value:
+            full_date_spans.append(m.span())
+            yield 1, m.start(), value
+    for m in MDY_RE.finditer(text):
+        first = text[m.end(1):m.start(2)].strip()
+        second = text[m.end(2):m.start(3)].strip().strip("'’").strip()
+        if second in {'-', '/', '.'} and first != second:
+            continue
+        year = int(m.group(3))
+        value = _iso(year + 2000 if year < 100 else year, int(m.group(1)), int(m.group(2)),
+                     int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), m.group(4) is not None)
+        if value:
+            full_date_spans.append(m.span())
+            yield 2, m.start(), value
+    if labeled or re.search(r'date|time|operator|approved|acct|card|reference|transaction', text, re.I):
+        for m in YMD2_RE.finditer(text):
+            if any(start < m.end() and m.start() < end for start, end in full_date_spans):
                 continue
-            year = int(m.group(3))
-            if year < 100:
-                year += 2000
-            has_time = m.group(4) is not None
-            value = _iso(year, int(m.group(1)), int(m.group(2)), int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), has_time)
+            value = _iso(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                         int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), m.group(4) is not None)
             if value:
-                return value
-    for line in text.splitlines():
-        if not re.search(r"date|time|operator|approved|acct|card|reference|transaction", line, re.I):
+                yield 3, m.start(), value
+    for m in DAY_MONTH_NAME_RE.finditer(text):
+        value = _iso(int(m.group(3)), MONTHS[m.group(2)[:3].lower()], int(m.group(1)),
+                     int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), m.group(4) is not None)
+        if value:
+            yield 4, m.start(), value
+    for digits in re.finditer(r'\d{14,}', text):
+        for m in EMBEDDED_YMD_RE.finditer(digits.group()):
+            value = _iso(*(int(m.group(i)) for i in (1, 2, 3)))
+            if value:
+                yield 5, digits.start()+m.start(), value
+
+
+def extract_transaction_datetime(text: str) -> Optional[str]:
+    """Choose dates by their purpose, never by print order or a merchant rule.
+
+    Conflicting dates at the strongest explicit purpose remain unknown. The
+    original text is untouched, retaining print/receipt/completion provenance.
+    """
+    candidates = []
+    for rank, line_number, segment in _purpose_segments(text):
+        if rank < 0:
             continue
-        m = YMD2_RE.search(line)
-        if m:
-            has_time = m.group(4) is not None
-            value = _iso(2000 + int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4) or 0), int(m.group(5) or 0), int(m.group(6) or 0), has_time)
-            if value:
-                return value
-    return None
+        candidates.extend((rank, fmt, line_number, position, value)
+                          for fmt, position, value in _date_candidates(segment, labeled=rank < 3))
+    if not candidates:
+        return None
+    rank = min(c[0] for c in candidates)
+    choices = [c for c in candidates if c[0] == rank]
+    if rank < 3 and len({c[-1][:10] for c in choices}) > 1:
+        return None
+    return min(choices)[-1]
 
 
 def date_part(value: Optional[str]) -> Optional[str]:

@@ -22,7 +22,7 @@ from typing import Callable
 
 from .. import telemetry
 from . import ingest as scan
-from receipt_datetime import date_part, extract_transaction_datetime
+from receipt_datetime import date_part, extract_transaction_datetime, allows_filename_date
 from receipt_evidence import attach_evidence, find_match, resolve_merchant_alias, upsert_evidence
 from receipt_payment import extract_payment_provenance
 from receipt_total_reconcile import reconcile_total_from_text
@@ -459,7 +459,7 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -
             total = filename_total
         payment = extract_payment_provenance(text)
         transaction_datetime = extract_transaction_datetime(text)
-        transaction_date = date_part(transaction_datetime) or scan.extract_date(text) or filename_date
+        transaction_date = date_part(transaction_datetime) or (filename_date if allows_filename_date(text) else None)
         reference = source_reference
 
         receipt = scan.ScannedReceipt(
