@@ -215,6 +215,12 @@ to check progress. Reservations do not expire automatically during long OCR runs
 
 The Receipt processing page shows database records, including historical states,
 and is not a count of files in the cache or completion of a specific refresh batch.
+Receipt detail pages and their API additionally check the current canonical item
+and header allocation. A saved `complete` extraction displays as `review` when
+those checks fail; the saved status remains available as
+`stored_extraction_status`. Passing allocation checks does not promote a saved
+review/unreadable state or verify merchant/product names and categories. The allocation
+panel and API share the same current assessment without rewriting OCR history.
 
 ## Provision and configure Arsene development
 

@@ -226,6 +226,14 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
             for item in expense["items"]
         )
     receipt["evidence"] = evidence
+    receipt['stored_extraction_status'] = (evidence or {}).get('extraction_status') or (expense or {}).get('extraction_status')
+    receipt['extraction_status'] = receipt['stored_extraction_status']
+    if expense and hasattr(service, 'receipt_allocation'):
+        allocation = service.receipt_allocation(source_sha256)
+        receipt['allocation'] = allocation
+        assessment = allocation.get('assessment') or {}
+        if receipt['extraction_status'] == 'complete' and assessment.get('reconciled') is False:
+            receipt['extraction_status'] = 'review'
     receipt["expense"] = expense
     return receipt
 
@@ -623,7 +631,7 @@ def receipt_page(
 <div><strong>Date/time</strong><br>{esc(receipt_date)}</div>
 <div><strong>Total</strong><br>{money(total)}</div>
 <div><strong>Processing</strong><br>{esc(receipt.get('processing_status'))}</div>
-<div><strong>Extraction</strong><br>{esc(evidence.get('extraction_status') or expense.get('extraction_status'))}</div>
+<div><strong>Extraction</strong><br>{esc(receipt.get('extraction_status'))}</div>
 <div><strong>Source</strong><br>{esc(source_reference)}</div>
 <div><strong>Accounting record</strong><br>{canonical_expense}</div>
 </div></div>"""
@@ -651,7 +659,7 @@ def receipt_page(
     allocation_review = ''
     if expense_pk and hasattr(service, 'receipt_allocation'):
         from .allocation_html import allocation_html
-        allocation_review = allocation_html(service.receipt_allocation(source_sha256), source_sha256)
+        allocation_review = allocation_html(receipt.get('allocation') or service.receipt_allocation(source_sha256), source_sha256)
     items_html = (
         allocation_review
         +
