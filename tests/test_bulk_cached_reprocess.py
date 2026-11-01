@@ -34,6 +34,8 @@ def inputs(tmp_path, monkeypatch):
         return cli.build_parser().parse_args(['receipts','reprocess-cache',
             '--receipt-root',str(scanned),'--ocr-cache',str(cache),
             '--rabbitmq-url','amqp://secret@broker',*flags])
+    monkeypatch.setattr(queue_ingest.receipt_lineage, 'record', lambda *a, **kw: None)
+    monkeypatch.setattr(queue_ingest.receipt_lineage, 'start_batch', lambda *a: None)
     monkeypatch.setattr(ingest, 'extract_page_text', lambda *a, **kw: pytest.fail('Must not run OCR'))
     return add, args
 
@@ -113,3 +115,35 @@ def test_uncertain_publish_stops_and_returns_retry_batch_id(inputs,monkeypatch,c
     assert out['published'] == 0 and out['error'] == 'RuntimeError'
     assert out['request_id']
     assert 'password' not in json.dumps(out)
+
+
+def test_bulk_publication_records_batch_cache_completion_and_validation_failures(inputs,monkeypatch,capsys):
+    add,args=inputs
+    add('a.pdf');add('b.pdf','mismatch');add('c.pdf','missing')
+    records,starts=[],[]
+    monkeypatch.setattr(queue_ingest.receipt_lineage,'start_batch',lambda *a: starts.append(a))
+    monkeypatch.setattr(queue_ingest.receipt_lineage,'record',lambda message,status,**kw:records.append((message,status,kw)))
+    monkeypatch.setattr(queue_ingest,'connect_broker',lambda _:SimpleNamespace(is_open=True,channel=lambda:object(),close=lambda:None))
+    monkeypatch.setattr(bulk,'declare_result_topology',lambda *a:None)
+    monkeypatch.setattr(bulk,'publish_result',lambda *a:None)
+    assert bulk.run(args('--apply')) == 1
+    out=json.loads(capsys.readouterr().out)
+    assert len(starts)==1 and starts[0][1:3]==(out['request_id'],2)
+    assert [r[1] for r in records]==['active','results_published','active','failed']
+    assert all(r[2]['batch_id']==out['request_id'] for r in records)
+    assert records[1][2]['cache_hit'] is True
+    assert records[1][2]['result_runs']==('11111111-1111-4111-8111-111111111111',)
+    from home_budget_pipeline.receipt_progress import summarize
+    from datetime import datetime,timezone
+    now=datetime.now(timezone.utc)
+    counts=summarize([{'payload':{'status':status},'occurred_at':now} for _,status,_ in records if status!='active'])
+    assert counts['total']==2 and counts['completed']==counts['failed']==1
+
+
+def test_preview_never_records_batch_or_work(inputs,monkeypatch):
+    add,args=inputs
+    add('a.pdf')
+    def unexpected(*a,**kw):pytest.fail('Preview must not write progress history')
+    monkeypatch.setattr(queue_ingest.receipt_lineage,'start_batch',unexpected)
+    monkeypatch.setattr(queue_ingest.receipt_lineage,'record',unexpected)
+    assert bulk.run(args())==0
