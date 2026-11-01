@@ -35,10 +35,10 @@ def capture_candidates(conn, evidence_id, schema='budget', *, allow_auto=False):
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute('SELECT * FROM budget.receipt_evidence WHERE id=%s', (evidence_id,))
         source = cur.fetchone()
-        if not source:
+        if not source or (source.get('raw_payload') or {}).get('source_archived'):
             return []
         cur.execute('''SELECT * FROM budget.receipt_evidence
-            WHERE id<>%s AND ((receipt_id IS NOT NULL AND receipt_id<>'' AND receipt_id=%s)
+            WHERE id<>%s AND COALESCE(raw_payload->>'source_archived','false') <> 'true' AND ((receipt_id IS NOT NULL AND receipt_id<>'' AND receipt_id=%s)
                 OR (total=%s AND transaction_datetime::date=%s::date))
             ORDER BY id''', (evidence_id, source['receipt_id'], source['total'], source['transaction_datetime']))
         others = cur.fetchall()

@@ -82,7 +82,7 @@ def _receipt_filters(q: str, month: str):
 
 
 def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
-                  sort: str = 'date', direction: str = 'desc', q: str = '', month: str = '') -> Page:
+                  sort: str = 'date', direction: str = 'desc', q: str = '', month: str = '', include_archived: bool = False) -> Page:
     q, month, bounds = _receipt_filters(q, month)
     sort_column = _RECEIPT_SORT_COLUMNS.get(sort, _RECEIPT_SORT_COLUMNS['date'])
     sort_direction = 'ASC' if direction == 'asc' else 'DESC'
@@ -91,7 +91,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
           LEFT JOIN LATERAL (
               SELECT id, expense_pk, evidence_type, merchant, transaction_datetime, total,
-                     extraction_status, extraction_confidence
+                     extraction_status, extraction_confidence, raw_payload
                 FROM budget.receipt_evidence
                WHERE source_sha256 = r.source_sha256
                ORDER BY is_primary_source DESC, id
@@ -100,6 +100,8 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
           LEFT JOIN budget.expenses e ON e.id = re.expense_pk
     """
     conditions, params = [], []
+    if not include_archived:
+        conditions.append("COALESCE(re.raw_payload->>'source_archived','false') <> 'true'")
     if bounds:
         conditions.append('COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp) >= %s '
                           'AND COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp) < %s')
@@ -126,6 +128,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
         SELECT r.source_sha256, r.source_reference,
                COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts,
                re.id AS evidence_id, re.expense_pk,
+               COALESCE(re.raw_payload->>'source_archived','false')='true' AS source_archived,
                COALESCE(re.merchant, e.store_name) AS merchant,
                COALESCE(re.transaction_datetime, e.transaction_datetime,
                         e.order_date::timestamp) AS transaction_datetime,
@@ -233,6 +236,7 @@ def _receipt_for_expense(service: LedgerQueryService, expense_pk: int) -> str | 
         SELECT source_sha256
           FROM budget.receipt_evidence
          WHERE expense_pk = %s
+           AND COALESCE(raw_payload->>'source_archived','false') <> 'true'
          ORDER BY is_primary_source DESC, id
          LIMIT 1
         """,
@@ -381,19 +385,22 @@ def receipts_page(
     direction: str = 'desc',
     q: str = '',
     month: str = '',
+    include_archived: bool = False,
     service: LedgerQueryService = Depends(query_service),
     identity: dict[str, str] = Depends(authenticated_identity),
 ) -> str:
     sort = sort if sort in _RECEIPT_SORT_COLUMNS else 'date'
     direction = 'asc' if direction.lower() == 'asc' else 'desc'
     q, month, _ = _receipt_filters(q, month)
-    result = _receipt_list(service, limit=limit, offset=offset, sort=sort, direction=direction, q=q, month=month)
+    result = _receipt_list(service, limit=limit, offset=offset, sort=sort, direction=direction, q=q, month=month, include_archived=include_archived)
     headers = []
     for key, label in [('expense_id', 'Expense ID'), ('receipt', 'Receipt'), ('merchant', 'Merchant'),
                        ('date', 'Date/time'), ('total', 'Total'), ('processing', 'Processing'),
                        ('extraction', 'Extraction')]:
         next_direction = 'desc' if sort == key and direction == 'asc' else 'asc'
         query = {'sort': key, 'direction': next_direction, 'limit': limit}
+        if include_archived:
+            query['include_archived'] = 'true'
         if q:
             query['q'] = q
         if month:
@@ -415,10 +422,13 @@ def receipts_page(
             f'<a href="{BASE_PATH}/expenses/{esc(expense_pk)}">{esc(expense_pk)}</a>'
             if expense_pk is not None else '<span class="muted">Pending</span>'
         )
+        archive_note = ' · Archived source' if receipt.get('source_archived') else ''
+        if receipt.get('source_archived') and expense_pk is None:
+            expense_link = '<span class="muted">Archived</span>'
         rows.append(
             "<tr>"
             f'<td>{expense_link}</td>'
-            f'<td><a href="{receipt_url(source_sha256)}">{esc(label)}</a> · <a href="{receipt_graph_url(source_sha256)}">Processing graph</a><br><small class="muted">{esc(source_reference)}</small></td>'
+            f'<td><a href="{receipt_url(source_sha256)}">{esc(label)}</a> · <a href="{receipt_graph_url(source_sha256)}">Processing graph</a><br><small class="muted">{esc(source_reference)}{archive_note}</small></td>'
             f"<td>{esc(receipt.get('merchant'))}</td>"
             f"<td>{esc(receipt.get('transaction_datetime'))}</td>"
             f'<td class="num">{money(receipt.get("total"))}</td>'
@@ -434,6 +444,7 @@ def receipts_page(
         f'<label>Search receipts<input type="search" name="q" value="{esc(q)}" '
         'placeholder="Merchant, date, total, filename, expense ID or item" size="48"></label>'
         f'<label>Rows<input name="limit" type="number" min="1" max="500" value="{limit}"></label>'
+        f'<label><input type="checkbox" name="include_archived" value="true" {"checked" if include_archived else ""}>Show archived sources</label>'
         '<button type="submit">Search</button>'
         f'<a href="{BASE_PATH}/receipts">Clear</a>'
         f'<span><strong>{total:,}</strong> {"matching " if q or month else ""}{noun}</span>'
@@ -450,7 +461,7 @@ def receipts_page(
         offset=offset,
         row_count=len(result.rows),
         total_count=result.total_count,
-        query={'sort': sort, 'direction': direction, 'q': q, **({'month': month} if month else {})},
+        query={'sort': sort, 'direction': direction, 'q': q, **({'month': month} if month else {}), **({'include_archived': 'true'} if include_archived else {})},
     )
     return page("Receipts", body, base_path=BASE_PATH, identity=identity)
 
@@ -656,7 +667,9 @@ def receipt_page(
     )
 
     review_html = ""
-    if evidence_id and evidence:
+    if (evidence.get('raw_payload') or {}).get('source_archived'):
+        review_html = '<p class="card">Archived source copy. Original extraction and audit history are retained; this document is hidden from the normal receipt list.</p>'
+    elif evidence_id and evidence:
         extracted_text = html.escape(_post_ocr_text(evidence, expense or None))
         ocr_text = html.escape(str(evidence.get("raw_text") or ""))
         review_html = f"""<div class="receipt-review-grid">

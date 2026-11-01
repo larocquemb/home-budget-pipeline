@@ -326,6 +326,21 @@ def _receipt_document_path(source_reference: str, evidence_type: object = "scann
     return candidate
 
 
+def _verified_receipt_document(evidence):
+    from ..receipts.source_reconciliation import file_hash
+    if (evidence.get('raw_payload') or {}).get('source_archived'):
+        raise HTTPException(410, 'Source copy archived; receipt history is retained')
+    path = _receipt_document_path(str(evidence['source_reference']), evidence.get('evidence_type'))
+    expected = evidence.get('source_sha256')
+    try:
+        matches = not expected or file_hash(path) == expected
+    except (OSError, ValueError):
+        matches = False
+    if not matches:
+        raise HTTPException(409, 'Source file changed since import; reconcile source records')
+    return path
+
+
 @app.get(f"{BASE_PATH}/evidence/{{evidence_id}}/document")
 def receipt_document(evidence_id: int, service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
     evidence = service.receipt_evidence(evidence_id)
@@ -334,7 +349,7 @@ def receipt_document(evidence_id: int, service: LedgerQueryService = Depends(que
     source_reference = evidence.get("source_reference")
     if not source_reference:
         raise HTTPException(status_code=404, detail="receipt document not available")
-    path = _receipt_document_path(str(source_reference), evidence.get("evidence_type"))
+    path = _verified_receipt_document(evidence)
     media_type = evidence.get("mime_type") or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
 
@@ -414,7 +429,7 @@ def receipt_preview_image(evidence_id: int, page_number: int = Query(0, alias="p
     source_reference = evidence.get("source_reference")
     if not source_reference:
         raise HTTPException(status_code=404, detail="receipt document not available")
-    path = _receipt_document_path(str(source_reference), evidence.get("evidence_type"))
+    path = _verified_receipt_document(evidence)
     media_type = evidence.get("mime_type") or mimetypes.guess_type(path.name)[0] or ""
     if str(media_type).lower() != "application/pdf":
         raise HTTPException(status_code=415, detail="receipt preview requires a PDF")
