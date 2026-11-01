@@ -26,6 +26,7 @@ from receipt_datetime import date_part, extract_transaction_datetime
 from receipt_evidence import attach_evidence, find_match, resolve_merchant_alias, upsert_evidence
 from receipt_payment import extract_payment_provenance
 from receipt_total_reconcile import reconcile_total_from_text
+from .duplicate_review import capture_candidates
 
 
 def _page_text_lines(page: str) -> list[str]:
@@ -594,6 +595,9 @@ def persist_evidence_first(
     stats = {"matched": 0, "ambiguous": 0, "new": 0}
 
     for receipt in receipts:
+        if schema == 'budget':
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext('budget.receipt-duplicates'))")
         attributes = {
             "run_uuid": (getattr(receipt, "ocr_run", None) or {}).get("run_uuid"),
             "receipt.extraction_status": getattr(receipt, "extraction_status", None),
@@ -603,6 +607,13 @@ def persist_evidence_first(
             reference = getattr(receipt, "source_reference", "") or ""
             evidence_type = "electronic" if reference.startswith("electronic/") else "scanned"
             evidence_id = upsert_evidence(conn, receipt, schema, evidence_type=evidence_type)
+        if not replace_existing:
+            with conn.cursor() as cur:
+                cur.execute(f'SELECT expense_pk FROM {schema}.receipt_evidence WHERE id=%s', (evidence_id,))
+                linked = cur.fetchone()
+            if linked and isinstance(linked[0], int):
+                stats['matched'] += 1
+                continue
         if replace_existing:
             with telemetry.span("receipt.reconciliation", {**attributes, "receipt.reprocess": True}):
                 with conn.cursor() as cur:
@@ -610,8 +621,14 @@ def persist_evidence_first(
                     existing_expense_pk = cur.fetchone()[0]
             if existing_expense_pk is not None:
                 with conn.cursor() as cur:
-                    cur.execute(f"SELECT raw_payload FROM {schema}.expenses WHERE id=%s FOR UPDATE", (existing_expense_pk,))
+                    cur.execute(f"SELECT raw_payload,source_sha256 FROM {schema}.expenses WHERE id=%s FOR UPDATE", (existing_expense_pk,))
                     existing = cur.fetchone()
+                    if (existing and len(existing) > 1 and existing[1]
+                            and existing[1] != getattr(receipt, 'source_sha256', None)):
+                        # Refresh secondary evidence without replacing the
+                        # canonical purchase or creating another expense.
+                        stats['matched'] += 1
+                        continue
                     if existing and isinstance(existing[0], dict) and existing[0].get('item_allocation_correction'):
                         stats['matched'] += 1
                         continue
@@ -621,6 +638,16 @@ def persist_evidence_first(
                     attach_evidence(conn, evidence_id, expense_pk, schema)
                 stats["matched"] += 1
                 continue
+        candidates = capture_candidates(conn, evidence_id, schema, allow_auto=True)
+        with conn.cursor() as cur:
+            cur.execute(f'SELECT expense_pk FROM {schema}.receipt_evidence WHERE id=%s', (evidence_id,))
+            linked = cur.fetchone()
+        if linked and isinstance(linked[0], int):
+            stats['matched'] += 1
+            continue
+        if candidates:
+            stats['ambiguous'] += 1
+            continue
         with telemetry.span("receipt.reconciliation", attributes):
             match = find_match(conn, receipt, schema)
 

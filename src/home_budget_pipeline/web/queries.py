@@ -821,11 +821,17 @@ class LedgerQueryService:
 
     def pending_duplicates(self, *, limit: int = 50, offset: int = 0) -> Page:
         sql = """
-            SELECT id, left_evidence_id, right_evidence_id, canonical_expense_pk,
-                   score, disposition, reasons, item_similarity, resolution_status
-              FROM budget.receipt_duplicate_links
+            SELECT d.id, left_evidence_id, right_evidence_id, canonical_expense_pk,
+                   score, disposition, reasons, item_similarity, resolution_status,
+                   l.source_reference AS left_source, r.source_reference AS right_source,
+                   l.merchant AS left_merchant,r.merchant AS right_merchant,
+                   l.total AS left_total,r.total AS right_total,
+                   l.expense_pk AS left_expense,r.expense_pk AS right_expense
+              FROM budget.receipt_duplicate_links d
+              JOIN budget.receipt_evidence l ON l.id=d.left_evidence_id
+              JOIN budget.receipt_evidence r ON r.id=d.right_evidence_id
              WHERE resolution_status = 'pending'
-             ORDER BY score DESC, id
+             ORDER BY score DESC, d.id
              LIMIT %s OFFSET %s
         """
         return Page(self._fetch(sql, (limit, offset)), limit, offset)
