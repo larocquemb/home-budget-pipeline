@@ -693,7 +693,7 @@ def receipt_page(
     body = (
         f'<p><a href="{BASE_PATH}/receipts">← All receipts</a> · '
         f'<a href="{BASE_PATH}/dashboard">Accounting &amp; review dashboard</a> · '
-        f'<a href="{receipt_graph_url(source_sha256)}">View receipt knowledge graph</a></p>'
+        f'<a href="{receipt_graph_url(source_sha256)}">Provenance</a></p>'
         + header
         + review_html
         + '<style>.receipt-recommendation{min-width:18rem;max-width:26rem;overflow-wrap:anywhere}.receipt-recommendation pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>'
