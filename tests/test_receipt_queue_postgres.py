@@ -296,3 +296,19 @@ def test_retry_reset_respects_real_worker_lock_and_completion(source, status):
             messages, summary = publication_plan(conn, source.parent)
             assert [message.source_sha256 for message in messages] == [sha]
             assert summary["exhausted"] == 0
+
+
+def test_printed_gst_and_pst_persist_separately(source, monkeypatch):
+    import psycopg
+    receipt=receipt_for(source)
+    receipt.transaction_date='2034-07-12'
+    receipt.subtotal=10.0
+    receipt.tax=1.5
+    receipt.total=11.5
+    receipt.items=[backlog.scan.ScannedItem('Synthetic product',10.0)]
+    receipt.text='SYNTHETIC SHOP\n1234567 PRODUCT 10.00\nSUBTOTAL\n10.00\nG GST 5%\n0.50\nH PST 10%\n1.00\nTOTAL\n11.50'
+    monkeypatch.setattr(backlog,'parse_scans_parallel',lambda *a,**kw:[receipt])
+    with psycopg.connect(os.environ['TEST_DATABASE_URL']) as conn:
+        assert backlog.process_candidate(conn,backlog.ReceiptCandidate(source,receipt.source_sha256),source.parent,source.parent/'cache') == 'succeeded'
+        row=conn.execute('SELECT receipt_gst,receipt_pst FROM budget.expenses WHERE source_sha256=%s',(receipt.source_sha256,)).fetchone()
+        assert tuple(map(float,row)) == (.5,1.)

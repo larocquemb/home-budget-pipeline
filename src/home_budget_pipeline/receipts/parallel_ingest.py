@@ -417,6 +417,7 @@ def _read_or_create_pages(
         "metadata": {
             "schema_version": 1,
             "cache_version": 13,
+            "selection_policy": scan.OCR_SELECTION_POLICY,
             "run_uuid": run_uuid,
             "source_reference": source_reference or path.name,
             "source_sha256": source_sha256,

@@ -46,6 +46,7 @@ class ReceiptMetadataSchemaTests(unittest.TestCase):
                 {
                     "schema_version",
                     "cache_version",
+                    "selection_policy",
                     "run_uuid",
                     "source_reference",
                     "source_sha256",
@@ -57,6 +58,7 @@ class ReceiptMetadataSchemaTests(unittest.TestCase):
             )
             self.assertEqual(metadata["schema_version"], 1)
             self.assertEqual(metadata["cache_version"], 13)
+            self.assertEqual(metadata["selection_policy"], parallel.scan.OCR_SELECTION_POLICY)
             self.assertEqual(metadata["source_reference"], "2026-09-11/receipt.pdf")
             self.assertEqual(metadata["source_sha256"], "abc123")
             self.assertGreaterEqual(metadata["processing_seconds"], 0)

@@ -495,6 +495,12 @@ def receipt_from_message(message: OcrResultMessage) -> scan.ScannedReceipt:
         **message.payload["run"],
         "ocr_passes": [],
     }
+    # Recheck current deterministic rules rather than trusting a completion
+    # label from an older worker/parser. Keep the original event unchanged.
+    current_reasons = scan.review_reasons_for(receipt)
+    receipt.review_reasons = list(dict.fromkeys([*receipt.review_reasons, *current_reasons]))
+    if receipt.extraction_status == 'complete' and receipt.review_reasons:
+        receipt.extraction_status = 'unreadable' if current_reasons == ['unreadable_ocr'] else 'review'
     return receipt
 
 

@@ -1,5 +1,17 @@
 # Project working instructions
 
+## Jira story scope and status
+
+Create a new Jira story only when Paul explicitly requests one. Leave newly
+created stories in To Do; do not automatically move them to In Progress or
+In Review. Change their status only when Paul explicitly directs it.
+
+Handle defects and related fixes discovered along the way within the existing
+working story. Update its description, acceptance criteria and evidence as
+needed, preserving the original scope and history. A request to fix a problem,
+finish work or capture time/evidence does not authorize creating another story.
+If separate tracking would help, propose it and wait for Paul's request.
+
 ## Paul's time records
 
 Paul requires prospective Jira worklogs for his BrownRook project work. Apply

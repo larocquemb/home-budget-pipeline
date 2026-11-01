@@ -182,3 +182,26 @@ def test_web_agent_uses_distinct_signed_python_identity():
     assert config['EnvironmentVariables']['PYTHONHOME'] == sys.base_prefix
     assert config['EnvironmentVariables']['PYTHONPATH']
     assert config['KeepAlive'] is True
+
+
+def test_reload_signals_consumers_without_unloading_active_agents(tmp_path, monkeypatch):
+    import sys
+    import subprocess
+    spec = importlib.util.spec_from_file_location('receipt_services', 'scripts/receipt_services.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    root = tmp_path/'repo'
+    (root/'.local-services').mkdir(parents=True)
+    (root/'.local-services/receipt-services.json').write_text('{"workers":2,"ocr_threads":null}')
+    monkeypatch.setattr(module,'ROOT',root)
+    monkeypatch.setattr(Path,'home',lambda:tmp_path/'home')
+    calls=[]
+    def launchctl(*args,check=True):
+        calls.append(args)
+        return subprocess.CompletedProcess(args,0,stdout='',stderr='')
+    monkeypatch.setattr(module,'launchctl',launchctl)
+    monkeypatch.setattr(sys,'argv',['receipt_services.py','reload'])
+    assert module.main() == 0
+    assert [c[1] for c in calls if c[0]=='kill'] == ['SIGTERM']*3
+    assert all(c[0] in {'print','kill'} for c in calls)
+    assert not (tmp_path/'home/Library/LaunchAgents').exists()
