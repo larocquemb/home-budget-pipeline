@@ -17,3 +17,12 @@ from home_budget_pipeline.receipts.ingest import extract_receipt_id
 ])
 def test_receipt_transaction_code_is_not_a_payment_cryptogram(text, expected):
     assert extract_receipt_id(text) == expected
+
+
+@pytest.mark.parametrize('text', [
+    'https://example.test/ordersandpurchases',
+    'Orders & Purchases | ExampleMart',
+    'Receipts available online',
+])
+def test_page_navigation_is_not_a_receipt_identifier(text):
+    assert extract_receipt_id(text) is None

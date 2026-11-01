@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -183,6 +183,7 @@ def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = 
     schema = _safe_schema(schema)
     payload = {"receipt_id": getattr(receipt, "receipt_id", None), "review_reasons": getattr(receipt, "review_reasons", []), "payer": getattr(receipt, "payer", None)}
     payload['store'] = getattr(receipt, 'store', None)
+    payload['items'] = [asdict(item) for item in getattr(receipt, 'items', [])]
     with conn.cursor() as cur:
         cur.execute(
             f"""

@@ -31,8 +31,10 @@ spec:
               args:
                 - receipts
                 - publish
-                - /data/receipts/raw/scanned/inbox
+                - /data/receipts/raw/scanned
               env:
+                - name: ELECTRONIC_RECEIPT_SOURCE_ROOT
+                  value: /data/receipts/raw/electronic
                 - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:
@@ -44,7 +46,7 @@ spec:
                       name: rabbitmq-secret
                       key: RABBITMQ_URL
                 - name: RECEIPT_SOURCE_ROOT
-                  value: /data/receipts/raw/scanned/inbox
+                  value: /data/receipts/raw/scanned
                 - name: HOME_BUDGET_OCR_CACHE
                   valueFrom:
                     configMapKeyRef:

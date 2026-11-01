@@ -43,8 +43,12 @@ spec:
           image: ghcr.io/larocquemb/home-budget-pipeline
           imagePullPolicy: IfNotPresent
           command: [ledger]
-          args: [receipts, consume, /data/receipts/raw/scanned/inbox]
+          args: [receipts, consume, /data/receipts/raw/scanned]
           env:
+            - name: RECEIPT_SOURCE_ROOT
+              value: /data/receipts/raw/scanned
+            - name: ELECTRONIC_RECEIPT_SOURCE_ROOT
+              value: /data/receipts/raw/electronic
             - name: K8S_NODE_NAME
               valueFrom:
                 fieldRef:

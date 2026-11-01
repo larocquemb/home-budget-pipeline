@@ -6,7 +6,7 @@ def test_ledger_web_uses_database_url_and_read_only_receipt_mount():
     assert "name: DATABASE_URL" in text
     assert "key: DATABASE_URL" in text
     assert "name: RECEIPT_SOURCE_ROOT" in text
-    assert "value: /data/receipts/raw/scanned/inbox" in text
+    assert "value: /data/receipts/raw/scanned" in text
     assert "claimName: home-budget-data" in text
     assert "mountPath: /data" in text
     assert "readOnly: true" in text

@@ -14,7 +14,7 @@ spec:
         - |
           set -eu
           echo "HOME_BUDGET_DATA_ROOT=$HOME_BUDGET_DATA_ROOT"
-          test -d "$HOME_BUDGET_DATA_ROOT/receipts/raw/scanned/inbox"
+          test -d "$HOME_BUDGET_DATA_ROOT/receipts/raw/scanned"
           test -d "$HOME_BUDGET_DATA_ROOT/receipts/raw/electronic"
           test -d "$HOME_BUDGET_DATA_ROOT/receipts/derived"
           find "$HOME_BUDGET_DATA_ROOT/receipts" -maxdepth 3 -type d | sort

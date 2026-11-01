@@ -54,7 +54,7 @@ TESSERACT_TSV_ROW_RE = re.compile(
     r"(?:^|\s)[1-5](?:\s+\d+){9}\s+-?\d+(?:\.\d+)?(?:\s|$)"
 )
 ID_PATTERNS = (
-    re.compile(r"\b(?:receipt|transaction|trans|order|invoice)\s*(?:#|no\.?|number|id)?\s*[:#-]?\s*([A-Z0-9-]{4,})\b", re.I),
+    re.compile(r"\b(?:receipt|transaction|trans|order|invoice)\b\s*(?:#|no\.?|number|id)?\s*[:#-]?\s*([A-Z0-9-]{4,})\b", re.I),
 )
 TOTAL_WORDS = re.compile(r"\b(total|subtotal|tax|gst|pst|hst|balance|tender|change|amount\s+due)\b", re.I)
 NON_ITEM_WORDS = re.compile(

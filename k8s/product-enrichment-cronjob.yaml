@@ -40,6 +40,10 @@ spec:
                   cpu: "1"
                   memory: 512Mi
               env:
+                - name: RECEIPT_SOURCE_ROOT
+                  value: /data/receipts/raw/scanned
+                - name: ELECTRONIC_RECEIPT_SOURCE_ROOT
+                  value: /data/receipts/raw/electronic
                 - name: RABBITMQ_URL
                   valueFrom:
                     secretKeyRef:
@@ -52,7 +56,7 @@ spec:
                     fieldRef:
                       fieldPath: spec.nodeName
                 - name: HOME_BUDGET_RECEIPTS_ROOT
-                  value: /data/receipts/raw/scanned/inbox
+                  value: /data/receipts/raw/scanned
                 - name: HOME_BUDGET_OCR_CACHE
                   valueFrom:
                     configMapKeyRef:

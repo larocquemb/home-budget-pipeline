@@ -73,7 +73,15 @@ def allows_filename_date(text: str) -> bool:
 def _purpose_segments(text):
     pending = None
     ranks = {'transaction': 0, 'completion': 1, 'payment': 2, 'metadata': -1}
+    # Browser print headers pair a leading timestamp with a URL/page footer.
+    # This is document creation metadata, even when the word "printed" is absent.
+    browser_print = bool(re.search(r'https?://[^\n]+(?:\s+\d+\s*/\s*\d+)?', text, re.I))
+    print_header = re.compile(
+        r"^\s*\d{1,2}/\d{1,2}/(?:\d{4}|\d{2}),\s*\d{1,2}:\d{2}\s*[AP]M(?:\s+.*)?$", re.I,
+    )
     for line_number, line in enumerate(text.splitlines()):
+        if browser_print and print_header.fullmatch(line):
+            continue
         if not line.strip():
             continue
         labels = list(DATE_PURPOSE_RE.finditer(line))

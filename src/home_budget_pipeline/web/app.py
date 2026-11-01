@@ -80,7 +80,7 @@ def _post_ocr_text(evidence: dict, expense: Optional[dict]) -> str:
         f"Payment method: {evidence.get('payment_method') or ''}",
         f"Card last four: {evidence.get('card_last4') or ''}",
     ]
-    items = (expense or {}).get("items") or ()
+    items = (expense or {}).get("items") or (evidence.get("raw_payload") or {}).get("items") or ()
     lines.append("")
     lines.append("Line items:")
     if items:
