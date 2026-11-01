@@ -28,7 +28,7 @@ from .queries import LedgerQueryService, RECEIPT_PROCESSING_SORT_COLUMNS, proces
 from .render import esc, money, page, pager, table
 
 BASE_PATH = os.getenv("LEDGER_BASE_PATH", "/ledger").rstrip("/") or "/ledger"
-RECEIPT_SOURCE_ROOT = Path(os.getenv("RECEIPT_SOURCE_ROOT", "/data/receipts/raw/scanned/inbox")).resolve()
+RECEIPT_SOURCE_ROOT = Path(os.getenv("RECEIPT_SOURCE_ROOT", "/data/receipts/raw/scanned")).resolve()
 ELECTRONIC_RECEIPT_SOURCE_ROOT = Path(
     os.getenv("ELECTRONIC_RECEIPT_SOURCE_ROOT", "/data/receipts/raw/electronic")
 ).resolve()

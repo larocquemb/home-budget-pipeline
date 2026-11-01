@@ -175,13 +175,24 @@ import reuses a matching cache; omit `--refresh-ocr-cache` when inspecting saved
 OCR. Reconstructed text-only caches must identify their source and missing
 page geometry/pass history; they are not evidence of a fresh OCR run.
 
-An October inbox review includes both `scanned/inbox/2026-10-*` and
-`electronic/2026-10-*` under the raw receipt root. Select by source-folder month,
-not the purchase date guessed by OCR. Configure `ELECTRONIC_RECEIPT_SOURCE_ROOT`
-to the Mac's electronic receipt directory so the web GUI can open originals.
-When staging electronic documents for the common queue pipeline, keep the
-`electronic/` prefix in each relative source path. The collector retains their
-electronic evidence type, and the GUI resolves them against the electronic root.
+Configure `RECEIPT_SOURCE_ROOT` for the scanned originals (for example,
+`raw/scanned`) and `ELECTRONIC_RECEIPT_SOURCE_ROOT` for electronic originals
+(`raw/electronic`). The normal `ledger --env-file .env.dev receipts process`
+command discovers both roots and publishes them to the same worker queue.
+Workers resolve both roots directly; no staging copies or separate electronic
+importer are required. Both configured directories must be available before
+publication, so a missing share cannot silently omit receipts.
+
+Existing scanned references such as `2026-10-31/file.pdf` stay unchanged when
+moving the dated folders out of `inbox`; update the scanned root setting and
+restart receipt and web services after such a move. Electronic references use
+`electronic/2026-10-27/file.pdf`. Cache keys, reprocess/cache rebuild commands,
+duplicate review and the GUI retain those identities. Configured roots must be
+separate directories; `electronic/` is reserved in the shared namespace.
+An explicitly supplied different review root remains scoped to that directory.
+For a month review, select by source-folder month rather than a purchase date
+guessed by OCR. The collector retains the electronic evidence type and the GUI
+resolves originals against the corresponding configured root.
 Count source documents separately from canonical purchases: multiple documents
 may support one expense or require duplicate review.
 
