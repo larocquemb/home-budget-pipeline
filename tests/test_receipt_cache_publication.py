@@ -74,7 +74,7 @@ def test_publisher_passes_configured_cache_and_reprocess_message_type(completed_
     from types import SimpleNamespace
 
     root, cache, candidate, conn, cursor = completed_receipt
-    cursor.fetchall.side_effect = [[], [(candidate.source_sha256, "123.456")]]
+    cursor.fetchall.side_effect = [[], [(candidate.source_sha256, "123.456")], []]
     monkeypatch.setattr(queue.backlog, "process_candidate", lambda *a, **kw: pytest.fail("publisher bypassed RabbitMQ"))
     monkeypatch.setattr(queue.backlog, "parse_scans_parallel", lambda *a, **kw: pytest.fail("publisher ran OCR"))
     monkeypatch.setattr(queue.backlog.scan, "_db_connect", lambda dsn: conn)
@@ -100,5 +100,6 @@ def test_publisher_passes_configured_cache_and_reprocess_message_type(completed_
         "exhausted": 0,
         "cache_missing": 1,
         "published": 1,
+        "skipped_inflight": 0,
     }
     conn.close.assert_called_once()

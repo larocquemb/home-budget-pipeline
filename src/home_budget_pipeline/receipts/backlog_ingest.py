@@ -116,6 +116,8 @@ def reset_receipt_for_retry(conn, source_reference: str, *, ingest_schema: str =
     validate_schema(ingest_schema)
     try:
         with conn.cursor() as cur:
+            from .publication_guard import LOCK_NAME, release
+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', (LOCK_NAME,))
             cur.execute(
                 f"SELECT source_sha256 FROM {ingest_schema}.receipts WHERE source_reference = %s",
                 (source_reference,),
@@ -150,6 +152,7 @@ def reset_receipt_for_retry(conn, source_reference: str, *, ingest_schema: str =
                 "WHERE source_sha256 = %s",
                 (source_sha256,),
             )
+            release(cur, source_sha256, source_reference)
         conn.commit()
         return {
             "source_reference": source_reference,

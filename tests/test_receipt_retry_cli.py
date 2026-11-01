@@ -28,7 +28,10 @@ def test_reset_targets_one_unfinished_hash_under_shared_lock(status):
         "previous_status": status, "previous_attempts": 5,
         "attempts": 0, "retry_ready": True,
     }
-    calls = cursor.execute.call_args_list
+    all_calls = cursor.execute.call_args_list
+    assert "pg_advisory_xact_lock" in all_calls[0].args[0]
+    assert "intake_released" in all_calls[-1].args[1][-1]
+    calls = all_calls[1:-1]
     assert calls[0].args[1] == (REFERENCE,)
     assert "pg_try_advisory_xact_lock" in calls[1].args[0]
     assert calls[1].args[1] == (f"home-budget-receipt:{SHA}",)
@@ -74,8 +77,8 @@ def test_schema_validation_and_parameterized_source_reference():
     cursor.execute.assert_not_called()
     reference = "receipt's scan.pdf"
     backlog.reset_receipt_for_retry(conn, reference, ingest_schema="ingest_blue")
-    assert "FROM ingest_blue.receipts" in cursor.execute.call_args_list[0].args[0]
-    assert cursor.execute.call_args_list[0].args[1] == (reference,)
+    assert "FROM ingest_blue.receipts" in cursor.execute.call_args_list[1].args[0]
+    assert cursor.execute.call_args_list[1].args[1] == (reference,)
 
 
 def test_retry_cli_resets_without_broker_connection(monkeypatch, capsys):
