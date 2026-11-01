@@ -122,6 +122,7 @@ def database_snapshot(conn):
                COALESCE(payload->>'request_id', payload->>'message_id') AS request_key
           FROM lineage.receipt_events
          WHERE payload->>'batch_id' = %s
+           AND payload->>'status' IS DISTINCT FROM 'intake_reserved'
            AND COALESCE(payload->>'request_id', payload->>'message_id') IS NOT NULL
          ORDER BY COALESCE(payload->>'request_id', payload->>'message_id'), (payload->>'attempt')::int DESC,
                   (payload->>'status' <> 'queued') DESC, occurred_at DESC, id DESC
