@@ -10,10 +10,23 @@ import pytest
 
 from home_budget_pipeline.receipts import ocr_collector, ocr_results
 from home_budget_pipeline.receipts import queue_ingest as queue
-from test_ocr_results_collector import result_receipt
+from test_ocr_results_collector import result_receipt as base_result_receipt
 
 
 pytestmark = pytest.mark.integration
+
+
+def result_receipt(path):
+    receipt = base_result_receipt(path)
+    # These durability tests leave independent receipts in the same test DB.
+    # Give each source a stable distinct total so duplicate review does not
+    # correctly hold a later test's otherwise identical synthetic purchase.
+    cents = 1000 + int(receipt.source_sha256[:12], 16) % 100_000_000
+    receipt.total = cents / 100
+    receipt.subtotal = receipt.total - receipt.tax
+    receipt.items[0].line_total = receipt.subtotal
+    receipt.text = f'Tea {receipt.subtotal:.2f}\nTAX {receipt.tax:.2f}\nTOTAL {receipt.total:.2f}'
+    return receipt
 
 
 def _events(tmp_path):
