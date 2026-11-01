@@ -84,3 +84,16 @@ def test_legacy_hash_cache_uses_database_source_provenance(setup,monkeypatch):
     assert preview['stale_caches'][0]['cache']==str(legacy)
     result=refresh.refresh(None,'electronic/batch/',**kwargs,apply=True,expected_version=preview['version'])
     assert not legacy.exists() and result['cache_retirements'][0]['status']=='retired'
+
+
+def test_existing_archive_parent_permissions_are_preserved(setup):
+    _,_,kwargs,_=setup
+    from pathlib import Path
+    archive=Path(kwargs['archive_root']);archive.mkdir(mode=0o755);archive.chmod(0o755)
+    preview=refresh.refresh(None,'electronic/batch/',**kwargs)
+    result=refresh.refresh(None,'electronic/batch/',**kwargs,apply=True,expected_version=preview['version'])
+    assert archive.stat().st_mode & 0o777 == 0o755
+    target=Path(result['cache_retirements'][0]['retained_path'])
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert target.relative_to(archive).parts[0]
+    assert (archive/target.relative_to(archive).parts[0]).stat().st_mode & 0o777 == 0o700

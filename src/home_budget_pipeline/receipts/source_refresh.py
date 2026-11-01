@@ -72,8 +72,8 @@ def refresh(connect, prefix, *, scanned_root, electronic_root, cache_root, archi
             source = Path(cache['cache'])
             target = retained / cache['relative_cache']
             target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-            for directory in (archive, retained, *target.parents):
-                if directory == archive or directory.is_relative_to(archive):
+            for directory in (retained, *target.parents):
+                if directory == retained or directory.is_relative_to(retained):
                     directory.chmod(0o700)
             raw = source.read_bytes()
             if hashlib.sha256(raw).hexdigest() != cache['cache_sha256']:
