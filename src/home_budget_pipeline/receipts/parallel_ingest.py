@@ -461,6 +461,7 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool, *
     )
     with telemetry.span("receipt.parsing", {"receipt.cache.hit": cache_hit}):
         text = scan.merge_page_text(pages)
+        merchant, store = scan.extract_merchant_store(text)
         subtotal, tax, total = scan.extract_totals(text)
         total = reconcile_total_from_text(text, total)
         filename_date, filename_merchant, filename_total = scan.receipt_info_from_filename(path)
@@ -475,7 +476,8 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool, *
             path=str(path),
             source_reference=reference,
             source_sha256=source_sha256,
-            merchant=scan.prefer_filename_merchant(scan.extract_merchant(text), filename_merchant),
+            merchant=scan.prefer_filename_merchant(merchant, filename_merchant),
+            store=store,
             transaction_date=transaction_date,
             receipt_id=scan.extract_receipt_id(text),
             subtotal=subtotal,

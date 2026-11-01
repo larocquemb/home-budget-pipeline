@@ -111,6 +111,7 @@ class ScannedReceipt:
     extraction_confidence: float = 0.0
     extraction_status: str = "review"
     review_reasons: List[str] = field(default_factory=list)
+    store: Optional[str] = None
 
     @property
     def canonical_order_id(self) -> str:
@@ -1113,6 +1114,38 @@ def extract_merchant(text: str) -> Optional[str]:
     return None
 
 
+def extract_merchant_store(text: str, merchant_hint: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """Separate the retailer from printed branch/location evidence.
+
+    A merchant hint is existing canonical/source metadata, never a guess from a
+    co-branded payment card. Store labels and retailer suffixes remain distinct.
+    """
+    merchant = extract_merchant(text)
+    header = [normalize_line(line) for line in text.splitlines()[:20]]
+    stores = {}
+    for line in header:
+        for match in re.finditer(r'\b(?:(?:store|location|branch)\s*[:#]?|ST\s*#)\s*(\d{1,8})\b', line, re.I):
+            key = str(int(match[1]))
+            stores.setdefault(key, 'Store ' + match[1])
+        if (re.fullmatch(r"[A-Za-z][A-Za-z .'-]*\s+#\d{1,8}", line)
+                and not re.search(r'\b(?:receipt|invoice|member|loyalty|card|tax|gst|pst|hst|total|auth|trans|order|ticket|tc)\b', line, re.I)):
+            number = re.search(r'#(\d+)', line)[1]
+            stores.setdefault(str(int(number)), line)
+    store = next(iter(stores.values())) if len(stores) == 1 else None
+    if merchant and store and _line_key(merchant) == _line_key(store):
+        merchant = merchant_hint if _line_key(merchant_hint or '') != _line_key(store) else None
+    if merchant:
+        for pattern, replacement in MERCHANT_ALIASES:
+            match = pattern.search(merchant)
+            if match:
+                remainder = merchant[match.end():].strip(' #:-')
+                if remainder and not store and not stores:
+                    store = remainder
+                merchant = replacement or normalize_merchant(match[0])
+                break
+    return merchant, store
+
+
 def _tax_code(line: str) -> Optional[str]:
     codes = set(re.findall(r'\b(?:gst|pst|rst|hst|qst)\b', line.lower()))
     if codes and codes <= {'gst', 'hst'}:
@@ -1349,7 +1382,7 @@ def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
     if receipt.merchant and len(observations) > 1:
         key = _line_key(receipt.merchant)
         support = sum(1 for p in observations
-                      if (reading := extract_merchant(p['text']))
+                      if (reading := extract_merchant_store(p['text'])[0])
                       and SequenceMatcher(None, key, _line_key(reading)).ratio() >= .85)
         if support < 2:
             reasons.append('uncorroborated_merchant')
@@ -1407,6 +1440,7 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
     from .datetime import allows_filename_date
     pages = extract_page_text(path)
     text = merge_page_text(pages)
+    merchant, store = extract_merchant_store(text)
     subtotal, tax, total = extract_totals(text)
     filename_date, filename_merchant, filename_total = receipt_info_from_filename(path)
     payment = extract_payment_provenance(text)
@@ -1416,7 +1450,8 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
         reference = path.name
     receipt = ScannedReceipt(
         path=str(path), source_reference=reference, source_sha256=sha256_file(path),
-        merchant=prefer_filename_merchant(extract_merchant(text), filename_merchant),
+        merchant=prefer_filename_merchant(merchant, filename_merchant),
+        store=store,
         transaction_date=extract_date(text) or (filename_date if allows_filename_date(text) else None),
         receipt_id=extract_receipt_id(text), subtotal=subtotal, tax=tax, total=total,
         payment_method=payment.payment_method, card_last4=payment.card_last4,
@@ -1451,6 +1486,7 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
     receipt.payer = resolve_owner_from_db(conn, payment, receipt.transaction_date, schema)
 
     payload = {
+        "store": receipt.store,
         "source_reference": receipt.source_reference,
         "source_sha256": receipt.source_sha256,
         "receipt_id": receipt.receipt_id,

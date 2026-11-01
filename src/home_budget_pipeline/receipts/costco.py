@@ -1040,6 +1040,8 @@ def write_costco_to_postgres(
                     'receipt': receipt,
                     'items': receipt_items,
                 }
+                from .ingest import extract_merchant_store
+                payload['store'] = extract_merchant_store(receipt.get('raw_text') or '', 'Costco')[1]
                 existing_expense_pk = receipt.get('matched_expense_pk')
                 if not existing_expense_pk:
                     cur.execute(

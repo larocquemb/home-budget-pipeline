@@ -121,6 +121,42 @@ path, preserving manual allocation protections and validation warnings. Missing
 or mismatched caches fail instead of silently running OCR. Publication is
 asynchronous; check the saved Ledger result after collection.
 
+Merchant identifies the retailer; Store identifies the printed branch or
+location. They are separate fields in receipt extraction, APIs and the receipt
+list/detail pages. Unknown or conflicting store numbers remain blank. A
+co-branded payment card is not evidence of the merchant. The store is retained
+as typed receipt metadata without renaming the legacy canonical `store_name`
+column. New result readers accept older results without a store field; deploy
+or reload collectors before workers emitting the new optional field.
+
+To preview identity extraction from retained database text without rerunning OCR
+or rewriting purchases, dates, amounts or items:
+
+```bash
+ledger --env-file .env.dev receipts refresh-identities
+ledger --env-file .env.dev receipts refresh-identities --apply --expected-version VERSION_FROM_PREVIEW
+```
+
+An optional exact source reference scopes this command to one document. Identity
+changes are audited and explicit corrected-field feedback is preserved.
+
+To reconcile deleted or moved source files with the database and active cache:
+
+```bash
+ledger --env-file .env.dev receipts refresh --source-prefix electronic/2026-10-27/
+ledger --env-file .env.dev receipts refresh --source-prefix electronic/2026-10-27/ --apply --expected-version VERSION_FROM_PREVIEW
+```
+
+Use an existing dated source folder. Refresh verifies the mounted folder,
+archives missing/replaced sources, restores matching returned files and removes
+stale OCR files from the active cache only after the DB reconciliation commits.
+Cache bytes are retained outside the active cache in a private archive, with a
+hash manifest. Pending discoveries without OCR evidence are archived through
+lineage without creating fake receipt evidence. Active receipt/processing
+lists exclude archived sources; history and accounting transactions remain.
+This is an explicit refresh command, not a background deletion monitor. New
+files are queued separately with `receipts process`.
+
 A successful publication ends with output like:
 
 ```json

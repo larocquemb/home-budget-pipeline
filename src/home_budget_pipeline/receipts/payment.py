@@ -54,11 +54,19 @@ def normalize_payment_method(text: str) -> Optional[str]:
 
 
 def extract_card_last4(text: str) -> Optional[str]:
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
         for pattern in MASKED_LAST4_PATTERNS:
             match = pattern.search(line)
             if match:
                 return match.group(1)
+        # A standalone mask is card evidence only directly after a printed
+        # payment/card entry-mode label, never after a loyalty/member label.
+        mask = re.fullmatch(r'\s*[*xX#-][*xX#\s-]{3,}(\d{4})\s*', line)
+        if mask and index and re.fullmatch(
+                r'\s*(?:chip|contactless|tap|card|account|visa|master\s*card|amex|debit)\s*[:#]?\s*',
+                lines[index-1], re.I):
+            return mask[1]
     return None
 
 

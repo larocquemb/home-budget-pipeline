@@ -212,8 +212,9 @@ class OcrResultMessage:
             "subtotal", "tax", "total", "payment_method", "card_last4", "payer",
             "items", "text", "extraction_confidence", "extraction_status", "review_reasons",
         }
-        if set(receipt) != required_receipt:
+        if set(receipt) - {'store'} != required_receipt:
             raise InvalidOcrResultMessage("receipt payload has unexpected fields")
+        _optional_text(receipt.get('store'), 'receipt store')
         if not isinstance(receipt["items"], list) or not all(
             isinstance(item, dict) and set(item) == {"item_name", "line_total"}
             for item in receipt["items"]
@@ -446,6 +447,7 @@ def artifact_reference(
 def _receipt_payload(receipt: scan.ScannedReceipt) -> dict[str, Any]:
     return {
         "merchant": receipt.merchant,
+        "store": receipt.store,
         "transaction_date": receipt.transaction_date,
         "transaction_datetime": getattr(receipt, "transaction_datetime", None),
         "receipt_id": receipt.receipt_id,
@@ -473,6 +475,7 @@ def receipt_from_message(message: OcrResultMessage) -> scan.ScannedReceipt:
         source_reference=message.source_reference,
         source_sha256=message.source_sha256,
         merchant=payload["merchant"],
+        store=payload.get("store"),
         transaction_date=payload["transaction_date"],
         receipt_id=payload["receipt_id"],
         subtotal=payload["subtotal"],
