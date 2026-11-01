@@ -1005,12 +1005,23 @@ def extract_date(text: str) -> Optional[str]:
 
 
 def extract_receipt_id(text: str) -> Optional[str]:
+    transaction_id = None
     for line in text.splitlines():
         for pattern in ID_PATTERNS:
             m = pattern.search(line)
             if m:
-                return m.group(1)
-    return None
+                if re.match(r'trans(?:action)?\b', m.group(0), re.I):
+                    transaction_id = transaction_id or m.group(1)
+                else:
+                    return m.group(1)
+    # Printed transaction codes may group digits for readability. Require the
+    # explicit TC# label and a numeric-only row so an EMV "TC <hex>" payment
+    # cryptogram is never used as the receipt identifier.
+    for line in text.splitlines():
+        match = re.fullmatch(r"\s*TC\s*#\s*((?:\d[ \t-]*){4,64})\s*", line, re.I)
+        if match:
+            return re.sub(r"\D", "", match[1])
+    return transaction_id
 
 
 def normalize_merchant(raw: Optional[str]) -> Optional[str]:
