@@ -27,6 +27,10 @@ export BRAVE_CACHE_DAYS
 ARGO_APP ?= ledger
 ARGO_SERVER ?= argocd.brownrook.net
 export ARGO_APP ARGO_SERVER
+PRODUCTION_DB_CONFIRM ?=
+export PRODUCTION_DB_CONFIRM KUBE_CONTEXT
+
+.PHONY: production-db-rebuild
 ENRICH_JOB ?= product-enrichment-manual-$(shell date +%s)
 MONITORING_GITOPS ?= ./scripts/monitoring_gitops.sh
 POSTGRES_LAN_IP ?=
@@ -322,3 +326,6 @@ dev-progress-stop:
 	@$(PYTHON) scripts/progress_service.py stop
 dev-progress-status:
 	@$(PYTHON) scripts/progress_service.py status
+
+production-db-rebuild:
+	$(PYTHON) scripts/production_rebuild.py

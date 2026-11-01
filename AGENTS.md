@@ -58,6 +58,10 @@ otherwise. Its status does not suspend time/evidence capture on working stories.
 
 ## Command interface
 
+`ledger` must not orchestrate or invoke Kubernetes/K3s. Keep Kubernetes lifecycle,
+workload coordination and production cluster maintenance in infrastructure
+scripts exposed through `make`; application commands use their configured services.
+
 Use `make` for builds, tests, documentation and infrastructure setup. Use `ledger`
 for application operations (receipts, cache, database, receipt service lifecycle).
 Select local settings explicitly with `ledger --env-file .env.dev ...`; do not mix

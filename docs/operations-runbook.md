@@ -298,15 +298,18 @@ initialized from the staged bootstrap SQL.
 
 ## Argo CD deployment
 
-Production schema rebuild is an explicit local operator command. It erases the
+Production schema rebuild is an explicit infrastructure operation. It erases the
 application data in `home_budget` without a database backup:
 
 ```bash
-ledger database rebuild --target production --plan
-ledger database rebuild --target production --confirm home_budget
+make production-db-rebuild
+make production-db-rebuild PRODUCTION_DB_CONFIRM=home_budget
 ```
 
-Run this from the repository on the Mac, not inside an old production container.
+The first command previews; the second performs the rebuild without a database
+backup. Run this from the repository on the Mac. `ledger` does not orchestrate
+Kubernetes; its database commands operate against their configured application
+database. Kubernetes controller/workload management belongs to Make and scripts.
 The command selects the explicit `brownrook-k3s1` context, verifies the production
 database, snapshots workload settings, pauses Argo reconciliation and KEDA,
 suspends CronJobs, and stops/waits for database clients. It refuses active Jobs
