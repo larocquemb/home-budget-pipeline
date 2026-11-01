@@ -191,6 +191,8 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     identities = receipt_commands.add_parser('refresh-identities', help='Preview or audit merchant/store and payment identifiers from retained receipt text; preserve financial records.')
     identities.add_argument('source_reference', nargs='?', help='Exact source reference; omit to preview all active receipt evidence.')
     identities.add_argument('--db-dsn', default=os.getenv('DATABASE_URL') or os.getenv('HOME_BUDGET_PG_DSN', ''))
+    identities.add_argument('--ocr-cache', default=_ocr_cache_default(), help='Local mount of retained OCR artifacts for header corroboration.')
+    identities.add_argument('--artifact-uri-prefix', default=os.getenv('OCR_ARTIFACT_URI_PREFIX'), help='Recorded logical artifact prefix when using a local cache mount.')
     identities.add_argument('--apply', action='store_true')
     identities.add_argument('--expected-version')
     from .receipts.identities import run as refresh_identities

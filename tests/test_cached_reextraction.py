@@ -68,3 +68,19 @@ def test_cached_reextraction_keeps_review_status(tmp_path):
     receipt, hit = parallel_ingest._parse_scan_cached(source, tmp_path, cache, False, require_cache=True)
     assert hit and receipt.extraction_status == 'review'
     assert 'item_total_mismatch' in receipt.review_reasons
+
+
+def test_cache_reextraction_recovers_merchant_from_corroborated_pass_headers(tmp_path,monkeypatch):
+    source=tmp_path/'receipt.pdf';source.write_bytes(b'synthetic source')
+    cache=tmp_path/'cache';cache.mkdir()
+    primary='EXAMPLE CENTRE 1234 SAMPLE ROAD, UNIT 21\nNORTHVILLE, MB R2M5E5\n123456 PRODUCT 10.00\nTOTAL 10.00'
+    alternate='AB&CD\nVisit our website at www.ab-cd.com\nTOTAL 10.00'
+    payload={'metadata':{'source_sha256':ingest.sha256_file(source),'cache_version':1,
+        'run_uuid':'11111111-1111-4111-8111-111111111111',
+        'ocr_passes':[{'pass_id':n,'page_number':1,'status':'success','text':alternate} for n in (1,2)]},
+        'page_text':[primary]}
+    p=cache/'receipt.pdf.json';p.write_text(json.dumps(payload));original=p.read_bytes()
+    monkeypatch.setattr(ingest,'extract_page_text',lambda *a,**kw:pytest.fail('Must not rerun OCR'))
+    receipt,hit=parallel_ingest._parse_scan_cached(source,tmp_path,cache,False,require_cache=True)
+    assert hit and receipt.merchant=='AB&CD' and receipt.total==10
+    assert receipt.text==primary and p.read_bytes()==original

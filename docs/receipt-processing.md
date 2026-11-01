@@ -492,3 +492,19 @@ as part of its build. Loading the model alone did not expose this failure.
 Run the same check locally with `make test-paddle-runtime`. OCR pass metadata
 records `enable_mkldnn` alongside model names. Old failed pass evidence remains
 retained; a runtime upgrade does not rewrite existing OCR caches or history.
+
+## Merchant header corroboration
+
+Retailer names can contain short components separated by `&` or `+`. Address,
+contact and product rows are not fallback merchant names. When a selected
+transcript loses its merchant header, extraction can recover a name observed
+in at least two successful first-page OCR passes and corroborated by a printed
+website. A footer website alone never introduces a merchant; tied names remain
+unresolved. No receipt filename, hash, amount or ID selects a special rule.
+
+`receipts refresh-identities` uses current-run OCR passes and hash-verified
+retained artifacts for this metadata-only refresh. For a local mount of another
+environment's cache, use `--ocr-cache PATH --artifact-uri-prefix PREFIX` with
+that environment's explicit settings. Preview and expected-version checks
+remain required; OCR-pass evidence contributes to the plan version/audit hash.
+Dates, amounts, item rows and category decisions are preserved.

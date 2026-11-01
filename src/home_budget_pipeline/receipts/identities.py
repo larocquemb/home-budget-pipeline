@@ -19,7 +19,7 @@ def identity_plan(rows):
         text = row['raw_text'] or ''
         old = {key: row.get(key) for key in ('merchant', 'receipt_id', 'payment_method', 'card_last4')}
         old['store'] = (row.get('raw_payload') or {}).get('store')
-        merchant, store = extract_merchant_store(text, row.get('merchant_hint'))
+        merchant, store = extract_merchant_store(text, row.get('merchant_hint'), observations=row.get('ocr_observations', []))
         payment = extract_payment_provenance(text)
         new = {'merchant': merchant or (old['merchant'] if old['merchant'] != store else None), 'store': store or old['store'],
                'receipt_id': extract_receipt_id(text) or old['receipt_id'],
@@ -31,11 +31,13 @@ def identity_plan(rows):
         if not text.strip():
             continue
         text_hash = hashlib.sha256(text.encode()).hexdigest()
+        observations_hash = hashlib.sha256(json.dumps(row.get('ocr_observations') or [],sort_keys=True,default=str).encode()).hexdigest()
         inputs.append({'id': row['id'], 'source_sha256': row['source_sha256'],
-                       'text_sha256': text_hash, 'before': old, 'after': new})
+                       'text_sha256': text_hash, 'ocr_observations_sha256': observations_hash, 'before': old, 'after': new})
         if old != new:
             changes.append({'id': row['id'], 'source_sha256': row['source_sha256'],
                             'source_reference': row['source_reference'], 'text_sha256': text_hash,
+                            'ocr_observations_sha256': observations_hash,
                             'before': old, 'after': new})
     version = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
     return {'version': version, 'scanned': len(rows), 'changes': changes, 'applied': False}
@@ -72,7 +74,27 @@ def run(args):
                         row['merchant_hint'] = pdf_merchant_hint(path)
                 except (OSError,ValueError):
                     continue
+        from ..receipt_shared_evidence import recover_pass_text
+        observation_errors = []
+        for row in rows:
+            passes = conn.execute('''
+                SELECT p.*,r.evidence_id FROM budget.receipt_ocr_passes p
+                  JOIN budget.receipt_ocr_runs r USING(run_uuid)
+                 WHERE r.evidence_id=%s AND r.source_sha256=%s AND p.page_number=1
+                   AND p.status='success' AND p.variant<>'geometry'
+                   AND r.run_uuid=(SELECT latest.run_uuid FROM budget.receipt_ocr_runs latest
+                       WHERE latest.evidence_id=%s ORDER BY latest.processed_at DESC,latest.run_uuid DESC LIMIT 1)
+                 ORDER BY p.pass_id
+            ''', (row['id'], row['source_sha256'], row['id'])).fetchall()
+            observation_errors.extend(recover_pass_text(conn, [row], passes,
+                cache_root=getattr(args,'ocr_cache',None), uri_prefix=getattr(args,'artifact_uri_prefix',None)))
+            row['ocr_observations'] = [
+                {'text':p['extracted_text'],'page_number':p['page_number'],'status':p['status'],
+                 'run_uuid':str(p['run_uuid']),'pass_id':p['pass_id']}
+                for p in passes if p.get('extracted_text')
+            ]
         plan = identity_plan(rows)
+        plan['observation_errors'] = observation_errors
         if args.apply:
             if args.expected_version != plan['version']:
                 raise ValueError('Identity inputs changed or --expected-version is missing; preview again')
@@ -87,7 +109,8 @@ def run(args):
                     (id,source_sha256,source_reference,payload) VALUES (%s,%s,%s,%s)''',
                     (uuid.uuid4(),change['source_sha256'],change['source_reference'],Jsonb({
                         'status':'identity_refreshed','operation':'receipt.identity-extraction.v1',
-                        'basis':'retained_source_text','text_sha256':change['text_sha256'],
+                        'basis':'retained_source_text_and_ocr_passes','text_sha256':change['text_sha256'],
+                        'ocr_observations_sha256':change['ocr_observations_sha256'],
                         'before':change['before'],'after':new,'plan_version':plan['version']})))
             plan['applied'] = True
         print(json.dumps(plan, default=str))

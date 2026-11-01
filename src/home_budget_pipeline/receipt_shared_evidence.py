@@ -21,14 +21,14 @@ class CacheEvidenceError(ValueError):
     pass
 
 
-def verified_pass_text(artifact, document, passes):
+def verified_pass_text(artifact, document, passes, *, cache_root=None, uri_prefix=None):
     """Read only the recorded current-run artifact beneath the cache root."""
-    prefix = os.getenv('OCR_ARTIFACT_URI_PREFIX', 'pvc://receipt-ocr').rstrip('/')
+    prefix = (uri_prefix or os.getenv('OCR_ARTIFACT_URI_PREFIX', 'pvc://receipt-ocr')).rstrip('/')
     uri = artifact['uri']
     if urlsplit(prefix).scheme != 'pvc' or not uri.startswith(prefix + '/'):
         raise CacheEvidenceError('unsupported_artifact_uri')
     suffix = unquote(uri[len(prefix) + 1:])
-    root = Path(os.getenv('HOME_BUDGET_OCR_CACHE', '/data/receipts/derived/ocr-cache')).resolve()
+    root = Path(cache_root or os.getenv('HOME_BUDGET_OCR_CACHE', '/data/receipts/derived/ocr-cache')).resolve()
     path = (root / suffix).resolve()
     if not path.is_relative_to(root) or urlsplit(uri).query or urlsplit(uri).fragment:
         raise CacheEvidenceError('outside_cache_root')
@@ -63,7 +63,7 @@ def verified_pass_text(artifact, document, passes):
     return recovered
 
 
-def recover_pass_text(conn, documents, passes):
+def recover_pass_text(conn, documents, passes, *, cache_root=None, uri_prefix=None):
     """Hydrate missing pass text without mutating PostgreSQL or using stale runs."""
     run_ids = sorted({str(p['run_uuid']) for p in passes
                       if p['status'] == 'success' and p.get('extracted_text') is None and p.get('variant') != 'geometry'})
@@ -80,7 +80,8 @@ def recover_pass_text(conn, documents, passes):
         found.add(run)
         selected = [p for p in passes if str(p['run_uuid']) == run and p.get('variant') != 'geometry']
         try:
-            text = verified_pass_text(artifact, by_document[selected[0]['evidence_id']], selected)
+            options = {k:v for k,v in {'cache_root':cache_root,'uri_prefix':uri_prefix}.items() if v is not None}
+            text = verified_pass_text(artifact, by_document[selected[0]['evidence_id']], selected, **options)
             for p in selected:
                 if p['pass_id'] in text:
                     p['extracted_text'] = text[p['pass_id']]
