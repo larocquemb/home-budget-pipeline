@@ -82,18 +82,21 @@ run and item identity. Processing attempt UUIDs distinguish redeliveries.
 
 Each `ReceiptSnapshot` contains the atomic graph used by the UI and `HAS_ENTITY`
 membership for bounded cross-receipt navigation. The projector reads a repeatable
-PostgreSQL snapshot, then commits all graph changes in a Neo4j transaction. A
-receipt lock and source-snapshot timestamp reject older racing snapshots.
+PostgreSQL snapshot, then writes bounded Neo4j transactions into a hidden
+`ReceiptProjectionStage`. A stable per-receipt lock and source-snapshot timestamp
+reject older racing publications. One small transaction publishes the complete
+snapshot; readers never select an incomplete stage.
 Collaboration history streams one saved payload at a time within that same
 PostgreSQL transaction. The projector retains all graph history without buffering
 every copy of a long receipt's shared evidence in memory.
-Neo4j writes use bounded node and relationship batches inside the same atomic
-transaction. The projector has a 1 GiB memory ceiling for the complete snapshot
+Neo4j node, membership and relationship batches commit separately, so receipt
+size does not accumulate transaction state. Retired snapshot memberships are
+removed in bounded transactions after publication. The projector has a 1 GiB memory ceiling for the complete snapshot
 of receipts with extensive collaboration history.
 Replaying the authoritative history merges stable entity/relationship IDs and
 does not duplicate them. Retained entity relationships can include past domain
-correlations; use the current `ReceiptSnapshot.graph_json` for current canonical
-classification. Canonical reprocessing can delete historical PostgreSQL rows;
+correlations; use exact node and edge evidence on current `ReceiptSnapshot` memberships
+for current canonical classification. Canonical reprocessing can delete historical PostgreSQL rows;
 retention must preserve authoritative history for complete rebuilds. This slice
 does not invent history deleted before projection or provide an archival store.
 
@@ -370,3 +373,39 @@ Deploy the merged application and projector image, then complete a fresh replay
 before opening Processing story: version-7 snapshots explicitly request projection.
 Validate the Sobeys latest GPU run and an older CPU failure independently, and
 check that ledger-web does not restart. Do not close KAN-98 on unit tests alone.
+
+
+### Bounded transactions and database pagination (KAN-98)
+
+Query batching inside one transaction did not bound Neo4j's transaction memory:
+full historical receipt projection reached the configured 1 GiB transaction
+limit. The scheduled projector and `ledger --env-file .env.dev development
+replay --evidence <private-export> --output <private-report>` now commit hidden
+staging writes separately and atomically publish only the complete snapshot.
+Stable entity/edge identifiers and a per-receipt publication lock preserve replay
+and reject an older source timestamp. A failure before publication leaves the
+last complete snapshot available. Failure after publication but before cleanup
+can leave a hidden stage; cleanup failure logs include its stage identifier.
+These are derived graph artifacts, not deleted authoritative receipt evidence.
+
+The ordinary lineage, topology and domain endpoints count/filter/page in Neo4j
+before loading payloads, instead of rejecting the whole receipt at 15,000 nodes.
+Each page is also limited by serialized evidence size; `next_offset` identifies
+the next unread node. The UI retains previous page offsets, so smaller pages do
+not skip evidence. An individually oversized entity still returns HTTP413.
+Collaboration selects an item/run before traversing evidence, retaining its
+separate bounded selection guards. Snapshot replacement during a request returns
+HTTP409; the client must refresh rather than mix snapshots.
+
+Only active `ReceiptSnapshot` nodes are public to the application. Hidden
+`ReceiptProjectionStage` nodes are incomplete or retired derived projections.
+If a backend outage prevented cleanup, first ensure no projector/replay is
+running, identify stages from cleanup-failure logs and inspect them. Remove only
+confirmed abandoned stage memberships in bounded batches before deleting their
+empty stage node. Do not delete `ReceiptFlowEntity` nodes or canonical snapshots
+as a staging cleanup operation. Normal replay reconstructs missing derived
+entities from retained PostgreSQL evidence without model/search calls.
+
+Deploy the web and projector from the same image. Staged snapshots omit the
+legacy receipt-wide edge JSON; rolling back to an older web reader requires
+reprojection using its matching projector. Source evidence remains authoritative.

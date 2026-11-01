@@ -322,6 +322,17 @@ def build(data):
         e = event['payload']
         if e.get('event') in {'product_recommendation_accepted', 'receipt_item_refreshed'}:
             continue
+        if not e.get('message_id') or not e.get('operation'):
+            # Audited metadata refreshes and other source events are not queue
+            # deliveries. Retain their evidence without inventing a message.
+            observation = graph.node('LineageEvent', str(event['id']),
+                                     e.get('event') or e.get('status') or 'Source event',
+                                     occurred_at=event['occurred_at'], **e)
+            graph.edge(receipt, 'OBSERVED', observation)
+            record = graph.node('PostgreSQLRecord', ('lineage.receipt_events', str(event['id'])),
+                                'Recorded source event', table='lineage.receipt_events', key=str(event['id']))
+            graph.edge(observation, 'PERSISTED_AS', record)
+            continue
         message = graph.node('Message', e['message_id'], e['operation'], message_id=e['message_id'], request_id=e.get('request_id'), operation=e['operation'], batch_id=e.get('batch_id'))
         graph.edge(receipt, 'QUEUED_AS', message)
         if e.get('queue'):
@@ -456,17 +467,13 @@ def write_batches(rows, *, max_rows=500, max_chars=256 * 1024):
         yield batch
 
 
-def write(tx, sha, graph, observed_at):
-    """A per-receipt lock prevents stale snapshots racing newer projections."""
-    tx.run('MERGE (s:ReceiptSnapshot {sha:$sha}) SET s.lock=coalesce(s.lock,0)+1', sha=sha).consume()
-    prior = tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time', sha=sha).single()
-    if prior['time'] and prior['time'] > observed_at:
-        return False
+def projection_statements(sha, graph, observed_at, *, compact=False):
+    """Yield bounded writes; callers choose atomic or staged publication."""
     rows = ({'id': n['id'], 'kind': n['kind'], 'label': n['label'],
              'props': encoded(n['properties'])} for n in graph['nodes'])
     for batch in write_batches(rows):
-        tx.run('UNWIND $nodes AS row MERGE (n:ReceiptFlowEntity {id:row.id}) SET n.kind=row.kind,n.label=row.label,n.properties_json=row.props',
-               nodes=batch).consume()
+        yield ('UNWIND $nodes AS row MERGE (n:ReceiptFlowEntity {id:row.id}) SET n.kind=row.kind,n.label=row.label,n.properties_json=row.props',
+               {'nodes': batch})
     # Relationship types come exclusively from our validated graph builder.
     grouped = defaultdict(list)
     outgoing = defaultdict(list)
@@ -478,7 +485,6 @@ def write(tx, sha, graph, observed_at):
         outgoing[edge['source']].append(edge)
         if edge['kind'] == 'ANALYZES':
             item_for[edge['source']] = edge['target']
-    tx.run('MATCH (s:ReceiptSnapshot {sha:$sha})-[r:HAS_ENTITY]->() DELETE r', sha=sha).consume()
     # Store exact snapshot properties per membership. Stream serialization so
     # hundreds of large evidence records do not share one Bolt parameter batch.
     members = ({
@@ -491,21 +497,93 @@ def write(tx, sha, graph, observed_at):
         'edge_ids': [e['id'] for e in outgoing[n['id']]],
     } for i, n in enumerate(graph['nodes']))
     for batch in write_batches(members):
-        tx.run('''MATCH (s:ReceiptSnapshot {sha:$sha}) UNWIND $members AS row
+        yield ('''MATCH (s:ReceiptSnapshot {sha:$sha}) UNWIND $members AS row
             MATCH (n:ReceiptFlowEntity {id:row.id}) MERGE (s)-[r:HAS_ENTITY]->(n)
             SET r.node_id=row.id,r.kind=row.kind,r.label=row.label,
                 r.story_json=row.story,r.node_json=row.payload,r.ordinal=row.ordinal,
                 r.edges_json=row.edges,r.item_id=row.item,r.edge_ids=row.edge_ids''',
-            sha=sha, members=batch).consume()
+            {'sha': sha, 'members': batch})
     for kind, rows in grouped.items():
         for offset in range(0, len(rows), 1000):
-            tx.run(f'UNWIND $rows AS row MATCH (a:ReceiptFlowEntity {{id:row.source}}),(b:ReceiptFlowEntity {{id:row.target}}) MERGE (a)-[r:{kind} {{id:row.id}}]->(b)', rows=rows[offset:offset + 1000]).consume()
+            yield (f'UNWIND $rows AS row MATCH (a:ReceiptFlowEntity {{id:row.source}}),(b:ReceiptFlowEntity {{id:row.target}}) MERGE (a)-[r:{kind} {{id:row.id}}]->(b)', {'rows': rows[offset:offset + 1000]})
     # Web v7 reads per-node snapshot memberships, never the legacy monolithic
     # graph_json. Avoid allocating another receipt-sized JSON string during writes.
-    tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) SET s.observed_at=$time,s.version=$version,s.name=$name,s.edges_json=$edges REMOVE s.graph_json',
-           sha=sha, edges=encoded(graph['edges']), time=observed_at, version=VERSION,
-           name=next(n['label'] for n in graph['nodes'] if n['kind'] == 'Receipt')).consume()
+    yield ('MATCH (s:ReceiptSnapshot {sha:$sha}) SET s.observed_at=$time,s.version=$version,s.name=$name,s.edges_json=$edges REMOVE s.graph_json',
+           {'sha': sha, 'edges': None if compact else encoded(graph['edges']), 'time': observed_at, 'version': VERSION,
+            'name': next(n['label'] for n in graph['nodes'] if n['kind'] == 'Receipt')})
+
+
+def write(tx, sha, graph, observed_at):
+    """Atomic writer retained for small transactional callers."""
+    tx.run('MERGE (s:ReceiptSnapshot {sha:$sha}) SET s.lock=coalesce(s.lock,0)+1', sha=sha).consume()
+    prior = tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time', sha=sha).single()
+    if prior['time'] and prior['time'] > observed_at:
+        return False
+    tx.run('MATCH (s:ReceiptSnapshot {sha:$sha})-[r:HAS_ENTITY]->() DELETE r', sha=sha).consume()
+    for query, params in projection_statements(sha, graph, observed_at):
+        tx.run(query, **params).consume()
     return True
+
+
+def _statement(tx, query, params):
+    tx.run(query, **params).consume()
+
+
+def _activate(tx, sha, stage, retired, observed_at):
+    # Keep the lock stable while snapshot nodes rotate. Only the complete stage
+    # obtains the public ReceiptSnapshot label, in this small atomic transaction.
+    tx.run('MERGE (l:ReceiptProjectionLock {sha:$sha}) SET l.lock=coalesce(l.lock,0)+1', sha=sha).consume()
+    prior = tx.run('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time,s.projection_id AS projection_id', sha=sha).single()
+    ready = tx.run('MATCH (s:ReceiptProjectionStage {sha:$stage}) RETURN s.observed_at AS time', stage=stage).single()
+    if not ready:
+        return bool(prior and prior['projection_id'] == stage)
+    if ready['time'] != observed_at:
+        raise ValueError('Incomplete graph stage')
+    if prior and prior['time'] and prior['time'] > observed_at:
+        return False
+    tx.run('''MATCH (s:ReceiptSnapshot {sha:$sha})
+        REMOVE s:ReceiptSnapshot SET s:ReceiptProjectionStage,s.sha=$retired''', sha=sha, retired=retired).consume()
+    tx.run('''MATCH (s:ReceiptProjectionStage {sha:$stage})
+        REMOVE s:ReceiptProjectionStage SET s:ReceiptSnapshot,s.sha=$sha,s.projection_id=$stage''', sha=sha, stage=stage).consume()
+    return True
+
+
+def _discard_stage(session, stage):
+    while True:
+        def remove(tx):
+            return tx.run('''MATCH (s:ReceiptProjectionStage {sha:$stage})-[r:HAS_ENTITY]->()
+                WITH r LIMIT 500 DELETE r RETURN count(*) AS count''', stage=stage).single()['count']
+        if not session.execute_write(remove):
+            break
+    session.execute_write(_statement, 'MATCH (s:ReceiptProjectionStage {sha:$stage}) DELETE s', {'stage': stage})
+
+
+def write_snapshot(session, sha, graph, observed_at):
+    """Commit bounded batches invisibly, then atomically publish one snapshot.
+
+    Failed writes leave the last complete snapshot available. Replay uses stable
+    entity/edge identities; incomplete staging memberships are never UI inputs.
+    """
+    # Validate before opening any staging transactions.
+    if any(not re.fullmatch('[A-Z_]+', edge['kind']) for edge in graph['edges']):
+        raise ValueError('Invalid relationship type')
+    stage, retired = str(uuid4()), str(uuid4())
+    published = False
+    try:
+        session.execute_write(_statement, 'CREATE (s:ReceiptProjectionStage {sha:$stage,source_sha:$source,created_at:datetime()})',
+                              {'stage': stage, 'source': sha})
+        for query, params in projection_statements(stage, graph, observed_at, compact=True):
+            session.execute_write(_statement, query.replace(':ReceiptSnapshot', ':ReceiptProjectionStage'), params)
+        published = session.execute_write(_activate, sha, stage, retired, observed_at)
+        return published
+    finally:
+        # Cleanup is also bounded. An unavailable backend may leave a hidden
+        # stage for later maintenance; it must not mask the original failure.
+        try:
+            _discard_stage(session, retired if published else stage)
+        except Exception as exc:
+            print(encoded({'event': 'receipt_graph_stage_cleanup_failed', 'stage': retired if published else stage,
+                           'error_type': type(exc).__name__}), flush=True)
 
 
 def project(dsn, *, sha=None, limit=100, after=''):
@@ -516,20 +594,31 @@ def project(dsn, *, sha=None, limit=100, after=''):
         with backend.session(database=os.getenv('NEO4J_DATABASE', 'neo4j')) as session:
             session.run('CREATE CONSTRAINT receipt_flow_id IF NOT EXISTS FOR (n:ReceiptFlowEntity) REQUIRE n.id IS UNIQUE').consume()
             session.run('CREATE CONSTRAINT receipt_snapshot_sha IF NOT EXISTS FOR (n:ReceiptSnapshot) REQUIRE n.sha IS UNIQUE').consume()
+            session.run('CREATE CONSTRAINT receipt_projection_lock_sha IF NOT EXISTS FOR (n:ReceiptProjectionLock) REQUIRE n.sha IS UNIQUE').consume()
             rows = conn.execute(f'SELECT source_sha256 FROM {RECEIPT_CATALOGUE} r WHERE (%s OR source_sha256=%s) AND source_sha256>%s ORDER BY source_sha256 LIMIT %s', (sha is None, sha, after, limit)).fetchall()
             conn.commit()
+            failed = 0
             for row in rows:
                 print(encoded({'event': 'receipt_graph_projection_started', 'sha': row['source_sha256']}), flush=True)
-                conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
-                observed = conn.execute('SELECT transaction_timestamp() AS time').fetchone()['time'].astimezone(timezone.utc).isoformat(timespec='microseconds')
-                graph = build(load(conn, row['source_sha256']))
-                conn.commit()
-                session.execute_write(write, row['source_sha256'], graph, observed)
-                print(encoded({'event': 'receipt_graph_projection_completed', 'sha': row['source_sha256'],
-                               'nodes': len(graph['nodes']), 'edges': len(graph['edges'])}), flush=True)
-                # Assignment alone retains the prior graph while building the next.
-                del graph
-    return {'projected': len(rows), 'after': rows[-1]['source_sha256'] if rows else after}
+                try:
+                    conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+                    observed = conn.execute('SELECT transaction_timestamp() AS time').fetchone()['time'].astimezone(timezone.utc).isoformat(timespec='microseconds')
+                    graph = build(load(conn, row['source_sha256']))
+                    conn.commit()
+                    write_snapshot(session, row['source_sha256'], graph, observed)
+                    print(encoded({'event': 'receipt_graph_projection_completed', 'sha': row['source_sha256'],
+                                   'nodes': len(graph['nodes']), 'edges': len(graph['edges'])}), flush=True)
+                except Exception as exc:
+                    conn.rollback()
+                    failed += 1
+                    print(encoded({'event': 'receipt_graph_projection_failed', 'sha': row['source_sha256'],
+                                   'error_type': type(exc).__name__}), flush=True)
+                finally:
+                    # Assignment alone retains the prior graph while building the next.
+                    if 'graph' in locals():
+                        del graph
+    return {'projected': len(rows) - failed, 'failed': failed, 'scanned': len(rows),
+            'after': rows[-1]['source_sha256'] if rows else after}
 
 
 def main(argv=None):
@@ -543,16 +632,18 @@ def main(argv=None):
         parser.error('Use a valid SHA and LIMIT from 1 to 1000')
     try:
         after = args.after
+        failed = 0
         while True:
             result = project(os.environ['DATABASE_URL'], sha=args.sha, limit=args.limit, after=after)
             print(encoded(result), flush=True)
             after = result['after']
-            if not args.all or args.sha or result['projected'] < args.limit:
+            failed += result['failed']
+            if not args.all or args.sha or result['scanned'] < args.limit:
                 break
     except Exception as exc:
         print(encoded({'event': 'receipt_graph_projection_failed', 'error_type': type(exc).__name__}))
         return 1
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':

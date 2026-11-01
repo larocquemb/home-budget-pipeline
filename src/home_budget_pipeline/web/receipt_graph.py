@@ -18,7 +18,7 @@ from ..product_labels import product_name
 PERSPECTIVES = {
     'story': None,
     'lineage': None,
-    'topology': {'ModelTask', 'CollaborationRound', 'EvidenceExchange', 'Receipt', 'Message', 'MessageEvent', 'BrokerRoute', 'ResultMessage', 'ProcessingAttempt', 'AttemptEvent', 'Worker', 'Node', 'OCRRun', 'OCRPass', 'OCRMethod', 'Model', 'ModelInvocation', 'Provider', 'GPU', 'InferenceHost', 'ExtractionResult', 'Guardrail', 'Decision', 'ProductAcceptance', 'Collaboration', 'PostgreSQLRecord'},
+    'topology': {'LineageEvent', 'ModelTask', 'CollaborationRound', 'EvidenceExchange', 'Receipt', 'Message', 'MessageEvent', 'BrokerRoute', 'ResultMessage', 'ProcessingAttempt', 'AttemptEvent', 'Worker', 'Node', 'OCRRun', 'OCRPass', 'OCRMethod', 'Model', 'ModelInvocation', 'Provider', 'GPU', 'InferenceHost', 'ExtractionResult', 'Guardrail', 'Decision', 'ProductAcceptance', 'Collaboration', 'PostgreSQLRecord'},
     'domain': {'Receipt', 'CanonicalReceipt', 'Merchant', 'Item', 'Category', 'ProductPage', 'SearchResult', 'Decision', 'ProductAcceptance', 'Collaboration'},
 }
 
@@ -215,6 +215,55 @@ def snapshot_nodes(sha, observed_at, ids):
     return [nodes[key] for key in ids]
 
 
+def snapshot_page(sha, perspective, offset, limit):
+    """Page in Neo4j before transferring any receipt topology or evidence."""
+    kinds = sorted(PERSPECTIVES[perspective]) if PERSPECTIVES[perspective] else None
+    headers = read('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time,s.version AS version', sha=sha)
+    if not headers:
+        raise HTTPException(404, 'Receipt not projected yet')
+    if (headers[0]['version'] or 0) < 7:
+        raise HTTPException(503, 'Receipt graph needs projection with the current application version')
+    time = headers[0]['time']
+    counts = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->()
+        WHERE $kinds IS NULL OR r.kind IN $kinds RETURN count(r) AS count''', sha=sha, time=time, kinds=kinds)
+    total = counts[0]['count'] if counts else 0
+    # Only fixed metadata and lengths cross the connection before the size check.
+    rows = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->()
+        WHERE $kinds IS NULL OR r.kind IN $kinds
+        RETURN r.node_id AS id,size(r.node_json) AS chars,size(r.edges_json) AS edge_chars
+        ORDER BY CASE WHEN r.kind='Receipt' THEN 0 ELSE 1 END,r.ordinal SKIP $offset LIMIT $limit''',
+        sha=sha, time=time, kinds=kinds, offset=offset, limit=limit)
+    if len(rows) != min(limit, max(0, total - offset)):
+        raise HTTPException(409, 'Receipt projection changed; refresh the graph')
+    page, chars = [], 0
+    for row in rows:
+        if row['chars'] is None or row['edge_chars'] is None:
+            raise HTTPException(503, 'Receipt graph needs projection with the current application version')
+        size = (row['chars'] or 0) + (row['edge_chars'] or 0)
+        if chars + size > MAX_DETAIL_CHARS:
+            if not page:
+                raise HTTPException(413, 'Selected entity exceeds the interactive evidence limit')
+            break
+        page.append(row)
+        chars += size
+    rows = page
+    ids = [r['id'] for r in rows]
+    nodes = snapshot_nodes(sha, time, ids)
+    edges = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->()
+        WHERE r.node_id IN $ids RETURN r.edges_json AS edges''', sha=sha, time=time, ids=ids) if ids else []
+    if len(edges) != len(ids):
+        raise HTTPException(409, 'Receipt projection changed; refresh the graph')
+    if not read('MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time}) RETURN s.observed_at AS time', sha=sha, time=time):
+        raise HTTPException(409, 'Receipt projection changed; refresh the graph')
+    selected = set(ids)
+    relationships = {edge['id']: edge for row in edges for edge in json.loads(row['edges'])
+                     if edge['source'] in selected and edge['target'] in selected}
+    for node in nodes:
+        node['links'] = links(node)
+    return {'nodes': nodes, 'edges': list(relationships.values()), 'total_nodes': total,
+            'offset': offset, 'limit': limit, 'next_offset': offset + len(nodes), 'observed_at': time}
+
+
 def story_index(sha, item_id='', run_id=''):
     """Select a run before reading any unrelated receipt topology/evidence."""
     headers = read('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time,s.version AS version', sha=sha)
@@ -332,32 +381,8 @@ def receipt(sha: str, perspective: str = 'lineage', offset: int = Query(0, ge=0)
             node['links'] = links(node)
         return {**story, 'total_nodes': len(story['nodes']), 'offset': 0,
                 'observed_at': observed_at}
-    result, observed_at = snapshot_index(sha)
-    kinds = PERSPECTIVES[perspective]
-    nodes = [n for n in result['nodes'] if kinds is None or n['kind'] in kinds]
-    # Breadth-first order keeps connected steps visible on the first page.
-    adjacency = {}
-    eligible = {n['id']: n for n in nodes}
-    for edge in result['edges']:
-        if edge['source'] in eligible and edge['target'] in eligible:
-            adjacency.setdefault(edge['source'], []).append(edge['target'])
-            adjacency.setdefault(edge['target'], []).append(edge['source'])
-    queue = [n['id'] for n in nodes if n['kind'] == 'Receipt']
-    ordered, seen = [], set()
-    while queue:
-        key = queue.pop(0)
-        if key in seen:
-            continue
-        seen.add(key)
-        ordered.append(eligible[key])
-        queue.extend(adjacency.get(key, []))
-    ordered.extend(n for n in nodes if n['id'] not in seen)
-    selected = snapshot_nodes(sha, observed_at, [n['id'] for n in ordered[offset:offset + limit]])
-    ids = {n['id'] for n in selected}
-    for node in selected:
-        node['links'] = links(node)
-    return {'nodes': selected, 'edges': [e for e in result['edges'] if e['source'] in ids and e['target'] in ids],
-            'total_nodes': len(nodes), 'offset': offset, 'limit': limit, 'observed_at': observed_at}
+    return snapshot_page(sha, perspective, offset, limit)
+
 
 
 @app.get(f'{BASE_PATH}/api/graph/telemetry')

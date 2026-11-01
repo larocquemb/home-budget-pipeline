@@ -78,7 +78,8 @@ def main():
     with graph.driver() as driver, driver.session(database='neo4j') as session:
         session.run('CREATE CONSTRAINT receipt_flow_id IF NOT EXISTS FOR (n:ReceiptFlowEntity) REQUIRE n.id IS UNIQUE').consume()
         session.run('CREATE CONSTRAINT receipt_snapshot_sha IF NOT EXISTS FOR (n:ReceiptSnapshot) REQUIRE n.sha IS UNIQUE').consume()
-        session.execute_write(graph.write, sha, built, datetime.now(timezone.utc).isoformat(timespec='microseconds'))
+        session.run('CREATE CONSTRAINT receipt_projection_lock_sha IF NOT EXISTS FOR (n:ReceiptProjectionLock) REQUIRE n.sha IS UNIQUE').consume()
+        graph.write_snapshot(session, sha, built, datetime.now(timezone.utc).isoformat(timespec='microseconds'))
     build_seconds = time.monotonic() - started
     run_id = selected['id'] if selected else ''
     del built, selected
