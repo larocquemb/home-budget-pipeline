@@ -29,7 +29,7 @@ CARD_METHOD_PATTERNS = (
 )
 
 MASKED_LAST4_PATTERNS = (
-    re.compile(r"\b(?:visa|master\s*card|mastercard|amex)\s*[*xX#-]+\s*(\d{4})\b", re.I),
+    re.compile(r"\b(?:visa|master\s*card|mastercard|amex)(?:\s+credit(?:\s+card)?)?\s*[*xX#-][*xX#\s-]*(\d{4})\b", re.I),
     re.compile(r"\bcard\s+number\s*[:;]\s*[*xXKk#«»*\s-]+?(\d{4})\b", re.I),
     re.compile(r"\b(?:account|acct)\s*(?:number|#)?\s*[:;#-]?\s*[*xXKk#«»*\s-]+?(\d{4})\b", re.I),
 )

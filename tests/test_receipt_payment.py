@@ -14,6 +14,20 @@ class ReceiptPaymentTests(unittest.TestCase):
         self.assertEqual(p.payment_method, "Visa")
         self.assertEqual(p.card_last4, "0806")
 
+    def test_brand_credit_label_and_spaced_mask_groups(self):
+        for text in ('VISA CREDIT **** **** **** 4321 RF 2',
+                     'Mastercard Credit Card xxxx xxxx xxxx 4321',
+                     'Amex **** ****** *4321'):
+            with self.subTest(text=text):
+                self.assertEqual(extract_payment_provenance(text).card_last4, '4321')
+
+    def test_does_not_guess_digits_from_garbled_mask_or_unmasked_account(self):
+        for text in ('VISA CREDIT #4 smudged 4321 RF 2',
+                     'VISA CREDIT 1234567890124321',
+                     'VISA CREDIT **** **** **** 43ZI'):
+            with self.subTest(text=text):
+                self.assertIsNone(extract_payment_provenance(text).card_last4)
+
     def test_extracts_semicolon_masked_card_number_from_real_ocr(self):
         p = extract_payment_provenance(
             "CASH SALE\n"
