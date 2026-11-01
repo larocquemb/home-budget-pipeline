@@ -278,7 +278,8 @@ CRCT IO PUFF 12x1 93573447143 1 @ .01-"""
         self.assertEqual(scan.normalize_merchant("CANAD TAN TIRE #266"), "Canadian Tire")
         self.assertEqual(scan.normalize_merchant("Tin Hortons # 104156"), "Tim Hortons")
         self.assertEqual(scan.normalize_merchant("im Hortons # 104156"), "Tim Hortons")
-        self.assertEqual(scan.normalize_merchant("=SEWHOLESALE"), "Wholesale Club")
+        self.assertEqual(scan.normalize_merchant("=SEWHOLESALE"), "SEWHOLESALE")
+        self.assertEqual(scan.normalize_merchant("WHOLESALE CLUB"), "Wholesale Club")
         self.assertEqual(scan.normalize_merchant("SHOPPERS &"), "Shoppers Drug Mart")
         self.assertEqual(scan.normalize_merchant("Sobeys Sage Creek"), "Sobeys Sage Creek")
 

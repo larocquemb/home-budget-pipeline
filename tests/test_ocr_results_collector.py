@@ -375,3 +375,21 @@ def test_cache_only_saves_independent_run_without_creating_receipt_or_expenses(t
         assert 'budget.expenses' not in query
         assert 'receipt_processing_status' not in query
         assert 'UPDATE budget.receipt_evidence' not in query
+
+
+@pytest.mark.parametrize('worker_status,balanced,expected', [
+    ('complete',False,'review'),('complete',True,'complete'),('review',True,'review'),
+])
+def test_collector_rechecks_current_rules_without_promoting_worker_review(tmp_path,worker_status,balanced,expected):
+    source=tmp_path/'synthetic.pdf'
+    source.write_bytes(b'synthetic')
+    receipt=result_receipt(source)
+    receipt.extraction_status=worker_status
+    if balanced:
+        receipt.items[0].line_total=receipt.subtotal
+    event=ocr_results.result_messages_for_receipt(receipt)[0]
+    restored=ocr_results.receipt_from_message(event)
+    assert restored.extraction_status == expected
+    assert event.payload['receipt']['extraction_status'] == worker_status
+    if not balanced:
+        assert 'item_total_mismatch' in restored.review_reasons

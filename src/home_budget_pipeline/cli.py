@@ -71,7 +71,7 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     receipts = commands.add_parser("receipts", help="Process receipt evidence.")
     receipt_commands = receipts.add_subparsers(dest="receipt_command", required=True)
     services = receipt_commands.add_parser("services", help="Control native Mac receipt workers and collector.")
-    services.add_argument("action", choices=("start", "stop", "restart", "status", "logs"))
+    services.add_argument("action", choices=("start", "stop", "restart", "reload", "status", "logs"))
     services.add_argument("--workers", type=int)
     services.add_argument("--ocr-threads", type=int)
     services.add_argument("--only", choices=("collector",), help="Control only the collector, leaving OCR workers running.")

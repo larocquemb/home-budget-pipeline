@@ -222,6 +222,34 @@ those checks fail; the saved status remains available as
 review/unreadable state or verify merchant/product names and categories. The allocation
 panel and API share the same current assessment without rewriting OCR history.
 
+OCR selection also checks the observed header and item arithmetic before using
+text volume or resolution to choose a base pass. Confidence and agreement between
+merchant readings help distinguish alternatives; an inferred tax amount does not
+count as independent header evidence. Cross-pass line matching cannot replace a
+coherent base header with different numeric readings. Fresh pass/cache metadata
+records the selection policy and observed confidence.
+
+The parser associates adjacent standalone subtotal/tax/total labels with their
+amounts and short numeric product codes with their following price column.
+Payment amounts are excluded from product rows. Printed GST and provincial tax
+components are retained separately when they reconcile to the combined tax.
+Ambiguous prices remain missing or mismatched and require review; the parser
+does not copy a price from another item to make an allocation balance.
+Existing cache hits retain their recorded consensus; selection-policy changes
+apply when fresh OCR is generated. Retained pass observations can be replayed
+read-only to compare policies independently of any manually corrected ledger
+fields. Such a replay is validation evidence, not a database correction or a new
+OCR run.
+When retained alternate OCR readings exist, a merchant supported by only one
+reading requires review. The field-coverage confidence score alone cannot make
+it complete. The collector also reruns current validation before accepting a
+worker's `complete` label, retaining the original event and any worker warnings.
+To load parser changes without interrupting an in-progress OCR receipt, use
+`ledger --env-file .env.dev receipts services reload`. Consumers finish their
+current delivery and ACK before exiting; their KeepAlive LaunchAgents then start
+fresh interpreters. The command requests the reload; use service status/logs to
+verify that each process has restarted.
+
 ## Provision and configure Arsene development
 
 The infrastructure repository owns the `development_backends` Ansible role and

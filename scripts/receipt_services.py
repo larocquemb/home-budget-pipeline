@@ -134,7 +134,7 @@ def bootstrap_agent(domain: str, path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('start', 'stop', 'restart', 'status', 'logs'))
+    parser.add_argument('action', choices=('start', 'stop', 'restart', 'reload', 'status', 'logs'))
     parser.add_argument('--workers', type=positive_count, help='Number of receipt consumers; saved for subsequent commands')
     parser.add_argument('--ocr-threads', type=positive_count, help='CPU threads per OCR engine in each worker')
     parser.add_argument('--only', choices=('collector',), help='Control the collector without interrupting OCR workers')
@@ -185,6 +185,14 @@ def main() -> int:
                 launchctl('bootout', target)
             launchctl('disable', target)
             print(f'{name}: stopped; automatic startup disabled')
+        elif args.action == 'reload':
+            if not loaded:
+                print(f'{name}: not loaded; use services start')
+                return 1
+            # The consumer signal handler finishes its current delivery/ACK.
+            # KeepAlive then launches a fresh interpreter with the new code.
+            launchctl('kill', 'SIGTERM', target)
+            print(f'{name}: reload requested; finishes current delivery before restart')
         elif args.action in {'start', 'restart'}:
             desired = service_plist(ROOT, name, settings.get('ocr_threads'))
             changed = not path.exists() or plistlib.loads(path.read_bytes()) != desired
