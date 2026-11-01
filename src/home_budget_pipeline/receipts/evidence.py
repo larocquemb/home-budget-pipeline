@@ -102,6 +102,17 @@ def find_match(conn, receipt, schema: str = "budget") -> MatchResult:
     total = getattr(receipt, "total", None)
     if not transaction_date and total is None:
         return MatchResult(None, 0.0, "new", "insufficient_match_keys")
+    rejected_clause = ''
+    params = (transaction_date, transaction_date, transaction_date, total, total)
+    if schema == 'budget':
+        rejected_clause = ''' AND NOT EXISTS (
+            SELECT 1 FROM budget.receipt_duplicate_links d
+            JOIN budget.receipt_evidence own ON own.source_sha256=%s
+            JOIN budget.receipt_evidence other ON other.expense_pk=budget.expenses.id
+            WHERE d.resolution_status='rejected'
+              AND ((d.left_evidence_id=own.id AND d.right_evidence_id=other.id)
+                OR (d.right_evidence_id=own.id AND d.left_evidence_id=other.id)))'''
+        params += (getattr(receipt, 'source_sha256', None),)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -112,9 +123,10 @@ def find_match(conn, receipt, schema: str = "budget") -> MatchResult:
               FROM {schema}.expenses
              WHERE (%s::date IS NULL OR order_date = %s::date OR transaction_datetime::date = %s::date)
                AND (%s::numeric IS NULL OR ABS(COALESCE(receipt_total_charged, expense_total) - %s::numeric) <= 0.01)
+             {rejected_clause}
              ORDER BY id
             """,
-            (transaction_date, transaction_date, transaction_date, total, total),
+            params,
         )
         rows = cur.fetchall()
         columns = [d[0] for d in cur.description]

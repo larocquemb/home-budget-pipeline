@@ -126,6 +126,17 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     date_correction.add_argument('--apply', action='store_true')
     date_correction.set_defaults(handler=_correct_date)
 
+    duplicates = receipt_commands.add_parser('duplicates', help='List, discover, confirm or reject duplicate receipt evidence.')
+    duplicates.add_argument('action', choices=('list', 'discover', 'confirm', 'reject'))
+    duplicates.add_argument('--left', type=int, help='First evidence ID (not expense ID).')
+    duplicates.add_argument('--right', type=int, help='Second evidence ID.')
+    duplicates.add_argument('--expense', type=int, help='Existing canonical expense ID for confirmation.')
+    duplicates.add_argument('--reason', default='')
+    duplicates.add_argument('--reviewer', default='Paul La Rocque')
+    duplicates.add_argument('--expected-version')
+    duplicates.add_argument('--apply', action='store_true', help='Save; default is a read-only preview.')
+    duplicates.set_defaults(handler=_receipt_duplicates)
+
     retry = receipt_commands.add_parser(
         "retry", help="Reset a failed or interrupted receipt for the next publish or process command.",
     )
@@ -203,6 +214,38 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     )
     setup.set_defaults(handler=_setup_database)
     return parser
+
+
+def _receipt_duplicates(args):
+    from .web.queries import LedgerQueryService
+    from .receipts.duplicate_review import resolve, capture_candidates
+    service = LedgerQueryService()
+    if args.action == 'list':
+        print(json.dumps(service.pending_duplicates(limit=200).rows, default=str))
+    elif args.action == 'discover':
+        conn = service._connect()
+        try:
+            from psycopg.rows import tuple_row
+            with conn.cursor(row_factory=tuple_row) as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext('budget.receipt-duplicates'))")
+                cur.execute('SELECT id FROM budget.receipt_evidence WHERE expense_pk IS NULL ORDER BY id')
+                ids = [r[0] for r in cur.fetchall()]
+            count = sum(len(capture_candidates(conn, evidence_id)) for evidence_id in ids)
+            if args.apply:
+                conn.commit()
+            else:
+                conn.rollback()
+            print(json.dumps({'apply': args.apply, 'candidate_matches': count}))
+        finally:
+            conn.close()
+    else:
+        if args.left is None or args.right is None:
+            raise ValueError('Specify --left and --right evidence IDs')
+        result = resolve(service._connect, args.left, args.right, expense=args.expense,
+                         reject=args.action == 'reject', reason=args.reason, actor=args.reviewer,
+                         expected_version=args.expected_version, apply=args.apply)
+        print(json.dumps(result, default=str))
+    return 0
 
 
 def _correct_date(args):

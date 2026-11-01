@@ -20,6 +20,11 @@ class DuplicateResolution:
 @dataclass
 class PostgresReceiptDuplicateStore:
     connection: object
+    commit_on_write: bool = True
+
+    def _commit(self):
+        if self.commit_on_write:
+            self.connection.commit()
 
     @staticmethod
     def _ordered_pair(left_evidence_id: int, right_evidence_id: int) -> tuple[int, int]:
@@ -54,7 +59,7 @@ class PostgresReceiptDuplicateStore:
                     result.item_similarity,
                 ),
             )
-        self.connection.commit()
+        self._commit()
 
     def auto_link_exact(self, result: DuplicateScore, canonical_expense_pk: int) -> DuplicateResolution:
         if result.disposition is not DuplicateDisposition.EXACT:
@@ -81,7 +86,7 @@ class PostgresReceiptDuplicateStore:
                 """,
                 (left_id, right_id),
             )
-        self.connection.commit()
+        self._commit()
         return DuplicateResolution(left_id, right_id, None, "rejected")
 
     def _resolve(
@@ -136,5 +141,5 @@ class PostgresReceiptDuplicateStore:
                     source,
                 ),
             )
-        self.connection.commit()
+        self._commit()
         return DuplicateResolution(left_id, right_id, canonical_expense_pk, status)

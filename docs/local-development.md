@@ -798,3 +798,33 @@ applying. A concurrent change requires a fresh review and preview. Corrections
 retain the receipt total/identity and original OCR evidence, write before/after
 audit snapshots, and protect existing reviewed items and their history from
 deletion. Later scanned imports preserve verified canonical allocations.
+
+## Review duplicate receipt evidence
+
+Imports record duplicate candidates without creating another purchase when a
+plausible evidence match needs review. A single unambiguous exact match with a matching receipt identifier containing
+at least six digits and an observed time can link to an existing expense
+automatically; weaker matches require a human decision.
+Rejected pairs remain rejected, and normal reimports preserve existing links.
+Two already separate purchases cannot be merged through this workflow.
+
+Use evidence IDs from the Duplicates page, rather than confusing them with
+expense IDs. Preview a decision, then repeat with `--apply --expected-version`
+and the version returned by the preview:
+
+```bash
+ledger --env-file .env.dev receipts duplicates list
+ledger --env-file .env.dev receipts duplicates discover
+ledger --env-file .env.dev receipts duplicates discover --apply
+ledger --env-file .env.dev receipts duplicates confirm --left 101 --right 102 --expense 42 --reason 'Verified both original documents'
+ledger --env-file .env.dev receipts duplicates confirm --left 101 --right 102 --expense 42 --reason 'Verified both original documents' --apply --expected-version VERSION_FROM_PREVIEW
+ledger --env-file .env.dev receipts duplicates reject --left 101 --right 103 --reason 'Different purchases'
+```
+
+`discover` checks currently unlinked evidence. Without `--apply`, candidate
+writes are rolled back; it never links documents or approves purchases.
+`reject` also previews by default and requires the preview version to apply.
+The authenticated **Duplicates** page offers the same preview/apply workflow.
+Confirmation preserves both source documents, receipt fields, expense items and
+categories. Reviewer, reason, original links and resulting links are retained in
+a durable audit event. Confirmation does not approve OCR or category choices.

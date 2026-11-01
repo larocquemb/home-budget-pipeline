@@ -218,6 +218,7 @@ class ParallelScannedReceiptIngestTests(unittest.TestCase):
         with (
             patch.object(parallel, "resolve_merchant_alias", return_value="Costco"),
             patch.object(parallel, "upsert_evidence", return_value=7) as evidence,
+            patch.object(parallel, "capture_candidates", return_value=[]),
             patch.object(parallel, "find_match", return_value=SimpleNamespace(disposition="matched", expense_pk=42)),
             patch.object(parallel, "attach_evidence") as attach,
             patch.object(parallel.scan, "upsert_receipt") as canonical,
