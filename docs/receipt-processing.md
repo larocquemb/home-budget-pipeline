@@ -121,6 +121,21 @@ path, preserving manual allocation protections and validation warnings. Missing
 or mismatched caches fail instead of silently running OCR. Publication is
 asynchronous; check the saved Ledger result after collection.
 
+To re-extract all existing caches in one command:
+
+```bash
+ledger --env-file .env.dev receipts reprocess-cache --apply
+```
+
+Omit `--apply` to preview. Add `--source-prefix electronic/` or a dated source
+folder to limit the selection. Both configured scanned and electronic inputs
+are included by default. Deleted sources and missing caches are skipped;
+invalid, mismatched or incomplete caches are reported as failures and never
+fall back to OCR. The summary reports eligible, published, missing and failed
+counts. Reuse its `--request-id UUID` after uncertain publication to retain
+stable per-receipt request identities. One broker connection publishes the
+batch to the collector; completion remains asynchronous. Cache bytes are retained.
+
 Merchant identifies the retailer; Store identifies the printed branch or
 location. They are separate fields in receipt extraction, APIs and the receipt
 list/detail pages. Unknown or conflicting store numbers remain blank. A
