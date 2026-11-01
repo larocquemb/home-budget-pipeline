@@ -134,7 +134,10 @@ invalid, mismatched or incomplete caches are reported as failures and never
 fall back to OCR. The summary reports eligible, published, missing and failed
 counts. Reuse its `--request-id UUID` after uncertain publication to retain
 stable per-receipt request identities. One broker connection publishes the
-batch to the collector; completion remains asynchronous. Cache bytes are retained.
+batch to the collector; completion remains asynchronous. Applied batches record
+per-receipt progress for Grafana, including confirmed cache-result publication,
+validation failures and collector persistence. Preview writes no progress history.
+Cache bytes are retained.
 
 Merchant identifies the retailer; Store identifies the printed branch or
 location. They are separate fields in receipt extraction, APIs and the receipt
