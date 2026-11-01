@@ -74,3 +74,15 @@ Effective 11/27/2022 Clearance sales are considered final
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_browser_print_timestamp_is_metadata_for_any_merchant():
+    for header in ('8/24/27, 9:11 AM Orders & Purchases | ExampleMart',
+                   '8/24/27, 9:11 AM\nYour purchase history'):
+        text = header + '\n07/09/2027 12:29\nhttps://example.test/ordersandpurchases 1/1'
+        assert extract_transaction_datetime(text) == '2027-07-09T12:29:00'
+        assert extract_transaction_datetime(header + '\nhttps://example.test/receipt 1/1') is None
+
+
+def test_unmarked_timestamp_is_retained_without_browser_print_context():
+    assert extract_transaction_datetime('8/24/27, 9:11 AM') == '2027-08-24'

@@ -67,7 +67,7 @@ if [[ -n "$receipt" ]]; then
   escaped_receipt="${receipt//\\/\\\\}"
   escaped_receipt="${escaped_receipt//\"/\\\"}"
   kubectl patch --local -f "$work_dir/prepared.json" --type=json \
-    -p "[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/command\",\"value\":[\"ledger\"]},{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/args\",\"value\":[\"receipts\",\"reprocess\",\"$escaped_receipt\",\"--receipt-root\",\"/data/receipts/raw/scanned/inbox\",\"--verbose\"]}]" \
+    -p "[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/command\",\"value\":[\"ledger\"]},{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/args\",\"value\":[\"receipts\",\"reprocess\",\"$escaped_receipt\",\"--receipt-root\",\"/data/receipts/raw/scanned\",\"--verbose\"]}]" \
     -o json > "$work_dir/single-receipt.json"
   mv "$work_dir/single-receipt.json" "$work_dir/prepared.json"
 fi

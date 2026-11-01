@@ -11,7 +11,9 @@ import signal
 import socket
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from functools import partial
+import multiprocessing
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -31,10 +33,13 @@ LOG = logging.getLogger(__name__)
 class WorkerResult(tuple):
     """Status/events pair with the actual parser cache outcome attached."""
 
-    def __new__(cls, status, events, *, cache_hit):
+    def __new__(cls, status, events, cache_hit=None):
         result = super().__new__(cls, (status, events))
         result.cache_hit = cache_hit
         return result
+
+    def __reduce__(self):
+        return (type(self), (self[0], self[1], self.cache_hit))
 
 
 def log_receipt_activity(message, active, attempt_id=None):
@@ -798,9 +803,17 @@ def process_with_heartbeats(connection, executor, process, message, progress=Non
     # wait immediately instead of paying the full heartbeat poll per message.
     # Only Pika's thread-safe callback API is touched by the processing thread;
     # result handling and ACKs remain on the connection's owning thread.
-    future.add_done_callback(
-        lambda _: connection.add_callback_threadsafe(lambda: None)
-    )
+    def wake_owner(_):
+        if not getattr(connection, "is_open", True):
+            return
+        try:
+            connection.add_callback_threadsafe(lambda: None)
+        except Exception as exc:
+            # Wakeup is an optimization. A connection can close between the
+            # state check and enqueue; the owner handles publication/redelivery.
+            LOG.debug("amqp_completion_wakeup_unavailable error=%s", type(exc).__name__)
+
+    future.add_done_callback(wake_owner)
     next_progress = time.monotonic() + 15
     while not future.done():
         connection.process_data_events(time_limit=1)
@@ -830,6 +843,23 @@ def consume(connection, channel, process, topology: Topology, stop: Event) -> No
                 channel.cancel()
 
 
+def configure_ocr_process():
+    """Initialize telemetry independently of the AMQP-owning parent process."""
+    from multiprocessing.util import Finalize
+    telemetry.configure_logging()
+    telemetry.configure_telemetry()
+    Finalize(None, telemetry.shutdown_telemetry, exitpriority=10)
+
+
+def ocr_executor():
+    # Native OCR can retain the GIL. A thread cannot guarantee AMQP heartbeat
+    # progress; spawn also avoids inheriting PDFium/OpenMP state on macOS/Linux.
+    return ProcessPoolExecutor(
+        max_workers=1, mp_context=multiprocessing.get_context("spawn"),
+        initializer=configure_ocr_process,
+    )
+
+
 def consume_worker(
     connection,
     channel,
@@ -840,7 +870,7 @@ def consume_worker(
 ) -> None:
     """Consume source work while keeping AMQP operations on their owner thread."""
     channel.basic_qos(prefetch_count=1)
-    with ThreadPoolExecutor(max_workers=1) as executor:
+    with ocr_executor() as executor:
         try:
             for method, properties, body in channel.consume(
                 topology.work, auto_ack=False, inactivity_timeout=1,
@@ -955,7 +985,7 @@ def run(args) -> int:
             consume_worker(
                 connection,
                 channel,
-                lambda message: produce_result_messages(message, args),
+                partial(produce_result_messages, args=args),
                 topology,
                 result_topology,
                 stop,

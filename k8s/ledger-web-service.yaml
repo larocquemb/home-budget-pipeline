@@ -36,12 +36,14 @@ spec:
           args:
             - home_budget_pipeline.web.receipt_app
           env:
+            - name: ELECTRONIC_RECEIPT_SOURCE_ROOT
+              value: /data/receipts/raw/electronic
             - name: PORT
               value: "8080"
             - name: LEDGER_BASE_PATH
               value: /ledger
             - name: RECEIPT_SOURCE_ROOT
-              value: /data/receipts/raw/scanned/inbox
+              value: /data/receipts/raw/scanned
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

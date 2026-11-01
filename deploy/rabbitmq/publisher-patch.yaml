@@ -12,7 +12,7 @@ spec:
           containers:
             - name: receipt-processor
               command: [ledger]
-              args: [receipts, publish, /data/receipts/raw/scanned/inbox]
+              args: [receipts, publish, /data/receipts/raw/scanned]
               env:
                 - name: RABBITMQ_URL
                   valueFrom:

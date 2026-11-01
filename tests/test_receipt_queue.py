@@ -392,3 +392,58 @@ def test_heartbeat_uses_same_attempt_in_database_and_logs(monkeypatch, caplog):
     assert calls == [('heartbeat', {'attempt_id':'attempt-123', 'queue':'receipts.v1.work'})]
     assert caplog.records[-1].attempt_id == 'attempt-123'
     assert caplog.records[-1].processing_state == 1
+
+
+def _native_blocking_ocr(marker):
+    """Simulate a native OCR call that holds its interpreter's GIL."""
+    import ctypes
+    import os
+    from pathlib import Path
+    Path(marker).write_text("running")
+    ctypes.PyDLL(None).sleep(1)
+    Path(marker).write_text("finished")
+    return queue.WorkerResult("succeeded", [os.getpid()], cache_hit=False)
+
+
+def test_native_ocr_cannot_starve_amqp_heartbeats(tmp_path, monkeypatch):
+    import os
+    import time
+    monkeypatch.setenv("HOME_BUDGET_TELEMETRY_ENABLED", "false")
+    marker = tmp_path / "ocr-state"
+    heartbeats = []
+    def io(**kwargs):
+        if marker.exists() and marker.read_text() == "running":
+            heartbeats.append(time.monotonic())
+        time.sleep(.02)
+    connection = SimpleNamespace(
+        process_data_events=io, add_callback_threadsafe=lambda callback: None,
+    )
+    with queue.ocr_executor() as executor:
+        result = queue.process_with_heartbeats(
+            connection, executor, _native_blocking_ocr, str(marker),
+        )
+    assert len(heartbeats) > 10
+    assert result[0] == "succeeded"
+    assert result[1][0] != os.getpid()
+    assert result.cache_hit is False
+
+
+@pytest.mark.parametrize("closed", [False, True])
+def test_completion_tolerates_connection_closing(closed, caplog):
+    release = Event()
+    calls = []
+    def process(message):
+        assert release.wait(5)
+        return "succeeded"
+    def enqueue(callback):
+        calls.append(callback)
+        raise RuntimeError("connection closed during completion")
+    connection = SimpleNamespace(
+        is_open=not closed,
+        process_data_events=lambda **kwargs: release.set(),
+        add_callback_threadsafe=enqueue,
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        assert queue.process_with_heartbeats(connection, executor, process, MESSAGE) == "succeeded"
+    assert bool(calls) is not closed
+    assert "exception calling callback" not in caplog.text

@@ -649,7 +649,8 @@ def receipt_page(
         header += f'<div class="card">Possible duplicate purchase: compare {links} before including both accounting records.</div>'
 
     item_rows = []
-    for item in expense.get("items", ()):
+    displayed_items = expense.get("items") or (evidence.get("raw_payload") or {}).get("items") or ()
+    for item in displayed_items:
         description_html = esc(_item_description(dict(item))) or '<span class="muted">Awaiting product identification</span>'
         item_rows.append(
             "<tr>"

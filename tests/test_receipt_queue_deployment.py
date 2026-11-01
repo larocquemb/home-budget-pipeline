@@ -25,8 +25,8 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     }
     assert "replicas" not in worker_deployment  # KEDA/HPA owns this field, not Argo CD.
     assert publisher["command"] == worker["command"] == ["ledger"]
-    assert publisher["args"] == ["receipts", "publish", "/data/receipts/raw/scanned/inbox"]
-    assert worker["args"] == ["receipts", "consume", "/data/receipts/raw/scanned/inbox"]
+    assert publisher["args"] == ["receipts", "publish", "/data/receipts/raw/scanned"]
+    assert worker["args"] == ["receipts", "consume", "/data/receipts/raw/scanned"]
     assert publisher["image"] == worker["image"] == collector["image"]
     assert "latest" not in worker["image"]
     assert worker["resources"] == {
@@ -101,6 +101,8 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     }
     for container in (publisher, worker):
         env = {entry["name"]: entry for entry in container["env"]}
+        assert env["RECEIPT_SOURCE_ROOT"]["value"] == "/data/receipts/raw/scanned"
+        assert env["ELECTRONIC_RECEIPT_SOURCE_ROOT"]["value"] == "/data/receipts/raw/electronic"
         assert env["HOME_BUDGET_OCR_CACHE"]["valueFrom"]["configMapKeyRef"] == {
             "name": "receipt-runtime-config", "key": "HOME_BUDGET_OCR_CACHE",
         }
