@@ -506,7 +506,7 @@ def _enrichment_html(item: dict[str, Any]) -> str:
 
 
 def _item_reading_html(item: dict[str, Any]) -> str:
-    original = str(item.get('item_name') or '')
+    original = str(item.get('receipt_item_name') or item.get('item_name') or '')
     rec = item.get('recommendation') or {}
     accepted = bool(rec.get('accepted_at'))
     correction = corrected_reading(original, rec.get('evidence')) if rec.get('eligible') or accepted else None
@@ -647,10 +647,16 @@ def receipt_page(
 
     item_rows = []
     displayed_items = expense.get("items") or (evidence.get("raw_payload") or {}).get("items") or ()
+    from ..receipts.item_codes import item_identity
     for item in displayed_items:
+        item = {**item, **item_identity(item, merchant)}
+        code_html = esc(item.get('product_code'))
+        if item.get('discount_for_product_code'):
+            code_html += '<br><small>Discount for ' + esc(item['discount_for_product_code']) + '</small>'
         description_html = esc(_item_description(dict(item))) or '<span class="muted">Awaiting product identification</span>'
         item_rows.append(
             "<tr>"
+            f"<td>{code_html}</td>"
             f"<td>{_item_reading_html(dict(item))}</td>"
             f"<td>{description_html}</td>"
             f"<td>{_enrichment_html(dict(item))}{_recommendation_html(dict(item), source_sha256)}</td>"
@@ -671,7 +677,7 @@ def receipt_page(
         + (f'<form id="refresh-items" data-receipt="{esc(source_sha256)}"><button type="submit">Apply accepted matches and category rules</button>'
            '<p>Fills empty product fields from previously accepted matches and categorizes unresolved items. Existing descriptions and categories are preserved. No model or search calls.</p>'
            '<p id="refresh-status" role="status"></p></form>' if expense.get('items') else '')
-        + '<table><thead><tr><th>Receipt item</th><th>Description</th>'
+        + '<table><thead><tr><th>Product code</th><th>Receipt item</th><th>Description</th>'
         "<th>Enrichment</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th>"
         "</tr></thead><tbody>"
         + "".join(item_rows)

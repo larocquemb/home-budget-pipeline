@@ -14,8 +14,10 @@ from decimal import Decimal
 from difflib import SequenceMatcher
 from typing import Optional
 
+from .receipts.item_codes import item_identity, matching_item_name
+
 LOG = logging.getLogger(__name__)
-SCORING_VERSION = 'receipt-evidence-v5'
+SCORING_VERSION = 'receipt-evidence-v6'
 
 RETAILER_DOMAINS = {
     "costco": "costco.ca",
@@ -59,6 +61,13 @@ def product_query(item_name: str, merchant: str) -> Optional[str]:
     domain = retailer_domain(merchant)
     if not domain:
         return None
+    identity = item_identity({'item_name': item_name}, merchant)
+    if identity['discount_for_product_code']:
+        return None
+    if identity['product_code']:
+        terms = re.sub(r"[^A-Za-z0-9 .%]+", " ", identity['receipt_item_name'])
+        terms = re.sub(r"\s+", " ", terms).strip()
+        return f"site:{domain} \"{identity['product_code']}\" {terms}".strip()
     barcode = BARCODE_RE.search(item_name or "")
     if barcode:
         return f'site:{domain} "{barcode.group(0)}"'
@@ -213,11 +222,15 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
     # supported by the retailer title or product URL, not neighbouring promotions.
     source_text = evidence_text(f"{title} {urllib.parse.unquote(path)}")
     source_words = set(evidence_words(source_text))
+    identity = item_identity({'item_name': item_name}, domain)
+    if identity['discount_for_product_code']:
+        return {"confidence": 0.0, "product_page": product_page,
+                "reason": "discount_adjustment", "tokens": [], **identity}
     barcode = BARCODE_RE.search(item_name or "")
-    if barcode and barcode.group(0) in source_words:
+    if not identity['product_code'] and barcode and barcode.group(0) in source_words:
         return {"confidence": 1.0 if product_page else 0.0, "product_page": product_page,
                 "reason": "exact_barcode", "tokens": []}
-    item_text = evidence_text(item_name)
+    item_text = evidence_text(identity['receipt_item_name'])
     compounds = {a + b: (a, b) for a, b in re.findall(r'\b([a-z])/([a-z]{3,})\b', item_text)}
     item_text = re.sub(r'\b([a-z])/([a-z]{3,})\b', r'\1\2', item_text)
     tokens = []
@@ -302,9 +315,20 @@ def candidate_evidence(item_name: str, domain: str, title: str, url: str, snippe
     score = sum(e["weight"] for e in evidence) / len(evidence) if len(evidence) >= 2 else 0.0
     if any(e["kind"] == "unmatched" for e in evidence):
         score = min(score, .84)
+    code = identity['product_code']
+    exact_code = bool(code and code in source_words)
+    # A warehouse code needs corroborating product-name evidence. A different
+    # explicitly advertised item code is a conflict, never a lexical match.
+    advertised_codes = set(re.findall(r"\b(?:item|sku)\s*(?:number|no\.?|#|:)\s*:?\s*(\d{3,8})\b", title, re.I))
+    if exact_code and evidence and all(e['weight'] >= .85 for e in evidence):
+        score = max(score, .95)
+    if code and advertised_codes and code not in advertised_codes:
+        score = 0.0
     if not product_page:
         score = 0.0
-    return {"confidence": round(score, 4), "product_page": product_page,
+    return {"product_code": code, "product_code_matched": exact_code,
+            "product_code_conflict": bool(code and advertised_codes and code not in advertised_codes),
+            "confidence": round(score, 4), "product_page": product_page,
             "reason": "receipt_token_evidence" if product_page else "non_product_page", "tokens": evidence}
 
 
@@ -316,6 +340,8 @@ def candidate_receipt_evidence(item_name: str, domain: str, title: str, url: str
                                snippet: str, sources: list[dict]) -> dict:
     """Resolve a single OCR glyph only when a retained observation records it."""
     evidence = candidate_evidence(item_name, domain, title, url, snippet)
+    if evidence.get('product_code_conflict'):
+        return evidence
     if not evidence['product_page'] or sum(t['kind'] == 'unmatched' for t in evidence['tokens']) != 1:
         return evidence
     confusions = {('m', 'n'), ('n', 'm'), ('i', 'l'), ('l', 'i'), ('c', 'o'), ('o', 'c')}
@@ -483,7 +509,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
             params += (list(item_ids),)
         params += (refresh, limit)
         rows = conn.execute(f"""
-            SELECT i.id, i.item_name, e.store_name, i.expense_pk AS receipt_id
+            SELECT i.id, i.item_name, e.store_name, i.expense_pk AS receipt_id,
+                   i.line_total, e.raw_payload->'items' AS source_items
               FROM budget.expense_items i JOIN budget.expenses e ON e.id=i.expense_pk
              WHERE {missing_filter} {result_filter}
                AND (e.store_name ILIKE ANY(%s)) {item_filter}
@@ -503,8 +530,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                      index, len(rows), row['id'], row['store_name'], row['item_name'])
             query_cache.context = {'item_id': row['id'], 'merchant': row['store_name']}
             stats["considered"] += 1
-            original_item_name = row["item_name"]
             merchant = row["store_name"] or ""
+            original_item_name = matching_item_name(row, merchant, row.get('source_items'))
             domain = retailer_domain(merchant)
             query = product_query(original_item_name, merchant)
             if not query or not domain:
@@ -591,6 +618,11 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                     if provider == "brave+ai":
                         stats["ai_expanded"] += 1
 
+            code_conflict = bool(result and candidate_evidence(
+                original_item_name, domain, result.title, result.url,
+            ).get('product_code_conflict'))
+            if code_conflict:
+                result = SearchResult(result.title, result.url, result.snippet, 0.0)
             status = "accepted" if result and result.score >= threshold else "review"
             conflicting_products = bool(result and any(
                 candidate['reading'] != selected_reading and candidate['url'] != result.url
@@ -613,6 +645,8 @@ def run(*, dsn: str, api_key: str, limit: int, threshold: float, write_db: bool,
                         ocr_evidence=EXCLUDED.ocr_evidence, searched_at=NOW()
                 """, (row["id"], provider, selected_query, result.title if result else None, result.url if result else None, result.score if result else 0, status,
                     json.dumps({'selected_reading': selected_reading, 'readings': readings,
+                                'product_code': item_identity({'item_name': original_item_name}, merchant)['product_code'],
+                                'product_code_conflict': code_conflict,
                                 'artifact_errors': artifact_errors,
                                 'candidates': evaluated_candidates,
                                 'conflicting_products': conflicting_products})))
