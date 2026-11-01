@@ -88,6 +88,6 @@ def test_apply_replaces_canonical_items_and_upserts_provenance():
 def test_schema_persists_canonical_item_source_resolution():
     from pathlib import Path
     text = Path("sql/receipt_deduplication.sql").read_text()
-    assert "CREATE TABLE budget.canonical_item_source_resolutions" in text
+    assert "CREATE TABLE IF NOT EXISTS budget.canonical_item_source_resolutions" in text
     assert "evidence_id BIGINT NOT NULL" in text
     assert "reason TEXT NOT NULL" in text
