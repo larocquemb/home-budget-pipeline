@@ -8,8 +8,18 @@ development backend. On October 27 the services were provisioned, both databases
 and this Mac's `.env.dev` switched to Arsene. PostgreSQL role/database and broker
 vhost isolation checks pass. The old Mac configuration and data remain retained.
 The m4pro Mac mini workflow has been validated; work MacBook validation was
-waived. Receipt worker and collector background LAN access and physical restore
-checks remain pending.
+waived. November 1 checks verified both receipt worker LaunchAgents and the
+collector running with established connections to Arsene's development broker.
+The web LaunchAgent listens on localhost:8080: `/ledger/health` returns 200,
+untrusted receipt requests return 401, and a request using the configured trusted
+proxy identity returns 200 against development data. The HTTPS entry point
+reaches Microsoft Entra sign-in; prior retained evidence covers callback/logout
+and native reload. These checks do not constitute a new interactive login test.
+
+Physical RabbitMQ/Neo4j recovery qualification and independent evidence backup
+are tracked in KAN-159; existing logical restore and reboot checks do not prove
+physical recovery. Full historical graph scalability and live accepted-data
+validation remain under KAN-98. Receipt vision extraction continues in KAN-158.
 
 ## Current database topology — October 31, 2026
 
