@@ -340,6 +340,20 @@ were confirmed. Workers retry each request at most three times before dead-lette
 Full-inbox refresh with `receipts process --refresh-ocr-cache` uses the same batch
 publication and retry behavior, but sends v2 requests that replace extraction.
 
+## Receipt product codes
+
+Costco item rows show a separate Product code column. The original stored
+receipt reading is preserved; the API exposes `product_code`,
+`receipt_item_name` and `discount_for_product_code` separately. Existing rows
+with a printed code prefix update immediately. Older electronic-import SKUs
+are recovered only from an unambiguous retained item name/amount match.
+
+Product matching searches the code with the printed description. An exact
+code requires corroborating name evidence on a retailer product page; an
+explicit conflicting item code prevents acceptance. `TPD/<code>` adjustments
+retain their own code and reference the discounted product without being
+searched as products. Amounts and accounting allocation are preserved.
+
 ## Receipt-scoped product enrichment
 
 After import, product enrichment can be limited to all line items belonging to

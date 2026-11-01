@@ -215,7 +215,8 @@ class LedgerQueryService:
     def expense_detail(self, expense_pk: int) -> dict[str, Any] | None:
         rows = self._fetch(
             """
-            SELECT a.*, COALESCE(re.merchant,a.store_name) AS merchant,
+            SELECT a.*, e.raw_payload->'items' AS source_items,
+                   COALESCE(re.merchant,a.store_name) AS merchant,
                    COALESCE(re.raw_payload->>'store',e.raw_payload->>'store') AS store
               FROM budget.analytics_expenses a
               JOIN budget.expenses e ON e.id=a.expense_pk
@@ -243,6 +244,12 @@ class LedgerQueryService:
              ORDER BY a.expense_item_id
             """,
             (expense_pk,),
+        )
+        from ..receipts.item_codes import item_identity
+        source_items = expense.pop('source_items', None)
+        expense["items"] = tuple(
+            {**item, **item_identity(item, expense.get('merchant') or expense.get('store_name'), source_items)}
+            for item in expense["items"]
         )
         expense["evidence"] = self._fetch(
             """
