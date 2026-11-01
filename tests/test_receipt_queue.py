@@ -186,9 +186,43 @@ def test_heartbeat_io_continues_until_processing_finishes():
         calls.append(kwargs)
         release.set()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        result = queue.process_with_heartbeats(SimpleNamespace(process_data_events=io), executor, process, MESSAGE)
+        result = queue.process_with_heartbeats(SimpleNamespace(
+            process_data_events=io, add_callback_threadsafe=lambda callback: None),
+            executor, process, MESSAGE)
     assert result == "succeeded"
     assert calls
+
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_completion_wakes_heartbeat_wait_and_propagates_outcome(fails):
+    from threading import get_ident
+    owner = get_ident()
+    waiting, wake = Event(), Event()
+    callbacks = []
+    def process(message):
+        assert get_ident() != owner
+        assert waiting.wait(5)
+        if fails:
+            raise ValueError("database transaction failed")
+        return "persisted"
+    def enqueue(callback):
+        callbacks.append(callback)
+        wake.set()
+    def io(**kwargs):
+        assert get_ident() == owner
+        waiting.set()
+        assert wake.wait(.5), "Completion must wake I/O before its one-second timeout"
+        for callback in callbacks:
+            callback()
+    connection = SimpleNamespace(process_data_events=io, add_callback_threadsafe=enqueue)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        if fails:
+            with pytest.raises(ValueError, match="database transaction failed"):
+                queue.process_with_heartbeats(connection, executor, process, MESSAGE)
+        else:
+            assert queue.process_with_heartbeats(connection, executor, process, MESSAGE) == "persisted"
+    assert callbacks
 
 
 def test_topology_has_durable_safe_retry_and_dlq():
@@ -335,7 +369,8 @@ def test_activity_heartbeat_refreshes_during_long_processing_without_blocking_am
     now = [0]
     calls = []
     checks = iter([False, False, False, True])
-    future = SimpleNamespace(done=lambda: next(checks), result=lambda: 'finished')
+    future = SimpleNamespace(done=lambda: next(checks), result=lambda: 'finished',
+                             add_done_callback=lambda callback: None)
     executor = SimpleNamespace(submit=lambda *a: future)
     def io(**kwargs):
         now[0] += 16

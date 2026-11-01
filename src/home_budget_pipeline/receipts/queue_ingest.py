@@ -732,6 +732,13 @@ def handle_worker_delivery(
 def process_with_heartbeats(connection, executor, process, message, progress=None):
     """Keep AMQP I/O on its owning thread while OCR/DB work runs elsewhere."""
     future = executor.submit(process, message)
+    # A DB result often completes in milliseconds. Wake the AMQP owner's I/O
+    # wait immediately instead of paying the full heartbeat poll per message.
+    # Only Pika's thread-safe callback API is touched by the processing thread;
+    # result handling and ACKs remain on the connection's owning thread.
+    future.add_done_callback(
+        lambda _: connection.add_callback_threadsafe(lambda: None)
+    )
     next_progress = time.monotonic() + 15
     while not future.done():
         connection.process_data_events(time_limit=1)
