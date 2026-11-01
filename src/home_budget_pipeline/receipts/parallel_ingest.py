@@ -22,6 +22,7 @@ from typing import Callable
 
 from .. import telemetry
 from . import ingest as scan
+from .sources import reference_for
 from receipt_datetime import date_part, extract_transaction_datetime, allows_filename_date
 from receipt_evidence import attach_evidence, find_match, resolve_merchant_alias, upsert_evidence
 from receipt_payment import extract_payment_provenance
@@ -440,7 +441,7 @@ def _read_or_create_pages(
 def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool) -> tuple[scan.ScannedReceipt, bool]:
     source_sha256 = scan.sha256_file(path)
     try:
-        source_reference = path.relative_to(root).as_posix() if root.is_dir() else path.name
+        source_reference = reference_for(path, root) if root.is_dir() else path.name
     except ValueError:
         source_reference = path.name
     pages, cache_hit = _read_or_create_pages(
@@ -521,7 +522,7 @@ def parse_scans_parallel(
     def report(path: Path, action: str, completed: int) -> None:
         if progress is not None:
             try:
-                reference = path.relative_to(root).as_posix() if root.is_dir() else path.name
+                reference = reference_for(path, root) if root.is_dir() else path.name
             except ValueError:
                 reference = path.name
             progress(f"[{completed}/{len(paths)}] {action} {reference}")

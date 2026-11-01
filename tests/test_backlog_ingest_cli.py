@@ -8,7 +8,7 @@ def test_receipt_root_defaults_from_home_budget_data_root(monkeypatch):
 
     args = backlog_ingest.parse_args([])
 
-    assert args.receipt_root == "/Volumes/files/brownrook/home-budget/receipts/raw/scanned/inbox"
+    assert args.receipt_root == "/Volumes/files/brownrook/home-budget/receipts/raw/scanned"
     assert args.ocr_cache == "/Volumes/files/brownrook/home-budget/receipts/derived/ocr-cache"
 
 

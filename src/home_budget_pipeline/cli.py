@@ -18,8 +18,8 @@ from .receipts import ingest as scan
 
 def _receipt_root_default() -> str:
     return backlog_ingest._default_path(
-        "receipts/raw/scanned/inbox",
-        "/data/receipts/raw/scanned/inbox",
+        "receipts/raw/scanned",
+        "/data/receipts/raw/scanned",
         "RECEIPT_SOURCE_ROOT",
     )
 

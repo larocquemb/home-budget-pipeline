@@ -23,6 +23,7 @@ from .. import receipt_lineage
 from . import backlog_ingest as backlog
 from .message import MAX_ATTEMPTS, InvalidReceiptMessage, ReceiptMessage
 from .parallel_ingest import _cache_path, has_ocr_cache
+from .sources import source_roots, reference_for, discover_sources
 
 LOG = logging.getLogger(__name__)
 
@@ -266,8 +267,26 @@ def publish_confirmed(
             receipt_lineage.record(observed, 'queued', queue=exchange, batch_id=batch_id)
 
 
-def publication_plan(
-    conn, root: Path, ingest_schema: str = "ingest", *, cache_dir: Path | None = None,
+def publication_plan(conn, root: Path, ingest_schema="ingest", *, cache_dir=None):
+    # Validate every configured source before planning or publishing any work.
+    roots = source_roots(root)
+    for _, physical_root in roots:
+        if not physical_root.is_dir():
+            raise ValueError(f"Receipt source directory does not exist: {physical_root}")
+    messages = {}
+    summary = dict(discovered=0, skipped=0, exhausted=0, cache_missing=0, published=0)
+    for _, physical_root in roots:
+        planned, counts = _publication_plan_single(
+            conn, physical_root, ingest_schema, cache_dir=cache_dir, reference_root=root)
+        messages.update((m.message_id, m) for m in planned)
+        for key in summary:
+            summary[key] += counts[key]
+    summary['published'] = len(messages)
+    return list(messages.values()), summary
+
+
+def _publication_plan_single(
+    conn, root: Path, ingest_schema: str = "ingest", *, cache_dir: Path | None = None, reference_root: Path,
 ) -> tuple[list[ReceiptMessage], dict[str, int]]:
     """Queue unfinished receipts and refresh completed receipts missing OCR caches."""
     if not root.is_dir():
@@ -285,7 +304,7 @@ def publication_plan(
         exhausted = {row[0] for row in cur.fetchall()}
     missing_cache = [
         candidate for candidate in plan.skipped
-        if not has_ocr_cache(cache_dir, candidate.path.relative_to(root).as_posix(), candidate.source_sha256)
+        if not has_ocr_cache(cache_dir, reference_for(candidate.path, reference_root), candidate.source_sha256)
     ]
     completed = {}
     if missing_cache:
@@ -302,15 +321,15 @@ def publication_plan(
     for candidate in plan.pending:
         if candidate.source_sha256 in exhausted:
             continue
-        reference = candidate.path.relative_to(root).as_posix()
+        reference = reference_for(candidate.path, reference_root)
         message = ReceiptMessage(candidate.source_sha256, reference)
-        message.resolve_source(root)
+        message.resolve_source(reference_root)
         messages.setdefault(message.message_id, message)
     reprocess_messages = {}
     for candidate in missing_cache:
         if candidate.source_sha256 not in completed:
             continue  # Another worker has already started processing this source.
-        reference = candidate.path.relative_to(root).as_posix()
+        reference = reference_for(candidate.path, reference_root)
         # Repeated scans of the same completion publish the same request. A later
         # completion followed by cache deletion creates a fresh request/budget.
         request_id = str(uuid5(
@@ -318,7 +337,7 @@ def publication_plan(
             f"ledger:missing-ocr-cache:{candidate.source_sha256}:{reference}:{completed[candidate.source_sha256]}",
         ))
         message = ReceiptMessage(candidate.source_sha256, reference, version=2, request_id=request_id)
-        message.resolve_source(root)
+        message.resolve_source(reference_root)
         reprocess_messages.setdefault(message.message_id, message)
     messages.update(reprocess_messages)
     return list(messages.values()), {
@@ -341,8 +360,7 @@ def publish_reprocess(args) -> int:
         root = Path(args.receipt_root).expanduser().resolve()
         # Validate the reference before reading or hashing the selected source.
         selection = ReceiptMessage("0" * 64, args.source_reference, version=2, request_id=request_id)
-        selection.resolve_source(root)
-        path = root / selection.source_reference
+        path = selection.resolve_source(root)
         if not path.is_file():
             raise ValueError(f"Receipt not found: {selection.source_reference}")
         if path.suffix.lower() not in backlog.scan.SUPPORTED_EXTS:
@@ -400,7 +418,7 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
         root = Path(args.receipt_root).expanduser().resolve()
         if not root.is_dir():
             raise ValueError("receipt root must be an existing directory")
-        paths = backlog.scan.discover_scans(root)
+        paths = discover_sources(root)
         discovered = len(paths)
         source_reference = getattr(args, "source_reference", None)
         if source_reference:
@@ -420,7 +438,7 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
         sources = []
         cache_dir = Path(args.ocr_cache).expanduser().resolve()
         for path in paths:
-            reference = path.relative_to(root).as_posix()
+            reference = reference_for(path, root)
             source_sha256 = backlog.scan.sha256_file(path)
             if (
                 cache_only
@@ -514,8 +532,7 @@ def rebuild_cache_message(conn, message: ReceiptMessage, root: Path, cache_dir: 
 
 def process_message(message: ReceiptMessage, args) -> str:
     root = Path(args.receipt_root).expanduser().resolve()
-    message.resolve_source(root)
-    path = root / message.source_reference
+    path = message.resolve_source(root)
     conn = backlog.scan._db_connect(args.db_dsn)
     try:
         if message.version == 3:
@@ -805,7 +822,7 @@ def consume_worker(
 def add_arguments(parser, mode: str) -> None:
     parser.set_defaults(queue_mode=mode, handler=run)
     parser.add_argument("receipt_root", nargs="?", default=backlog._default_path(
-        "receipts/raw/scanned/inbox", "/data/receipts/raw/scanned/inbox", "RECEIPT_SOURCE_ROOT",
+        "receipts/raw/scanned", "/data/receipts/raw/scanned", "RECEIPT_SOURCE_ROOT",
     ))
     parser.add_argument("--db-dsn", default=os.getenv("DATABASE_URL") or os.getenv("HOME_BUDGET_PG_DSN", ""))
     parser.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))

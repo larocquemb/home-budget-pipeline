@@ -166,7 +166,8 @@ def reset_receipt_for_retry(conn, source_reference: str, *, ingest_schema: str =
 
 def _source_reference(candidate: ReceiptCandidate, root: Path) -> str:
     try:
-        return candidate.path.relative_to(root).as_posix()
+        from .sources import reference_for
+        return reference_for(candidate.path, root)
     except ValueError:
         return candidate.path.name
 

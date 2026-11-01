@@ -102,8 +102,8 @@ class ReceiptMessage:
             raise InvalidReceiptMessage(str(exc)) from exc
 
     def resolve_source(self, root: Path) -> Path:
-        root = root.resolve()
-        path = (root / self.source_reference).resolve()
-        if not path.is_relative_to(root):
-            raise InvalidReceiptMessage("source_reference resolves outside the receipt root")
-        return path
+        from .sources import resolve_reference
+        try:
+            return resolve_reference(self.source_reference, root)
+        except ValueError as exc:
+            raise InvalidReceiptMessage(str(exc)) from exc
