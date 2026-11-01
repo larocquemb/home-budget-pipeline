@@ -366,6 +366,8 @@ def publish_reprocess(args) -> int:
         if path.suffix.lower() not in backlog.scan.SUPPORTED_EXTS:
             raise ValueError(f"Unsupported receipt file: {selection.source_reference}")
         message = replace(selection, source_sha256=backlog.scan.sha256_file(path))
+        if getattr(args, "use_ocr_cache", False):
+            return publish_cached_reprocess(message, args)
         if args.verbose:
             print(f"Publishing reprocess request {request_id} for {message.source_reference}", file=sys.stderr, flush=True)
         connection = connect_broker(args.rabbitmq_url)
@@ -396,6 +398,49 @@ def publish_reprocess(args) -> int:
         "queue": topology.work,
         "status": "queued",
     })
+    return 0
+
+
+def publish_cached_reprocess(message: ReceiptMessage, args) -> int:
+    """Re-extract retained OCR through the normal durable result collector."""
+    from .parallel_ingest import _parse_scan_cached
+    from .ocr_results import result_messages_for_receipt
+    from .ocr_collector import ResultTopology, declare_result_topology, publish_result
+
+    root = Path(args.receipt_root).expanduser().resolve()
+    path = message.resolve_source(root)
+    cache_dir = Path(args.ocr_cache).expanduser().resolve()
+    cache_path = _cache_path(cache_dir, message.source_reference, message.source_sha256)
+    # Retain the original run/pass identities: this is a new extraction request,
+    # not a claim that OCR was executed again. Legacy cache paths lack complete
+    # current run provenance and must first be refreshed by the normal worker.
+    with cache_rebuild_lock(cache_dir, message.source_sha256):
+        if not cache_path.is_file():
+            raise ValueError("A current path-based OCR cache is required; run a full reprocess instead")
+        cache_hash = backlog.scan.sha256_file(cache_path)
+        receipt, hit = _parse_scan_cached(path, root, cache_dir, False, require_cache=True)
+        if (not hit or receipt.source_sha256 != message.source_sha256
+                or backlog.scan.sha256_file(path) != message.source_sha256
+                or backlog.scan.sha256_file(cache_path) != cache_hash):
+            raise ValueError("Receipt source or cache changed during cached re-extraction")
+        events = result_messages_for_receipt(
+            receipt, cache_path=cache_path, cache_root=cache_dir,
+            persistence_mode="reprocess", request_id=message.request_id,
+        )
+        connection = connect_broker(args.rabbitmq_url)
+        try:
+            channel = connection.channel()
+            topology = ResultTopology()
+            declare_result_topology(channel, topology)
+            for event in events:
+                publish_result(channel, topology.work, event)
+        finally:
+            if connection.is_open:
+                connection.close()
+    _print_json({"source_reference": message.source_reference,
+                 "request_id": message.request_id, "status": "cached_results_published",
+                 "run_uuid": events[0].run_uuid, "extraction_status": receipt.extraction_status,
+                 "cache_hit": True, "ocr_executed": False})
     return 0
 
 

@@ -107,6 +107,20 @@ canonical extraction and line items, even if it already succeeded. The
 date-relative source reference is preserved. The command exits after RabbitMQ
 confirms publication; OCR runs asynchronously in the consumer.
 
+When OCR is already available and only extraction needs updating, use:
+
+```bash
+ledger --env-file .env.dev receipts reprocess 'YYYY-MM-DD/receipt.pdf' --use-ocr-cache
+```
+
+This requires a readable cache matching the source SHA-256. It runs current
+extraction rules and publishes results directly to the durable collector,
+without executing OCR or changing cache bytes. Original OCR run/pass identities
+are retained. The collector replaces extraction through the normal reprocess
+path, preserving manual allocation protections and validation warnings. Missing
+or mismatched caches fail instead of silently running OCR. Publication is
+asynchronous; check the saved Ledger result after collection.
+
 A successful publication ends with output like:
 
 ```json

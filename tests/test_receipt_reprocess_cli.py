@@ -109,3 +109,33 @@ def test_unconfirmed_publication_reports_no_success_and_can_be_retried(receipt_e
     channel.basic_publish.side_effect = None
     assert cli.main(command) == 0
     assert channel.basic_publish.call_args.kwargs["body"] == first_body
+
+
+def test_cached_reprocess_publishes_extraction_directly_to_collector(receipt_env, tmp_path, capsys):
+    from home_budget_pipeline.receipts.ocr_results import OcrResultMessage
+    _, path, connection, _ = receipt_env
+    cache = tmp_path / 'cache'
+    target = cache / (REFERENCE + '.json')
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps({
+        'metadata': {'source_sha256': cli.scan.sha256_file(path), 'cache_version': 1,
+                     'run_uuid': '11111111-1111-4111-8111-111111111111', 'ocr_passes': []},
+        'page_text': ['SYNTHETIC MARKET\n2026-10-25\nMilk $4.00\nTOTAL $4.00'],
+    }))
+    assert cli.main(['receipts', 'reprocess', REFERENCE, '--use-ocr-cache',
+                     '--ocr-cache', str(cache), '--request-id', REQUEST_ID]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['ocr_executed'] is False
+    publication = connection.channel.return_value.basic_publish.call_args.kwargs
+    assert publication['exchange'] == 'ocr.results.v1.work'
+    event = OcrResultMessage.from_bytes(publication['body'])
+    assert event.payload['receipt']['merchant'] == 'SYNTHETIC MARKET'
+    assert event.payload['request_id'] == REQUEST_ID
+    assert event.payload['persistence_mode'] == 'reprocess'
+
+
+def test_cached_reprocess_fails_before_broker_when_cache_missing(receipt_env, tmp_path):
+    *_, connect = receipt_env
+    assert cli.main(['receipts', 'reprocess', REFERENCE, '--use-ocr-cache',
+                     '--ocr-cache', str(tmp_path / 'missing')]) == 1
+    connect.assert_not_called()

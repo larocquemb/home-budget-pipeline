@@ -159,6 +159,8 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     reprocess.add_argument("--receipt-root", default=_receipt_root_default())
     reprocess.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))
     reprocess.add_argument("--request-id", help="Reuse a UUID when retrying an uncertain publication.")
+    reprocess.add_argument("--use-ocr-cache", action="store_true", help="Re-extract from a matching existing OCR cache and publish results without running OCR again.")
+    reprocess.add_argument("--ocr-cache", default=_ocr_cache_default())
     reprocess.add_argument("--verbose", action="store_true", help="Print publication progress to stderr.")
     from .receipts.queue_ingest import publish_reprocess
     reprocess.set_defaults(handler=publish_reprocess)
