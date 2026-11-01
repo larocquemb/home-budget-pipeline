@@ -1065,6 +1065,13 @@ def _merchant_name_from_store_header(text: str, header: str) -> Optional[str]:
 
 def extract_merchant(text: str) -> Optional[str]:
     header_lines = text.splitlines()[:12]
+    # Email PDFs can repeat each header glyph in overlapping text layers.
+    # Read only the explicit subject issuer, never To/From addresses.
+    subject = re.compile(r'^\s*S+U+B+J+E+C+T+\s*:+\s*(.+)$',re.I)
+    for raw in header_lines:
+        match = subject.match(raw)
+        if match and (issuer := merchant_title_hint(match[1])):
+            return issuer
     # Browser exports can prepend a timestamp and page title. Keep only the
     # title's merchant when its spelling is supported by the document URL.
     hosts = re.findall(r'(?:https?://|www\.)([A-Za-z0-9.-]+)', text, re.I)
@@ -1106,12 +1113,46 @@ def extract_merchant(text: str) -> Optional[str]:
             return normalize_merchant(line)
     for raw in header_lines:
         line = normalize_line(raw)
+        if re.search(r'\b(?:ship\s+to|bill\s+to|sold\s+to)\b',line,re.I):
+            break
         if (not line or MONEY_RE.search(line) or len(line) > 70
+                or '@' in line
                 or not re.search(r'[A-Za-z]{4}', line) and not re.fullmatch(r'[A-Z]{3}', line)):
             continue
-        if re.search(r"[A-Za-z]{3}", line) and not re.search(r"\b(receipt|invoice|date|time|tel|phone|store|register|location|branch|cashier|customer|loyalty|member|purchases?|orders?|transaction|subtotal|total|gst|pst|hst|gift\s+cards?|thank\s+you)\b", line, re.I):
+        if re.search(r"[A-Za-z]{3}", line) and not re.search(r"\b(receipt|invoice|date|time|tel|phone|store|register|location|branch|cashier|customer|loyalty|member|purchases?|orders?|transaction|subtotal|total|gst|pst|hst|gift\s+cards?|thank\s+you|delivered|delivery|subject|payment)\b", line, re.I):
             return normalize_merchant(line)
     return None
+
+
+def merchant_title_hint(title: str) -> Optional[str]:
+    name = ''
+    if '|' in title:
+        name = title.rsplit('|',1)[1]
+    else:
+        match = re.match(r'^Your\s+(.+?)\s+(?:receipt|invoice)\b',title,re.I)
+        if match:
+            name = match[1]
+    name = normalize_line(name).strip()
+    if (len(name) <= 100 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 &'’.-]{2,}",name)
+            and len(re.findall(r'[A-Za-z]',name)) >= 3
+            and not re.fullmatch(r'(?:receipt|invoice|orders?|purchases?|payment|cash|card|pdf)',name,re.I)):
+        return normalize_merchant(name)
+    return None
+
+
+def pdf_merchant_hint(path: Path) -> Optional[str]:
+    """Read an issuer from a browser-export title, preserving all OCR text."""
+    filename = path.stem
+    filename_hint = merchant_title_hint(filename if filename.lower().startswith('your ') else 'Your '+filename)
+    if path.suffix.lower() != '.pdf':
+        return filename_hint
+    try:
+        import pypdfium2 as pdfium
+        with pdfium.PdfDocument(path) as document:
+            title = document.get_metadata_dict().get('Title') or ''
+    except Exception:
+        return filename_hint
+    return merchant_title_hint(title) or filename_hint
 
 
 def extract_merchant_store(text: str, merchant_hint: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
@@ -1134,6 +1175,8 @@ def extract_merchant_store(text: str, merchant_hint: Optional[str] = None) -> Tu
     store = next(iter(stores.values())) if len(stores) == 1 else None
     if merchant and store and _line_key(merchant) == _line_key(store):
         merchant = merchant_hint if _line_key(merchant_hint or '') != _line_key(store) else None
+    elif not merchant and merchant_hint and _line_key(merchant_hint) != _line_key(store or ''):
+        merchant = merchant_hint
     if merchant:
         for pattern, replacement in MERCHANT_ALIASES:
             match = pattern.search(merchant)
@@ -1440,7 +1483,7 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
     from .datetime import allows_filename_date
     pages = extract_page_text(path)
     text = merge_page_text(pages)
-    merchant, store = extract_merchant_store(text)
+    merchant, store = extract_merchant_store(text, pdf_merchant_hint(path))
     subtotal, tax, total = extract_totals(text)
     filename_date, filename_merchant, filename_total = receipt_info_from_filename(path)
     payment = extract_payment_provenance(text)
@@ -1518,7 +1561,7 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                 source_sha256 = EXCLUDED.source_sha256,
                 order_date = CASE WHEN expenses.raw_payload ? 'receipt_date_correction'
                     THEN expenses.order_date ELSE EXCLUDED.order_date END,
-                store_name = EXCLUDED.store_name,
+                store_name = COALESCE(EXCLUDED.store_name, expenses.store_name),
                 receipt_item_subtotal = EXCLUDED.receipt_item_subtotal,
                 receipt_gst = EXCLUDED.receipt_gst,
                 receipt_pst = EXCLUDED.receipt_pst,

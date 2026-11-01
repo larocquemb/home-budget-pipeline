@@ -199,7 +199,7 @@ def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = 
                      WHERE f.evidence_id={schema}.receipt_evidence.id
                        AND f.corrected_fields ? 'transaction_datetime'
                 ) THEN {schema}.receipt_evidence.transaction_datetime ELSE EXCLUDED.transaction_datetime END,
-                merchant = EXCLUDED.merchant,
+                merchant = COALESCE(EXCLUDED.merchant, {schema}.receipt_evidence.merchant),
                 receipt_id = EXCLUDED.receipt_id,
                 total = EXCLUDED.total,
                 payment_method = EXCLUDED.payment_method,
