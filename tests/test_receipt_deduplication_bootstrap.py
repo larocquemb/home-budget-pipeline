@@ -3,7 +3,7 @@ from pathlib import Path
 
 def test_receipt_duplicate_link_table_contract():
     text = Path("sql/receipt_deduplication.sql").read_text()
-    assert "CREATE TABLE budget.receipt_duplicate_links" in text
+    assert "CREATE TABLE IF NOT EXISTS budget.receipt_duplicate_links" in text
     assert "left_evidence_id BIGINT NOT NULL" in text
     assert "right_evidence_id BIGINT NOT NULL" in text
     assert "canonical_expense_pk BIGINT" in text
@@ -12,7 +12,7 @@ def test_receipt_duplicate_link_table_contract():
     assert "reasons JSONB NOT NULL" in text
     assert "resolution_status TEXT NOT NULL" in text
     assert "CONSTRAINT uq_receipt_duplicate_pair UNIQUE" in text
-    assert "CREATE TABLE budget.canonical_item_source_resolutions" in text
+    assert "CREATE TABLE IF NOT EXISTS budget.canonical_item_source_resolutions" in text
 
 
 def test_fresh_bootstrap_stages_receipt_deduplication_without_migration():

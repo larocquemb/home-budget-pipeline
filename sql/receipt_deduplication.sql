@@ -2,7 +2,7 @@
 
 BEGIN;
 
-CREATE TABLE budget.receipt_duplicate_links (
+CREATE TABLE IF NOT EXISTS budget.receipt_duplicate_links (
     id BIGSERIAL PRIMARY KEY,
     left_evidence_id BIGINT NOT NULL REFERENCES budget.receipt_evidence(id) ON DELETE CASCADE,
     right_evidence_id BIGINT NOT NULL REFERENCES budget.receipt_evidence(id) ON DELETE CASCADE,
@@ -23,14 +23,14 @@ CREATE TABLE budget.receipt_duplicate_links (
     CONSTRAINT uq_receipt_duplicate_pair UNIQUE (left_evidence_id, right_evidence_id)
 );
 
-CREATE INDEX idx_receipt_duplicate_links_canonical
+CREATE INDEX IF NOT EXISTS idx_receipt_duplicate_links_canonical
     ON budget.receipt_duplicate_links (canonical_expense_pk)
     WHERE canonical_expense_pk IS NOT NULL;
-CREATE INDEX idx_receipt_duplicate_links_review
+CREATE INDEX IF NOT EXISTS idx_receipt_duplicate_links_review
     ON budget.receipt_duplicate_links (resolution_status, disposition, score DESC)
     WHERE resolution_status = 'pending';
 
-CREATE TABLE budget.canonical_item_source_resolutions (
+CREATE TABLE IF NOT EXISTS budget.canonical_item_source_resolutions (
     expense_pk BIGINT PRIMARY KEY REFERENCES budget.expenses(id) ON DELETE CASCADE,
     evidence_id BIGINT NOT NULL REFERENCES budget.receipt_evidence(id) ON DELETE RESTRICT,
     source_type TEXT NOT NULL,

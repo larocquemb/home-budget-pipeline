@@ -111,6 +111,13 @@ jobs:
             -f sql/receipt_processing.sql
           psql -h localhost -U test -d home_budget \
             -v ON_ERROR_STOP=1 \
+            -f sql/receipt_deduplication.sql
+          # Exercise additive setup twice, as on an already initialized database.
+          psql -h localhost -U test -d home_budget \
+            -v ON_ERROR_STOP=1 \
+            -f sql/receipt_deduplication.sql
+          psql -h localhost -U test -d home_budget \
+            -v ON_ERROR_STOP=1 \
             -f sql/schema_constraints.sql
           psql -h localhost -U test -d home_budget \
             -v ON_ERROR_STOP=1 \

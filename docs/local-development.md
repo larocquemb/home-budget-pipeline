@@ -801,6 +801,10 @@ deletion. Later scanned imports preserve verified canonical allocations.
 
 ## Review duplicate receipt evidence
 
+For an existing database, `ledger --env-file .env.dev database setup` adds the
+duplicate tables without rebuilding receipt history. Fresh bootstrap and CI load
+the same idempotent schema.
+
 Imports record duplicate candidates without creating another purchase when a
 plausible evidence match needs review. A single unambiguous exact match with a matching receipt identifier containing
 at least six digits and an observed time can link to an existing expense
