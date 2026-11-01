@@ -127,11 +127,10 @@ def clean_local_cache(args):
 
 
 def rebuild_database(args):
-    if args.target == 'production':
-        from .production_rebuild import run
-        return run(args)
+    if args.target not in ('arsene-dev','arsene-test'):
+        raise ValueError('Unsupported application database target; Kubernetes maintenance belongs to infrastructure tooling')
     if getattr(args,'plan',False):
-        raise ValueError('--plan is supported for the production target only; no reset was run')
+        raise ValueError('Infrastructure plan flags are not supported by ledger; no reset was run')
     command = [sys.executable, str(ROOT / 'scripts/development_backend.py'), 'reset',
                '--env-file', str(_env_path(args)), '--confirm', args.confirm]
     if args.target == 'arsene-test':

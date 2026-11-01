@@ -229,10 +229,8 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     database = commands.add_parser("database", help="Manage the PostgreSQL database.")
     database_commands = database.add_subparsers(dest="database_command", required=True)
     rebuild_db = database_commands.add_parser("rebuild", help="Delete and recreate application schemas on an explicit target.")
-    rebuild_db.add_argument("--target", choices=("arsene-dev", "arsene-test", "production"), required=True)
-    rebuild_db.add_argument("--confirm", default="", help="Exact database name; production requires home_budget and creates no backup.")
-    rebuild_db.add_argument("--plan", action="store_true", help="Inspect the production plan without changing the database or workloads.")
-    rebuild_db.add_argument("--kube-context", default="brownrook-k3s1")
+    rebuild_db.add_argument("--target", choices=("arsene-dev", "arsene-test"), required=True)
+    rebuild_db.add_argument("--confirm", default="", help="Exact development database name.")
     rebuild_db.set_defaults(handler=_rebuild_database)
     setup = database_commands.add_parser("setup", help="Initialize or upgrade the database schema.")
     setup.add_argument(

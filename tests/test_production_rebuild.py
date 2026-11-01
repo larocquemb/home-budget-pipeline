@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from home_budget_pipeline import production_rebuild as prod
+import importlib.util
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('production_rebuild_infra',Path(__file__).resolve().parents[1]/'scripts/production_rebuild.py')
+prod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(prod)
 from home_budget_pipeline import local_operations,cli
 
 
@@ -13,13 +17,20 @@ def test_production_requires_exact_confirmation_before_kubernetes(monkeypatch):
         prod.run(Namespace(plan=False,confirm='home_budget_dev'))
 
 
-def test_production_dispatch_does_not_use_arsene_reset_script(monkeypatch):
-    called=[]
-    monkeypatch.setattr(prod,'run',lambda args:called.append(args) or 0)
-    args=Namespace(target='production')
-    assert local_operations.rebuild_database(args)==0 and called==[args]
-    parsed=cli.build_parser().parse_args(['database','rebuild','--target','production','--plan'])
-    assert parsed.plan and parsed.kube_context=='brownrook-k3s1'
+def test_ledger_cannot_dispatch_kubernetes_or_production_reset(monkeypatch):
+    monkeypatch.setattr(local_operations.subprocess,'run',lambda *a,**kw:pytest.fail('dispatched infrastructure'))
+    with pytest.raises(ValueError,match='infrastructure tooling'):
+        local_operations.rebuild_database(Namespace(target='production'))
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(['database','rebuild','--target','production'])
+
+
+def test_infrastructure_defaults_to_plan_without_confirmation(monkeypatch):
+    monkeypatch.delenv('PRODUCTION_DB_CONFIRM',raising=False)
+    observed=[]
+    monkeypatch.setattr(prod,'run',lambda args:observed.append(args) or 0)
+    assert prod.main([])==0 and observed[-1].plan
+    assert prod.main(['--confirm','home_budget'])==0 and not observed[-1].plan
 
 
 def test_bootstrap_is_one_transaction_and_preserves_function_begin(tmp_path):

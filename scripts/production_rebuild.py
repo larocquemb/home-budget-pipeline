@@ -1,4 +1,5 @@
-"""Operator-invoked, no-backup production schema rebuild through Kubernetes."""
+"""Infrastructure-only, no-backup production schema rebuild through Kubernetes."""
+import argparse
 import datetime
 import hashlib
 import json
@@ -10,7 +11,7 @@ import subprocess
 import sys
 import uuid
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = ('ingest_blue','ingest_green','ingest','ops','enrichment','lineage','budget')
 SKIP = 'argocd.argoproj.io/skip-reconcile'
 PAUSE = ('autoscaling.keda.sh/paused','autoscaling.keda.sh/paused-replicas')
@@ -200,3 +201,20 @@ def run(args):
         (directory/'state.private.json').write_text(json.dumps(state,indent=2))
     print('Production schemas rebuilt and workload settings restored. Source files, OCR cache and RabbitMQ queues are unchanged.',flush=True)
     return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--plan',action='store_true')
+    parser.add_argument('--confirm',default=os.getenv('PRODUCTION_DB_CONFIRM',''))
+    parser.add_argument('--kube-context',default=os.getenv('KUBE_CONTEXT','brownrook-k3s1'))
+    args = parser.parse_args(argv)
+    # Make's default invocation is a read-only plan. Exact database-name
+    # confirmation is required to perform the infrastructure operation.
+    if not args.confirm:
+        args.plan = True
+    return run(args)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
