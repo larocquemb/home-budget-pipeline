@@ -88,10 +88,30 @@ def reconcile(connect, prefix, *, scanned_root, electronic_root, actor, apply=Fa
             cur.execute('SELECT * FROM budget.receipt_evidence WHERE source_reference LIKE %s ORDER BY id'
                         + (' FOR UPDATE' if apply else ''), (pattern,))
             rows = cur.fetchall()
+            # A file can disappear before OCR creates receipt evidence. Retain
+            # that discovery in the registry and archive it through lineage,
+            # without fabricating an OCR/evidence or accounting record.
+            cur.execute('''SELECT r.*, COALESCE((
+                    SELECT (ev.payload->'after_source_archived')='true'::jsonb
+                      FROM lineage.receipt_events ev WHERE ev.source_sha256=r.source_sha256
+                       AND ev.payload->>'event'='receipt_source_reconciled'
+                     ORDER BY ev.occurred_at DESC,ev.id DESC LIMIT 1),FALSE) AS source_archived
+                FROM ingest.receipts r WHERE r.source_reference LIKE %s
+                 AND NOT EXISTS (SELECT 1 FROM budget.receipt_evidence e
+                                  WHERE e.source_sha256=r.source_sha256)
+                ORDER BY r.source_sha256''' + (' FOR UPDATE OF r' if apply else ''), (pattern,))
+            known = {row['source_sha256'] for row in rows}
+            for discovery in cur.fetchall():
+                if discovery['source_sha256'] in known:
+                    continue
+                rows.append({**discovery, 'id':'registry:'+discovery['source_sha256'],
+                             'registry_only':True,
+                             'raw_payload':{'source_archived':discovery['source_archived']}})
             changes = plan(rows, files)
             token = hashlib.sha256(json.dumps({'rows': rows, 'files': files}, default=str, sort_keys=True).encode()).hexdigest()
             if not apply:
-                return {'apply': False, 'version': token, 'source_files': len(files), 'changes': changes}
+                return {'apply': False, 'version': token, 'source_files': len(files), 'changes': changes,
+                        'source_references':{row['source_sha256']:row['source_reference'] for row in rows}}
             if not actor.strip() or expected_version != token:
                 raise ValueError('Apply requires a reviewer and the current preview version')
             # Check the directory snapshot again before making any metadata writes.
@@ -103,8 +123,9 @@ def reconcile(connect, prefix, *, scanned_root, electronic_root, actor, apply=Fa
                 before = by_id[change['evidence_id']]
                 payload = dict(before.get('raw_payload') or {})
                 payload['source_archived'] = change['action'] == 'archive'
-                cur.execute('UPDATE budget.receipt_evidence SET source_reference=%s,raw_payload=%s,updated_at=NOW() WHERE id=%s',
-                    (change['new_reference'], Jsonb(payload), before['id']))
+                if not before.get('registry_only'):
+                    cur.execute('UPDATE budget.receipt_evidence SET source_reference=%s,raw_payload=%s,updated_at=NOW() WHERE id=%s',
+                        (change['new_reference'], Jsonb(payload), before['id']))
                 if change['action'] != 'archive':
                     cur.execute('UPDATE ingest.receipts SET source_reference=%s,updated_at=NOW() WHERE source_sha256=%s',
                         (change['new_reference'], before['source_sha256']))

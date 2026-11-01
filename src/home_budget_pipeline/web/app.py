@@ -73,6 +73,7 @@ def _post_ocr_text(evidence: dict, expense: Optional[dict]) -> str:
     extracted_merchant = evidence.get("merchant") or (expense or {}).get("store_name")
     lines = [
         f"Merchant: {prefer_filename_merchant(extracted_merchant, filename_merchant) or ''}",
+        f"Store: {evidence.get('store') or (expense or {}).get('store') or ''}",
         f"Date/time: {evidence.get('transaction_datetime') or (expense or {}).get('transaction_datetime') or (expense or {}).get('order_date') or filename_date or ''}",
         f"Receipt ID: {evidence.get('receipt_id') or ''}",
         f"Total: {evidence.get('total') or (expense or {}).get('expense_total') or filename_total or ''}",

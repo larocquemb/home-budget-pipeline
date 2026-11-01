@@ -37,6 +37,7 @@ _RECEIPT_SORT_COLUMNS = {
     'expense_id': 're.expense_pk',
     'receipt': 'r.source_reference',
     'merchant': 'COALESCE(re.merchant, e.store_name)',
+    'store': "re.raw_payload->>'store'",
     'date': 'COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp)',
     'total': 'COALESCE(re.total, e.expense_total)',
     'processing': 's.status',
@@ -102,6 +103,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
     conditions, params = [], []
     if not include_archived:
         conditions.append("COALESCE(re.raw_payload->>'source_archived','false') <> 'true'")
+        conditions.append('NOT r.source_archived')
     if bounds:
         conditions.append('COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp) >= %s '
                           'AND COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp) < %s')
@@ -112,6 +114,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
         conditions.append("""(
             concat_ws(' ', re.expense_pk::text, r.source_reference,
                       COALESCE(re.merchant, e.store_name),
+                      re.raw_payload->>'store',
                       COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp)::text,
                       COALESCE(re.total, e.expense_total)::text,
                       s.status, COALESCE(re.extraction_status, e.extraction_status)) ILIKE %s
@@ -128,8 +131,9 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
         SELECT r.source_sha256, r.source_reference,
                COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts,
                re.id AS evidence_id, re.expense_pk,
-               COALESCE(re.raw_payload->>'source_archived','false')='true' AS source_archived,
+               (COALESCE(re.raw_payload->>'source_archived','false')='true' OR r.source_archived) AS source_archived,
                COALESCE(re.merchant, e.store_name) AS merchant,
+               re.raw_payload->>'store' AS store,
                COALESCE(re.transaction_datetime, e.transaction_datetime,
                         e.order_date::timestamp) AS transaction_datetime,
                COALESCE(re.total, e.expense_total) AS total,
@@ -402,7 +406,7 @@ def receipts_page(
     q, month, _ = _receipt_filters(q, month)
     result = _receipt_list(service, limit=limit, offset=offset, sort=sort, direction=direction, q=q, month=month, include_archived=include_archived)
     headers = []
-    for key, label in [('expense_id', 'Expense ID'), ('receipt', 'Receipt'), ('merchant', 'Merchant'),
+    for key, label in [('expense_id', 'Expense ID'), ('receipt', 'Receipt'), ('merchant', 'Merchant'), ('store', 'Store'),
                        ('date', 'Date/time'), ('total', 'Total'), ('processing', 'Processing'),
                        ('extraction', 'Extraction')]:
         next_direction = 'desc' if sort == key and direction == 'asc' else 'asc'
@@ -438,6 +442,7 @@ def receipts_page(
             f'<td>{expense_link}</td>'
             f'<td><a href="{receipt_url(source_sha256)}">{esc(label)}</a> · <a href="{receipt_graph_url(source_sha256)}">Processing graph</a><br><small class="muted">{esc(source_reference)}{archive_note}</small></td>'
             f"<td>{esc(receipt.get('merchant'))}</td>"
+            f"<td>{esc(receipt.get('store'))}</td>"
             f"<td>{esc(receipt.get('transaction_datetime'))}</td>"
             f'<td class="num">{money(receipt.get("total"))}</td>'
             f"<td>{esc(receipt.get('processing_status'))}</td>"
@@ -460,7 +465,7 @@ def receipts_page(
         '<p class="muted">Purchase month uses the displayed receipt date. Receipts without a date are excluded when a month is selected. '
         'Search also matches filenames and folder names.</p>'
         '<table><thead><tr>' + ''.join(headers) + '</tr></thead><tbody>'
-        + ("".join(rows) or '<tr><td colspan="7" class="muted">No receipts match your search.</td></tr>')
+        + ("".join(rows) or '<tr><td colspan="8" class="muted">No receipts match your search.</td></tr>')
         + "</tbody></table>"
     )
     body += pager(
@@ -613,7 +618,7 @@ def receipt_page(
     filename = Path(source_reference).name or source_reference
     evidence_id = receipt.get("evidence_id")
     expense_pk = receipt.get("expense_pk") or expense.get("expense_pk")
-    merchant = expense.get('store_name') or evidence.get('merchant')
+    merchant = evidence.get('merchant') or expense.get('store_name')
     receipt_date = evidence.get('transaction_datetime') or expense.get('transaction_datetime') or expense.get('order_date')
     total = evidence.get('total')
     if total is None:
@@ -628,6 +633,7 @@ def receipt_page(
     header = f"""<div class="card"><div class="grid">
 <div><strong>Receipt</strong><br>{esc(filename)}</div>
 <div><strong>Merchant</strong><br>{esc(merchant)}</div>
+<div><strong>Store</strong><br>{esc(evidence.get('store') or expense.get('store'))}</div>
 <div><strong>Date/time</strong><br>{esc(receipt_date)}</div>
 <div><strong>Total</strong><br>{money(total)}</div>
 <div><strong>Processing</strong><br>{esc(receipt.get('processing_status'))}</div>

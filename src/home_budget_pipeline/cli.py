@@ -144,6 +144,16 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     sources.add_argument('--apply', action='store_true')
     sources.set_defaults(handler=_reconcile_sources)
 
+    refresh = receipt_commands.add_parser('refresh', help='Scan an input folder, reconcile DB source archives and retire stale OCR caches; preview by default.')
+    refresh.add_argument('--source-prefix', required=True)
+    refresh.add_argument('--ocr-cache', default=_ocr_cache_default())
+    refresh.add_argument('--archive-root', default=str(Path.home()/'.local/share/home-budget-pipeline/retired-ocr-cache'))
+    refresh.add_argument('--reviewer', default='Paul La Rocque')
+    refresh.add_argument('--apply', action='store_true')
+    refresh.add_argument('--expected-version')
+    from .receipts.source_refresh import run as refresh_sources
+    refresh.set_defaults(handler=refresh_sources)
+
     retry = receipt_commands.add_parser(
         "retry", help="Reset a failed or interrupted receipt for the next publish or process command.",
     )
@@ -164,6 +174,14 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     reprocess.add_argument("--verbose", action="store_true", help="Print publication progress to stderr.")
     from .receipts.queue_ingest import publish_reprocess
     reprocess.set_defaults(handler=publish_reprocess)
+
+    identities = receipt_commands.add_parser('refresh-identities', help='Preview or audit merchant/store and payment identifiers from retained receipt text; preserve financial records.')
+    identities.add_argument('source_reference', nargs='?', help='Exact source reference; omit to preview all active receipt evidence.')
+    identities.add_argument('--db-dsn', default=os.getenv('DATABASE_URL') or os.getenv('HOME_BUDGET_PG_DSN', ''))
+    identities.add_argument('--apply', action='store_true')
+    identities.add_argument('--expected-version')
+    from .receipts.identities import run as refresh_identities
+    identities.set_defaults(handler=refresh_identities)
 
     enrich = receipt_commands.add_parser(
         "enrich", help="Enrich all line items belonging to one receipt.",

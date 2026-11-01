@@ -215,7 +215,16 @@ class LedgerQueryService:
     def expense_detail(self, expense_pk: int) -> dict[str, Any] | None:
         rows = self._fetch(
             """
-            SELECT * FROM budget.analytics_expenses WHERE expense_pk = %s
+            SELECT a.*, COALESCE(re.merchant,a.store_name) AS merchant,
+                   COALESCE(re.raw_payload->>'store',e.raw_payload->>'store') AS store
+              FROM budget.analytics_expenses a
+              JOIN budget.expenses e ON e.id=a.expense_pk
+              LEFT JOIN LATERAL (
+                  SELECT merchant,raw_payload FROM budget.receipt_evidence
+                   WHERE expense_pk=a.expense_pk AND raw_payload->>'store' IS NOT NULL
+                   ORDER BY is_primary_source DESC,updated_at DESC,id DESC LIMIT 1
+              ) re ON TRUE
+             WHERE a.expense_pk = %s
             """,
             (expense_pk,),
         )
@@ -239,7 +248,7 @@ class LedgerQueryService:
             """
             SELECT id, evidence_type, source_reference, transaction_datetime,
                    merchant, receipt_id, total, extraction_status,
-                   extraction_confidence, card_last4, has_handwritten_notes,
+                   extraction_confidence, card_last4, raw_payload->>'store' AS store, has_handwritten_notes,
                    has_category_markup
               FROM budget.receipt_evidence
              WHERE expense_pk = %s
@@ -757,7 +766,7 @@ class LedgerQueryService:
             """
             SELECT id, expense_pk, evidence_type, source_reference, source_sha256, raw_payload, mime_type,
                    transaction_datetime, merchant, receipt_id, total,
-                   payment_method, card_last4, extraction_status,
+                   payment_method, card_last4, raw_payload->>'store' AS store, extraction_status,
                    extraction_confidence, raw_text, page_text,
                    raw_payload->'receipt'->'possible_duplicate_expense_pks' AS possible_duplicate_expense_pks,
                    has_handwritten_notes, has_category_markup
@@ -884,6 +893,7 @@ class LedgerQueryService:
                    WHERE source_sha256 = r.source_sha256
                    ORDER BY is_primary_source DESC, id LIMIT 1
               ) re ON TRUE
+             WHERE NOT r.source_archived
         )"""
         count_rows = self._fetch(f"{catalogue} SELECT COUNT(*) AS total_count FROM processing {where}", params)
         total_count = int(count_rows[0]["total_count"]) if count_rows else 0
