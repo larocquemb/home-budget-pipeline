@@ -298,6 +298,33 @@ initialized from the staged bootstrap SQL.
 
 ## Argo CD deployment
 
+Production schema rebuild is an explicit local operator command. It erases the
+application data in `home_budget` without a database backup:
+
+```bash
+ledger database rebuild --target production --plan
+ledger database rebuild --target production --confirm home_budget
+```
+
+Run this from the repository on the Mac, not inside an old production container.
+The command selects the explicit `brownrook-k3s1` context, verifies the production
+database, snapshots workload settings, pauses Argo reconciliation and KEDA,
+suspends CronJobs, and stops/waits for database clients. It refuses active Jobs
+and an already running Argo operation. The complete 11-file bootstrap and schema
+drops run in one transaction. Original controller/replica settings are restored
+afterward. Source files, OCR caches, broker queues, and PostgreSQL volume/roles
+remain intact; resumed workers and CronJobs may import existing files again.
+
+No database dump is made. Private maintenance state, SQL, outputs and a recovery
+`resume.sh` are retained under `.validation/production-rebuild/`; these contain
+workload settings and bootstrap commands, not a copy of the database. If schema
+health cannot be confirmed after an error, clients remain paused for recovery.
+The agent only tested the read-only production plan; it did not execute a wipe.
+
+Controller behavior references:
+[Argo skip reconciliation](https://argo-cd.readthedocs.io/en/stable/user-guide/annotations-and-labels/),
+[KEDA pause annotations](https://keda.sh/docs/2.21/concepts/scaling-deployments/).
+
 Argo CD owns application deployments and workload restarts. `make deploy-k3s`
 provisions the local environment's PostgreSQL Secret and OCR ConfigMap, then
 requests an Argo CD sync. Configuration changes that need fresh pods use Argo CD
@@ -340,8 +367,9 @@ It does require working GitHub CLI authentication, Kubernetes access, and
 `jq`. When multiple kubeconfigs exist, set
 `KUBECONFIG=~/.kube/config-brownrook` first.
 
-The `ledger` application tracks `main`. Its current sync policy is manual:
-merging a PR and publishing an image does not deploy it until Argo CD is synced.
+The `ledger` application tracks `main`. Check its current sync policy before
+operations: production was observed with automated pruning/self-healing enabled
+on November 1, 2026. A published image may be deployed by automated sync.
 Use `make deploy-k3s` to provision environment configuration and request the sync,
 or use the Argo CD UI/CLI when configuration is already provisioned.
 A PreSync hook runs `home-budget-db-setup` before workloads are

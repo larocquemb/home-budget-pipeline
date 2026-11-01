@@ -128,6 +128,12 @@ co-branded payment card is not evidence of the merchant. The store is retained
 as typed receipt metadata without renaming the legacy canonical `store_name`
 column. New result readers accept older results without a store field; deploy
 or reload collectors before workers emitting the new optional field.
+Merchant extraction also reads explicit issuer names from source PDF titles and
+receipt filenames (for example `Example Company receipt [#123].pdf`) and email
+receipt subjects. Recipient email addresses are excluded. A new unreadable
+merchant does not erase a previously populated merchant. Retained-text identity
+refresh consults only matching original PDFs, checking their source SHA first;
+PDF creation/print dates are not used as purchase dates.
 
 To preview identity extraction from retained database text without rerunning OCR
 or rewriting purchases, dates, amounts or items:

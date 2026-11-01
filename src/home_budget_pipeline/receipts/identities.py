@@ -2,11 +2,13 @@
 import hashlib
 import json
 import uuid
+import os
+from pathlib import Path
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .ingest import extract_merchant_store, extract_receipt_id
+from .ingest import extract_merchant_store, extract_receipt_id, pdf_merchant_hint, sha256_file
 from .payment import extract_payment_provenance
 
 
@@ -56,6 +58,20 @@ def run(args):
                AND (%s::text IS NULL OR re.source_reference=%s)
              ORDER BY re.id FOR UPDATE OF re
         ''', (args.source_reference, args.source_reference)).fetchall()
+        # Retained text may omit a browser-export issuer title. Consult only a
+        # matching original PDF, never a guessed merchant from its card label.
+        from .sources import resolve_reference
+        root = os.getenv('RECEIPT_SOURCE_ROOT')
+        if root:
+            for row in rows:
+                if row.get('merchant_hint'):
+                    continue
+                try:
+                    path = resolve_reference(row['source_reference'],Path(root))
+                    if path.is_file() and sha256_file(path)==row['source_sha256']:
+                        row['merchant_hint'] = pdf_merchant_hint(path)
+                except (OSError,ValueError):
+                    continue
         plan = identity_plan(rows)
         if args.apply:
             if args.expected_version != plan['version']:

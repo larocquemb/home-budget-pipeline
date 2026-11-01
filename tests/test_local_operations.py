@@ -85,7 +85,7 @@ def test_arsene_rebuild_dispatch_is_explicit_and_preserves_confirmation(tmp_path
 
 
 
-def test_database_rebuild_has_no_native_mac_or_production_target():
-    for target in ('local', 'production'):
+def test_database_rebuild_has_no_native_mac_target():
+    for target in ('local',):
         with pytest.raises(SystemExit):
             cli.build_parser().parse_args(['database', 'rebuild', '--target', target])
