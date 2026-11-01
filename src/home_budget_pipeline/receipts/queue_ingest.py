@@ -406,11 +406,11 @@ def publish_reprocess(args) -> int:
     return 0
 
 
-def publish_cached_reprocess(message: ReceiptMessage, args) -> int:
-    """Re-extract retained OCR through the normal durable result collector."""
+@contextmanager
+def cached_reprocess_events(message: ReceiptMessage, args):
+    """Validate and re-extract under the source cache lock, never running OCR."""
     from .parallel_ingest import _parse_scan_cached
     from .ocr_results import result_messages_for_receipt
-    from .ocr_collector import ResultTopology, declare_result_topology, publish_result
 
     root = Path(args.receipt_root).expanduser().resolve()
     path = message.resolve_source(root)
@@ -432,6 +432,14 @@ def publish_cached_reprocess(message: ReceiptMessage, args) -> int:
             receipt, cache_path=cache_path, cache_root=cache_dir,
             persistence_mode="reprocess", request_id=message.request_id,
         )
+        yield receipt, events
+
+
+def publish_cached_reprocess(message: ReceiptMessage, args) -> int:
+    """Re-extract retained OCR through the normal durable result collector."""
+    from .ocr_collector import ResultTopology, declare_result_topology, publish_result
+
+    with cached_reprocess_events(message, args) as (receipt, events):
         connection = connect_broker(args.rabbitmq_url)
         try:
             channel = connection.channel()

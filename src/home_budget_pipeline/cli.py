@@ -175,6 +175,19 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     from .receipts.queue_ingest import publish_reprocess
     reprocess.set_defaults(handler=publish_reprocess)
 
+    bulk_cache = receipt_commands.add_parser(
+        "reprocess-cache", help="Bulk re-extract existing OCR caches; preview unless --apply is supplied.",
+    )
+    bulk_cache.add_argument("--source-prefix", default="", help="Optional logical source folder, e.g. electronic/ or 2026-10-25/.")
+    bulk_cache.add_argument("--receipt-root", default=_receipt_root_default())
+    bulk_cache.add_argument("--ocr-cache", default=_ocr_cache_default())
+    bulk_cache.add_argument("--rabbitmq-url", default=os.getenv("RABBITMQ_URL", ""))
+    bulk_cache.add_argument("--request-id", help="Reuse the batch UUID to safely retry uncertain publication.")
+    bulk_cache.add_argument("--apply", action="store_true", help="Publish re-extracted results to the collector.")
+    bulk_cache.add_argument("--verbose", action="store_true")
+    from .receipts.cached_reprocess import run as bulk_cached_reprocess
+    bulk_cache.set_defaults(handler=bulk_cached_reprocess)
+
     identities = receipt_commands.add_parser('refresh-identities', help='Preview or audit merchant/store and payment identifiers from retained receipt text; preserve financial records.')
     identities.add_argument('source_reference', nargs='?', help='Exact source reference; omit to preview all active receipt evidence.')
     identities.add_argument('--db-dsn', default=os.getenv('DATABASE_URL') or os.getenv('HOME_BUDGET_PG_DSN', ''))
@@ -475,7 +488,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
     if receipt_command in {"consume", "collect", "services"}:
         return args.handler(args)  # LaunchAgents already capture their output.
     service = "enrichment" if receipt_command == "enrich" else (
-        "publisher" if receipt_command in {"process", "publish", "reprocess"} or args.command == "ocr-cache" else "cli"
+        "publisher" if receipt_command in {"process", "publish", "reprocess", "reprocess-cache"} or args.command == "ocr-cache" else "cli"
     )
     operation = f"{args.command} {receipt_command}".strip()
     with telemetry.local_command_logging(service):
