@@ -19,9 +19,10 @@ pytestmark = pytest.mark.integration
 def result_receipt(path):
     receipt = base_result_receipt(path)
     # These durability tests leave independent receipts in the same test DB.
-    # Give each source a stable distinct total so duplicate review does not
+    # Give each source a stable distinct total and receipt ID so review does not
     # correctly hold a later test's otherwise identical synthetic purchase.
     cents = 1000 + int(receipt.source_sha256[:12], 16) % 100_000_000
+    receipt.receipt_id = 'TEST-' + receipt.source_sha256[:24]
     receipt.total = cents / 100
     receipt.subtotal = receipt.total - receipt.tax
     receipt.items[0].line_total = receipt.subtotal
