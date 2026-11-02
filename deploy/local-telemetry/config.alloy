@@ -10,6 +10,7 @@ local.file_match "local_receipts" {
     {__path__ = sys.env("LOCAL_ALLOY_LOG"), service = "home-budget-local-alloy", app = "alloy"},
     {__path__ = sys.env("LOCAL_PROBE_LOG"), service = "home-budget-local-telemetry-probe", app = "telemetry-probe"},
     {__path__ = string.replace(sys.env("LOCAL_PROBE_LOG"), "telemetry-probe.log", "progress.log"), service = "home-budget-local-receipt-progress", app = "receipt-progress"},
+    {__path__ = string.replace(sys.env("LOCAL_PROBE_LOG"), "telemetry-probe.log", "graph.log"), service = "home-budget-local-receipt-graph", app = "receipt-graph"},
   ]
   sync_period = "5s"
 }

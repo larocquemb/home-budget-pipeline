@@ -60,6 +60,17 @@ def extract_card_last4(text: str) -> Optional[str]:
             match = pattern.search(line)
             if match:
                 return match.group(1)
+        # Terminal slips can put the brand and masked number on adjacent rows.
+        # Require a payment-card label immediately above NO.; a member number
+        # or an arbitrary four-digit identifier must never become a card tail.
+        numbered_mask = re.match(
+            r'^\s*NO[.,:;]?\s+[*xX#-][*xX#\s-]{3,}?(\d{4})\b', line, re.I,
+        )
+        if numbered_mask and index and re.match(
+            r'^\s*CARD\s+(?:MC|VISA|MASTER\s*CARD|AMEX|DEBIT|INTERAC)\b',
+            lines[index - 1], re.I,
+        ):
+            return numbered_mask[1]
         # A standalone mask is card evidence only directly after a printed
         # payment/card entry-mode label, never after a loyalty/member label.
         mask = re.fullmatch(r'\s*[*xX#-][*xX#\s-]{3,}(\d{4})\s*', line)

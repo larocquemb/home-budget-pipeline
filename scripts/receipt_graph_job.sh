@@ -9,8 +9,18 @@ trap 'rm -rf "$work"' EXIT
 kube create job "$job" --from=cronjob/receipt-graph --dry-run=client -o json > "$work/job.json"
 if [[ -n "${SHA:-}" ]]; then
   [[ "$SHA" =~ ^[0-9a-f]{64}$ ]] || { echo 'SHA must be a lowercase receipt SHA-256.' >&2; exit 2; }
+  # A deployment still on the legacy entry point needs its legacy arguments.
+  # Once deployed, the shared Ledger command uses the same args as the Mac.
+  patch="$(python3 - "$work/job.json" "$SHA" <<'PY'
+import json, sys
+job = json.load(open(sys.argv[1]))
+command = job['spec']['template']['spec']['containers'][0].get('command', [])
+args = (['receipts', 'graph'] if command == ['ledger'] else []) + ['--sha', sys.argv[2]]
+print(json.dumps([{'op': 'replace', 'path': '/spec/template/spec/containers/0/args', 'value': args}]))
+PY
+)"
   kubectl patch --local -f "$work/job.json" --type=json \
-    -p "[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/args\",\"value\":[\"--sha\",\"$SHA\"]}]" -o json > "$work/prepared.json"
+    -p "$patch" -o json > "$work/prepared.json"
 else
   cp "$work/job.json" "$work/prepared.json"
 fi

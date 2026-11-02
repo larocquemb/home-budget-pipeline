@@ -43,6 +43,25 @@ class ReceiptPaymentTests(unittest.TestCase):
         p = extract_payment_provenance("CASH SALE\nACCT: MASTERCARD $60.33\nMastercard")
         self.assertEqual(p.payment_method, "Mastercard")
 
+    def test_numbered_mask_immediately_below_terminal_card_label(self):
+        for label in ('NO.', 'NO,', 'NO:'):
+            with self.subTest(label=label):
+                p = extract_payment_provenance(
+                    f'Master Card TENDER $24.60\nCARD MC RCPT 6281000\n{label} ************7654 RESP 001'
+                )
+                self.assertEqual(p.card_last4, '7654')
+
+    def test_numbered_mask_requires_adjacent_payment_card_context(self):
+        for text in (
+            'MEMBER CARD\nNO. ************7654',
+            'CARD MC\nMember rewards\nNO. ************7654',
+            'CARD MC\nNO. 1234567890127654',
+            'CARD MC\nNO. ************76S4',
+            'CARD MC\nNO. ************76543',
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(extract_payment_provenance(text).card_last4)
+
     def test_explicit_cash_tender_is_cash(self):
         p = extract_payment_provenance("CASH TENDER $25.00")
         self.assertEqual(p.payment_method, "Cash")

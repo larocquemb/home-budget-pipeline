@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 
 import pytest
@@ -155,3 +156,28 @@ def test_pdf_preview_endpoint_returns_cached_png(tmp_path, monkeypatch):
     assert response.body == b"png-data"
     assert response.media_type == "image/png"
     assert response.headers["cache-control"] == "private, max-age=3600"
+
+
+@pytest.mark.parametrize("mime", ["image/tiff", "image/x-tiff", "application/octet-stream"])
+def test_tiff_preview_displays_png_and_preserves_original(tmp_path, monkeypatch, mime):
+    source = tmp_path / "receipt.tif"
+    Image.new("RGB", (30, 40), "red").save(
+        source, save_all=True, append_images=[Image.new("RGB", (20, 50), "blue")]
+    )
+    original = source.read_bytes()
+    monkeypatch.setattr(web_app, "RECEIPT_SOURCE_ROOT", tmp_path.resolve())
+    evidence = {"id": 7, "source_reference": source.name, "mime_type": mime}
+    preview = web_app._receipt_preview_html(7, evidence)
+    assert f'src="{web_app.BASE_PATH}/evidence/7/preview"' in preview
+    assert f'href="{web_app.BASE_PATH}/evidence/7/document"' in preview
+    for page, size, color in [(0, (30, 40), (255, 0, 0)), (1, (20, 50), (0, 0, 255))]:
+        response = web_app.receipt_preview_image(7, page, FakeService(evidence), {})
+        assert response.media_type == "image/png"
+        with Image.open(io.BytesIO(response.body)) as image:
+            assert image.format == "PNG"
+            assert image.size == size
+            assert image.getpixel((0, 0)) == color
+    with pytest.raises(HTTPException) as exc:
+        web_app.receipt_preview_image(7, 2, FakeService(evidence), {})
+    assert exc.value.status_code == 404
+    assert source.read_bytes() == original

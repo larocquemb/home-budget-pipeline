@@ -26,7 +26,7 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     assert "replicas" not in worker_deployment  # KEDA/HPA owns this field, not Argo CD.
     assert publisher["command"] == worker["command"] == ["ledger"]
     assert publisher["args"] == ["receipts", "publish", "/data/receipts/raw/scanned"]
-    assert worker["args"] == ["receipts", "consume", "/data/receipts/raw/scanned"]
+    assert worker["args"] == ["receipts", "consume"]
     assert publisher["image"] == worker["image"] == collector["image"]
     assert "latest" not in worker["image"]
     assert worker["resources"] == {
@@ -45,6 +45,8 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
         assert env["RABBITMQ_URL"]["valueFrom"]["secretKeyRef"]["name"] == "rabbitmq-secret"
     publisher_env = {entry["name"]: entry for entry in publisher["env"]}
     worker_env = {entry["name"]: entry for entry in worker["env"]}
+    assert worker_env["RECEIPT_SOURCE_ROOT"]["value"] == "/data/receipts/raw/scanned"
+    assert worker_env["ELECTRONIC_RECEIPT_SOURCE_ROOT"]["value"] == "/data/receipts/raw/electronic"
     assert worker_env["K8S_NODE_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == "spec.nodeName"
     collector_env = {entry["name"]: entry for entry in collector["env"]}
     assert publisher_env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"] == "postgres-secret"

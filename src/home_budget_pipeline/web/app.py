@@ -422,6 +422,19 @@ def _render_pdf_page_png(path: Path, page_index: int) -> bytes:
     return output.getvalue()
 
 
+def _render_tiff_page_png(path: Path, page_index: int) -> bytes:
+    from PIL import Image, ImageOps
+
+    with Image.open(path) as document:
+        if page_index < 0 or page_index >= document.n_frames:
+            raise HTTPException(status_code=404, detail="receipt TIFF page not found")
+        document.seek(page_index)
+        image = ImageOps.exif_transpose(document).convert("RGB")
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
+
+
 @app.get(f"{BASE_PATH}/evidence/{{evidence_id}}/preview")
 def receipt_preview_image(evidence_id: int, page_number: int = Query(0, alias="page", ge=0), service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
     evidence = service.receipt_evidence(evidence_id)
@@ -432,10 +445,14 @@ def receipt_preview_image(evidence_id: int, page_number: int = Query(0, alias="p
         raise HTTPException(status_code=404, detail="receipt document not available")
     path = _verified_receipt_document(evidence)
     media_type = evidence.get("mime_type") or mimetypes.guess_type(path.name)[0] or ""
-    if str(media_type).lower() != "application/pdf":
-        raise HTTPException(status_code=415, detail="receipt preview requires a PDF")
+    if str(media_type).lower() == "application/pdf":
+        content = _render_pdf_page_png(path, page_number)
+    elif str(media_type).lower() in {"image/tiff", "image/x-tiff"} or path.suffix.lower() in {".tif", ".tiff"}:
+        content = _render_tiff_page_png(path, page_number)
+    else:
+        raise HTTPException(status_code=415, detail="receipt preview requires a PDF or TIFF")
     return Response(
-        content=_render_pdf_page_png(path, page_number),
+        content=content,
         media_type="image/png",
         headers={"Cache-Control": "private, max-age=3600"},
     )
@@ -447,7 +464,7 @@ def _receipt_preview_html(evidence_id: int, evidence: dict[str, object]) -> str:
         return '<p class="muted">Receipt document not available.</p>'
     document_url = f"{BASE_PATH}/evidence/{evidence_id}/document"
     media_type = evidence.get("mime_type") or mimetypes.guess_type(str(source_reference))[0] or ""
-    if str(media_type).lower() == "application/pdf":
+    if str(media_type).lower() in {"application/pdf", "image/tiff", "image/x-tiff"} or Path(str(source_reference)).suffix.lower() in {".tif", ".tiff"}:
         preview_url = f"{BASE_PATH}/evidence/{evidence_id}/preview"
         image = f'<img class="receipt-preview receipt-preview-image" src="{preview_url}" alt="Receipt preview" loading="lazy" data-hover-zoom>'
         preview = f'<div class="receipt-preview-viewport">{image}</div>'

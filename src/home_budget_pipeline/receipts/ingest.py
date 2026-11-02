@@ -648,23 +648,20 @@ def _run_traced_ocr_pass(
     return candidate, (pass_span, metric, completed_at)
 
 
-def _ocr_pdf_pages(
-    path: Path,
+def _ocr_rendered_pages(
+    render_page: Callable[[int, int], Any],
+    page_count: int,
     pass_metrics: Optional[List[dict]] = None,
     *,
     run_uuid: str | None = None,
 ) -> List[str]:
-    try:
-        import pypdfium2 as pdfium  # type: ignore
-    except Exception:
-        return []
+    """Apply the same OCR observations, selection and tracing to every page format."""
     pages: List[str] = []
     selected_run_uuid = run_uuid or telemetry.current_run_uuid() or str(uuid4())
     unfinished_passes: list[tuple[Any, dict, int]] = []
-    doc = pdfium.PdfDocument(str(path))
     page_span = None
     try:
-        for idx in range(len(doc)):
+        for idx in range(page_count):
             page_span = telemetry.start_operation(
                 "receipt.page.processing", {"receipt.page.number": idx + 1},
             )
@@ -673,7 +670,7 @@ def _ocr_pdf_pages(
             # so evaluate every DPI/layout combination instead of assuming the
             # highest resolution or first valid timestamp is most accurate.
             for dpi in OCR_RENDER_DPIS:
-                raw_image = doc[idx].render(scale=dpi / 72).to_pil()
+                raw_image = render_page(idx, dpi)
                 # Raw rendering preserves separation in heavy/bold glyphs;
                 # enhancement recovers faint thermal printing.
                 for variant, image in (("raw", raw_image), ("enhanced", _prepare_ocr_image(raw_image))):
@@ -714,7 +711,7 @@ def _ocr_pdf_pages(
             # A single high-resolution structured pass recovers small final
             # glyphs (for example, a trailing "c") without multiplying every
             # expensive DPI/layout/preprocessing combination.
-            high_detail_image = doc[idx].render(scale=OCR_HIGH_DETAIL_DPI / 72).to_pil()
+            high_detail_image = render_page(idx, OCR_HIGH_DETAIL_DPI)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 tmp_path = Path(tmp.name)
             try:
@@ -774,8 +771,69 @@ def _ocr_pdf_pages(
     finally:
         for tracked in unfinished_passes:
             telemetry.finish_ocr_pass(*tracked)
-        doc.close()
     return pages
+
+
+def _ocr_pdf_pages(
+    path: Path,
+    pass_metrics: Optional[List[dict]] = None,
+    *,
+    run_uuid: str | None = None,
+) -> List[str]:
+    try:
+        import pypdfium2 as pdfium  # type: ignore
+    except Exception:
+        return []
+    doc = pdfium.PdfDocument(str(path))
+    try:
+        return _ocr_rendered_pages(
+            lambda index, dpi: doc[index].render(scale=dpi / 72).to_pil(),
+            len(doc), pass_metrics, run_uuid=run_uuid,
+        )
+    finally:
+        doc.close()
+
+
+def _ocr_image_pages(
+    path: Path,
+    pass_metrics: Optional[List[dict]] = None,
+    *,
+    run_uuid: str | None = None,
+) -> List[str]:
+    from PIL import Image, ImageOps
+
+    with Image.open(path) as document:
+        source_pages = {}
+
+        def render_page(index: int, dpi: int):
+            document.seek(index)
+            image = ImageOps.exif_transpose(document).convert("RGB")
+            native_dpi = document.info.get("dpi")
+            try:
+                x_dpi, y_dpi = (float(value) for value in native_dpi)
+                if not (36 <= x_dpi <= 2400 and 36 <= y_dpi <= 2400):
+                    raise ValueError("Implausible image resolution")
+                basis = "image_metadata"
+            except (TypeError, ValueError):
+                x_dpi = y_dpi = 300.0
+                basis = "assumed_300_dpi_without_usable_metadata"
+            source_pages[index + 1] = {
+                "pixel_width": image.width, "pixel_height": image.height,
+                "native_dpi_x": x_dpi, "native_dpi_y": y_dpi, "dpi_basis": basis,
+            }
+            size = (max(1, round(image.width * dpi / x_dpi)),
+                    max(1, round(image.height * dpi / y_dpi)))
+            return image.resize(size, Image.Resampling.LANCZOS)
+
+        first_metric = len(pass_metrics) if pass_metrics is not None else 0
+        try:
+            return _ocr_rendered_pages(
+                render_page, getattr(document, "n_frames", 1), pass_metrics, run_uuid=run_uuid,
+            )
+        finally:
+            if pass_metrics is not None:
+                for metric in pass_metrics[first_metric:]:
+                    metric["provenance"]["source_image"] = source_pages.get(metric["page_number"], {})
 
 
 def _supplement_missing_receipt_summary(primary: str, alternative: str) -> str:
@@ -858,19 +916,7 @@ def extract_page_text(
                         selected.append(_supplement_missing_receipt_summary(embedded or ocr, ocr if embedded else ""))
                 return selected
         return embedded_pages
-    try:
-        from PIL import Image
-        with Image.open(path) as image:
-            prepared = _prepare_ocr_image(image)
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-            try:
-                prepared.save(tmp_path)
-                return [_run_tesseract(tmp_path)]
-            finally:
-                tmp_path.unlink(missing_ok=True)
-    except Exception:
-        return [_run_tesseract(path)]
+    return _ocr_image_pages(path, pass_metrics, run_uuid=run_uuid)
 
 
 def _align_page_layout(text: str, detected: Sequence[OCRLine]) -> List[OCRLine]:
