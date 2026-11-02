@@ -157,6 +157,38 @@ configuration against development before attributing differing results to OCR.
 Platform acceleration and resource limits must also be recorded. A local change
 is not present in production until its image has been built and deployed.
 
+### Cross-pass card and transaction date evidence
+
+Fresh and cached extraction compare card and transaction date/time readings from
+retained successful OCR passes. Card numbers require a masked tail in a bounded
+payment block; product, address and loyalty rows stop that search. Dates retain
+their purchase/payment/print purpose. Conflicting dates at the strongest purpose
+remain unknown and require review; repeated passes do not vote away a conflict.
+Conflicting times on one agreed date preserve the date and require time review.
+This field-level resolution currently covers card last-four and transaction
+date/time; item descriptions and amounts still use the existing line consensus.
+
+Decisions retain policy, candidate values and pass/line references in receipt
+evidence. Graph projection exposes the latest stored extraction's field decisions
+and links them to available OCR passes. Older records have no invented decisions.
+Source text and original OCR observations remain unchanged.
+
+Result messages can now carry optional field-decision evidence. Upgrade/reload
+collectors before workers or cache-reprocessing publishers emit these messages;
+older collectors reject unknown receipt fields. New collectors accept retained
+older messages without this optional field. Production Argo CD applies dependencies
+in wave zero, collectors in wave one and workers in wave two, waiting for healthy
+collectors before updating workers. In native development, begin with:
+
+```sh
+ledger --env-file .env.dev receipts services reload --only collector
+```
+
+Verify that collector restarted before publishing a cache-only re-extraction with
+`ledger --env-file .env.dev receipts reprocess SOURCE_REFERENCE --use-ocr-cache`.
+That command uses retained OCR; it does not run OCR again. Applying a rule change
+does not itself refresh previously persisted financial fields or graph snapshots.
+
 Use `make` for software builds, tests, documentation, and infrastructure setup.
 Use `ledger` for application operations: processing receipts, maintaining caches,
 rebuilding application databases, and controlling receipt workers and collectors.

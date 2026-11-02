@@ -53,32 +53,43 @@ def normalize_payment_method(text: str) -> Optional[str]:
     return None
 
 
-def extract_card_last4(text: str) -> Optional[str]:
+def card_last4_evidence(text: str) -> list[dict]:
+    """Retain masked tails with bounded terminal context and source line numbers."""
     lines = text.splitlines()
+    readings = []
     for index, line in enumerate(lines):
         for pattern in MASKED_LAST4_PATTERNS:
             match = pattern.search(line)
             if match:
-                return match.group(1)
-        # Terminal slips can put the brand and masked number on adjacent rows.
-        # Require a payment-card label immediately above NO.; a member number
-        # or an arbitrary four-digit identifier must never become a card tail.
+                readings.append({'value': match.group(1), 'line_numbers': [index + 1]})
+        # OCR may split a terminal block into brand, entry mode, amount and
+        # number rows. Cross only recognized terminal rows, never arbitrary
+        # product, loyalty or address text, and cap the search at six rows.
         numbered_mask = re.match(
             r'^\s*NO[.,:;]?\s+[*xX#-][*xX#\s-]{3,}?(\d{4})\b', line, re.I,
         )
-        if numbered_mask and index and re.match(
-            r'^\s*CARD\s+(?:MC|VISA|MASTER\s*CARD|AMEX|DEBIT|INTERAC)\b',
-            lines[index - 1], re.I,
-        ):
-            return numbered_mask[1]
+        if numbered_mask:
+            for prior in range(index - 1, max(-1, index - 7), -1):
+                context = lines[prior].strip()
+                if re.match(r'^CARD\s+(?:MC|VISA|MASTER\s*CARD|AMEX|DEBIT|INTERAC)\b', context, re.I):
+                    readings.append({'value': numbered_mask[1],
+                                     'line_numbers': list(range(prior + 1, index + 2))})
+                    break
+                if not re.fullmatch(r'(?:RF|CHIP|TAP|CONTACTLESS|[*xX#-]+|\$?\s*\d+\.\d{2}|RCPT\s+\d+)?', context, re.I):
+                    break
         # A standalone mask is card evidence only directly after a printed
         # payment/card entry-mode label, never after a loyalty/member label.
         mask = re.fullmatch(r'\s*[*xX#-][*xX#\s-]{3,}(\d{4})\s*', line)
         if mask and index and re.fullmatch(
                 r'\s*(?:chip|contactless|tap|card|account|visa|master\s*card|amex|debit)\s*[:#]?\s*',
                 lines[index-1], re.I):
-            return mask[1]
-    return None
+            readings.append({'value': mask[1], 'line_numbers': [index, index + 1]})
+    return readings
+
+
+def extract_card_last4(text: str) -> Optional[str]:
+    values = {r['value'] for r in card_last4_evidence(text)}
+    return next(iter(values)) if len(values) == 1 else None
 
 
 def extract_payment_provenance(text: str) -> PaymentProvenance:
@@ -91,7 +102,9 @@ def extract_payment_provenance(text: str) -> PaymentProvenance:
             method = candidate
             break
 
-    last4 = extract_card_last4("\n".join(priority_lines)) or extract_card_last4(text)
+    # Filtering rows before extracting a card can falsely make unrelated rows
+    # adjacent. Preserve the original payment-block boundaries.
+    last4 = extract_card_last4(text)
 
     if method is None:
         for line in text.splitlines():

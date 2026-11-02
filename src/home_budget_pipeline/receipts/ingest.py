@@ -113,6 +113,7 @@ class ScannedReceipt:
     extraction_status: str = "review"
     review_reasons: List[str] = field(default_factory=list)
     store: Optional[str] = None
+    field_decisions: dict = field(default_factory=dict)
 
     @property
     def canonical_order_id(self) -> str:
@@ -319,21 +320,9 @@ def _prepare_ocr_image(image):
 
 
 def _has_literal_valid_timestamp(text: str) -> bool:
-    """Return true only for a valid numeric date printed beside a time."""
-    from .datetime import MDY_RE
-
-    for match in MDY_RE.finditer(text):
-        if match.group(4) is None:
-            continue
-        year = int(match.group(3))
-        if year < 100:
-            year += 2000
-        try:
-            datetime(year, int(match.group(1)), int(match.group(2)), int(match.group(4)), int(match.group(5)))
-            return True
-        except ValueError:
-            continue
-    return False
+    """Recognize a valid date/time in the same bounded context as the parser."""
+    from .datetime import transaction_datetime_evidence
+    return any('T' in reading['value'] for reading in transaction_datetime_evidence(text))
 
 
 def _looks_like_tesseract_tsv(text: str) -> bool:
@@ -1529,6 +1518,8 @@ def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
     if not receipt.text.strip() or (not receipt.items and receipt.total is None and receipt.extraction_confidence <= 0.15):
         return ["unreadable_ocr"]
     reasons: List[str] = []
+    reasons.extend('conflicting_ocr_' + name for name, decision in receipt.field_decisions.items()
+                   if decision.get('status') == 'conflict')
     if not receipt.merchant:
         reasons.append("missing_merchant")
     observations = [p for p in (getattr(receipt, 'ocr_run', {}) or {}).get('ocr_passes', [])
@@ -1593,7 +1584,8 @@ def prefer_filename_merchant(extracted: Optional[str], filename_merchant: Option
 
 def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt:
     from .datetime import allows_filename_date
-    pages = extract_page_text(path)
+    observations = []
+    pages = extract_page_text(path, observations)
     text = merge_page_text(pages)
     merchant, store = extract_merchant_store(text, pdf_merchant_hint(path))
     subtotal, tax, total = extract_totals(text)
@@ -1614,6 +1606,8 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
     )
     if receipt.total is None:
         receipt.total = filename_total
+    from .summary_evidence import apply
+    apply(receipt, observations)
     receipt.extraction_confidence = confidence_for(receipt)
     receipt.review_reasons = review_reasons_for(receipt)
     receipt.extraction_status = status_for(receipt)
@@ -1636,6 +1630,9 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
         raise ValueError("invalid database schema")
 
     payment = extract_payment_provenance(receipt.text)
+    if 'card_last4' in receipt.field_decisions:
+        from .payment import PaymentProvenance
+        payment = PaymentProvenance(payment.payment_method, receipt.field_decisions['card_last4']['value'])
     receipt.payment_method = payment.payment_method
     receipt.card_last4 = payment.card_last4
     receipt.payer = resolve_owner_from_db(conn, payment, receipt.transaction_date, schema)
@@ -1651,6 +1648,7 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
         "page_text": receipt.page_text,
         "ocr_text": receipt.text,
         "review_reasons": receipt.review_reasons,
+        "field_decisions": receipt.field_decisions,
     }
     components = extract_tax_components(receipt.text)
     gst, pst = receipt.tax or 0, 0

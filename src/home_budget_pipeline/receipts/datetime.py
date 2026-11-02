@@ -149,7 +149,21 @@ def _with_labeled_time(value: str, line_number: int, lines: list[str]) -> str:
     if 'T' in value:
         return value
     time_re = re.compile(r'\btime\s*[:;]?\s*(\d{1,2}):\s*(\d{2})(?::\s*(\d{2}))?\s*([AP]M)?\b', re.I)
-    for index in (line_number, line_number + 1, line_number - 1):
+    # Terminal OCR can place response/auth rows between DATE and TIME. Cross
+    # only recognized terminal rows, with a four-row bound in each direction.
+    indexes = [line_number]
+    for direction in (1, -1):
+        for distance in range(1, 5):
+            index = line_number + direction * distance
+            if not 0 <= index < len(lines):
+                break
+            row = lines[index].strip()
+            if time_re.fullmatch(row):
+                indexes.append(index)
+                break
+            if not re.fullmatch(r'(?:RESP(?:ONSE)?\b.*|AUTH\b.*|APPR(?:OVAL)?\b.*|RF|\d{1,6})?', row, re.I):
+                break
+    for index in indexes:
         if not 0 <= index < len(lines):
             continue
         line = lines[index].strip()
@@ -170,20 +184,27 @@ def extract_transaction_datetime(text: str) -> Optional[str]:
     Conflicting dates at the strongest explicit purpose remain unknown. The
     original text is untouched, retaining print/receipt/completion provenance.
     """
+    candidates = transaction_datetime_evidence(text)
+    if not candidates:
+        return None
+    rank = min(c['purpose_rank'] for c in candidates)
+    choices = [c for c in candidates if c['purpose_rank'] == rank]
+    if rank < 3 and len({c['value'][:10] for c in choices}) > 1:
+        return None
+    return min(choices, key=lambda c: (c['format_rank'], c['line_number'], c['position']))['value']
+
+
+def transaction_datetime_evidence(text: str) -> list[dict]:
+    """Expose purpose-ranked original readings for cross-pass field decisions."""
     candidates = []
     lines = text.splitlines()
     for rank, line_number, segment in _purpose_segments(text):
         if rank < 0:
             continue
-        candidates.extend((rank, fmt, line_number, position, _with_labeled_time(value, line_number, lines))
+        candidates.extend(dict(purpose_rank=rank, format_rank=fmt, line_number=line_number + 1,
+                               position=position, value=_with_labeled_time(value, line_number, lines))
                           for fmt, position, value in _date_candidates(segment, labeled=rank < 3))
-    if not candidates:
-        return None
-    rank = min(c[0] for c in candidates)
-    choices = [c for c in candidates if c[0] == rank]
-    if rank < 3 and len({c[-1][:10] for c in choices}) > 1:
-        return None
-    return min(choices)[-1]
+    return candidates
 
 
 def date_part(value: Optional[str]) -> Optional[str]:

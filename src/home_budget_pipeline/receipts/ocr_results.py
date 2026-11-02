@@ -212,8 +212,16 @@ class OcrResultMessage:
             "subtotal", "tax", "total", "payment_method", "card_last4", "payer",
             "items", "text", "extraction_confidence", "extraction_status", "review_reasons",
         }
-        if set(receipt) - {'store'} != required_receipt:
+        if set(receipt) - {'store', 'field_decisions'} != required_receipt:
             raise InvalidOcrResultMessage("receipt payload has unexpected fields")
+        if not isinstance(receipt.get('field_decisions', {}), dict):
+            raise InvalidOcrResultMessage('receipt field_decisions must be an object')
+        for name, decision in receipt.get('field_decisions', {}).items():
+            if (name not in {'card_last4', 'transaction_datetime'} or not isinstance(decision, dict)
+                    or decision.get('status') not in {'selected', 'conflict'}
+                    or not isinstance(decision.get('candidates'), list)):
+                raise InvalidOcrResultMessage('receipt field decision is invalid')
+            _optional_text(decision.get('value'), 'receipt field decision value')
         _optional_text(receipt.get('store'), 'receipt store')
         if not isinstance(receipt["items"], list) or not all(
             isinstance(item, dict) and set(item) == {"item_name", "line_total"}
@@ -462,6 +470,7 @@ def _receipt_payload(receipt: scan.ScannedReceipt) -> dict[str, Any]:
         "extraction_confidence": receipt.extraction_confidence,
         "extraction_status": receipt.extraction_status,
         "review_reasons": list(receipt.review_reasons),
+        "field_decisions": receipt.field_decisions,
     }
 
 
@@ -489,6 +498,7 @@ def receipt_from_message(message: OcrResultMessage) -> scan.ScannedReceipt:
         extraction_confidence=payload["extraction_confidence"],
         extraction_status=payload["extraction_status"],
         review_reasons=payload["review_reasons"],
+        field_decisions=payload.get('field_decisions') or {},
     )
     receipt.transaction_datetime = payload["transaction_datetime"]
     receipt.worker_host = message.worker["host"]
