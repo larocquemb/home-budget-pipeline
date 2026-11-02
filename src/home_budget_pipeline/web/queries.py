@@ -411,12 +411,15 @@ class LedgerQueryService:
                 receipt = cur.fetchone()
                 if receipt is None:
                     raise LookupError('Receipt not found')
-                cur.execute('''SELECT i.*,e.source,e.store_name FROM budget.expense_items i
+                cur.execute('''SELECT i.*,e.source,e.store_name,e.raw_payload->'items' AS receipt_source_items
+                    FROM budget.expense_items i
                     JOIN budget.expenses e ON e.id=i.expense_pk WHERE EXISTS
                     (SELECT 1 FROM budget.receipt_evidence re WHERE re.expense_pk=i.expense_pk
                         AND re.source_sha256=%s) ORDER BY i.id FOR UPDATE OF i''', (source_sha256,))
                 items = cur.fetchall()
+                from ..receipts.departments import item_department
                 for item in items:
+                    item['department'] = item_department(item, item.get('receipt_source_items'))
                     product_change = None
                     description = item.get('product_description') or ''
                     domain = retailer_domain(item['store_name'])

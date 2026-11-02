@@ -132,10 +132,12 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     date_correction.set_defaults(handler=_correct_date)
 
     duplicates = receipt_commands.add_parser('duplicates', help='List, discover, confirm or reject duplicate receipt evidence.')
-    duplicates.add_argument('action', choices=('list', 'discover', 'confirm', 'reject'))
+    duplicates.add_argument('action', choices=('list', 'discover', 'confirm', 'reject', 'merge'))
     duplicates.add_argument('--left', type=int, help='First evidence ID (not expense ID).')
     duplicates.add_argument('--right', type=int, help='Second evidence ID.')
     duplicates.add_argument('--expense', type=int, help='Existing canonical expense ID for confirmation.')
+    duplicates.add_argument('--auto-select', action='store_true', help='Rank the two purchases and select the canonical source by validation and confidence.')
+    duplicates.add_argument('--duplicate-expense', type=int, help='Superseded expense ID for an explicit merge.')
     duplicates.add_argument('--reason', default='')
     duplicates.add_argument('--reviewer', default='Paul La Rocque')
     duplicates.add_argument('--expected-version')
@@ -296,6 +298,11 @@ def _receipt_duplicates(args):
             print(json.dumps({'apply': args.apply, 'candidate_matches': count}))
         finally:
             conn.close()
+    elif args.action == 'merge':
+        from .receipts.expense_merge import merge
+        result = merge(service._connect, args.expense, args.duplicate_expense, reason=args.reason,
+                       actor=args.reviewer, expected_version=args.expected_version, apply=args.apply, auto_select=args.auto_select)
+        print(json.dumps(result, default=str))
     else:
         if args.left is None or args.right is None:
             raise ValueError('Specify --left and --right evidence IDs')

@@ -1735,7 +1735,12 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
         gst = components.get('gst', 0) + components.get('hst', 0)
         pst = components.get('pst', 0) + components.get('rst', 0)
     payload['tax_components'] = components
+    from ..categorization.receipt_items import load_existing, unmatched_reviewed, persist_items
     with conn.cursor() as cur:
+        existing_pk, existing_items = load_existing(cur, receipt.canonical_order_id, schema)
+        if unmatched_reviewed(receipt.items, existing_items):
+            telemetry.LOG.warning('receipt_item_refresh_preserved reason=unmatched_reviewed_item')
+            return existing_pk
         cur.execute(
             f"""
             INSERT INTO {schema}.expenses (
@@ -1765,6 +1770,7 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                     THEN EXCLUDED.raw_payload || jsonb_build_object('receipt_date_correction',expenses.raw_payload->'receipt_date_correction')
                     ELSE EXCLUDED.raw_payload END
             WHERE NOT (COALESCE(expenses.raw_payload, '{{}}'::jsonb) ? 'item_allocation_correction')
+              AND NOT (COALESCE(expenses.raw_payload, '{{}}'::jsonb) ? 'duplicate_merge')
             RETURNING id
             """,
             (receipt.canonical_order_id, Path(receipt.path).name, receipt.source_reference,
@@ -1776,19 +1782,15 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
         saved = cur.fetchone()
         if saved is None:
             # Human/image-verified canonical allocations survive later OCR.
-            cur.execute(f"SELECT id FROM {schema}.expenses WHERE source='scanned' AND order_id=%s",
+            cur.execute(f"SELECT COALESCE((raw_payload->'duplicate_merge'->>'canonical_expense_pk')::bigint,id) FROM {schema}.expenses WHERE source='scanned' AND order_id=%s",
                         (receipt.canonical_order_id,))
             return int(cur.fetchone()[0])
         expense_pk = int(saved[0])
-        cur.execute(f"DELETE FROM {schema}.expense_items WHERE expense_pk = %s", (expense_pk,))
-        for item in receipt.items:
-            cur.execute(
-                f"""INSERT INTO {schema}.expense_items (
-                    expense_pk, item_name, unit_qty, unit_cost, line_total,
-                    original_line_total, category_source
-                ) VALUES (%s, %s, 1, %s, %s, %s, NULL)""",
-                (expense_pk, item.item_name, item.line_total, item.line_total, item.line_total),
-            )
+        # Re-read under the upsert lock: another delivery may have inserted the
+        # purchase after our initial lookup. Reuse those rows instead of duplicating.
+        _, existing_items = load_existing(cur, receipt.canonical_order_id, schema)
+        with telemetry.span("receipt.categorization"):
+            persist_items(cur, receipt, expense_pk, existing_items, schema)
     return expense_pk
 
 

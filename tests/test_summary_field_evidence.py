@@ -187,6 +187,7 @@ def test_financial_persistence_keeps_cross_pass_card_instead_of_reparsing_consen
         def __enter__(self): return self
         def __exit__(self, *a): pass
         def execute(self, *a): pass
+        def fetchall(self): return []
         def fetchone(self): return (123,)
     assert ingest.upsert_receipt(Connection(), receipt) == 123
     assert seen == [PaymentProvenance('Mastercard', '7654')]

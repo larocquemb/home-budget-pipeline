@@ -43,7 +43,7 @@ def resolve_item_ids(dsn: str, receipt: str) -> tuple[int, ...]:
                 SELECT i.id
                   FROM budget.expense_items i
                   JOIN budget.expenses e ON e.id=i.expense_pk
-                 WHERE e.id=%s
+                 WHERE NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'duplicate_merge') AND e.id=%s
                  ORDER BY i.id
                 """,
                 (int(value),),
@@ -69,7 +69,7 @@ def resolve_item_ids(dsn: str, receipt: str) -> tuple[int, ...]:
             SELECT i.id
               FROM budget.expense_items i
               JOIN budget.expenses e ON e.id=i.expense_pk
-             WHERE {where}
+             WHERE NOT (COALESCE(e.raw_payload, '{{}}'::jsonb) ? 'duplicate_merge') AND ({where})
              ORDER BY i.id
             """,
             tuple(params),

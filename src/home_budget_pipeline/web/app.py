@@ -755,7 +755,7 @@ def expense_page(expense_pk: int, service: LedgerQueryService = Depends(query_se
 <td>{esc(item.get('category_confidence'))}</td>
 </tr>""")
     detail += """<h2>Line items</h2><table><thead><tr>
-<th>Receipt item</th><th>Department</th><th>Additional description</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th><th>Confidence</th>
+<th>Receipt item</th><th>Section</th><th>Additional description</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th><th>Confidence</th>
 </tr></thead><tbody>""" + "".join(item_rows) + """</tbody></table>
 <script>
 for (const form of document.querySelectorAll('.item-description-form')) {

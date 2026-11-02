@@ -995,7 +995,8 @@ plausible evidence match needs review. A single unambiguous exact match with a m
 at least six digits and an observed time can link to an existing expense
 automatically; weaker matches require a human decision.
 Rejected pairs remain rejected, and normal reimports preserve existing links.
-Two already separate purchases cannot be merged through this workflow.
+The evidence-linking confirm action does not merge already separate purchases;
+use the explicit purchase merge preview below for that case.
 
 Use evidence IDs from the Duplicates page, rather than confusing them with
 expense IDs. Preview a decision, then repeat with `--apply --expected-version`
@@ -1053,7 +1054,9 @@ Printed department headings and original item coordinates determine department
 membership, allowing OCR alignment variation. Dedented rows, summaries and new
 pages end the scope; missing geometry does not imply membership. Fresh and
 cached parsing share this rule, including rechecking older cached labels.
-Department stays separate from accounting Category. It is retained on extracted
+The displayed **Section** column represents the printed receipt grouping and stays
+separate from accounting Category. Existing records and APIs retain the compatible
+`department` field name. It is retained on extracted
 items in evidence and expense JSON, projected conservatively onto matching
 canonical items and displayed in receipt and expense details. This requires no
 new database column. Item names/amounts changed by review are not assigned a
@@ -1062,3 +1065,64 @@ stale department from a different source item.
 After updating this result-message shape, reload the collector before workers
 and cached re-extraction. Existing messages without optional metadata remain
 readable. Re-extraction does not require deleting the OCR cache.
+
+
+### Categorization during receipt persistence
+
+Fresh imports and cached re-extraction apply the same deterministic category
+rules as item review, without product enrichment or model calls. Approved scoped
+rules and existing categories take precedence. A printed Section can support an
+existing high-confidence category rule when the item reading is unresolved;
+unknown items/sections and inactive categories stay unresolved.
+
+Refresh reuses canonical item IDs for exact name/amount matches, preserving
+categories, descriptions, accepted matches and audit links, including repeated
+identical rows. It adds new rows and removes only unmatched unreviewed rows.
+If a manually categorized or described item cannot be matched, automatic
+canonical replacement is skipped and `receipt_item_refresh_preserved` is logged;
+fresh receipt evidence remains available for review. Audited allocation/date
+protections still apply. Category persistence shares the receipt transaction and
+is visible in the `receipt.categorization` trace span.
+
+
+### Consolidating already-booked duplicate purchases
+
+Use `ledger receipts duplicates merge --expense FIRST_ID --duplicate-expense SECOND_ID
+--auto-select --reason 'Confirmed both documents represent the same purchase'`
+with explicit `--env-file .env.dev`. Without `--apply`, this is read-only.
+The IDs identify the pair; `--auto-select` chooses the canonical purchase in code.
+The preview reports the selection policy, validation/confidence comparison,
+chosen keeper, superseded expense, original rows and current version. Ranking
+prefers receipt totals reconciled against printed tax, item reconciliation,
+fewer explicit field conflicts and review reasons, core field coverage, complete
+extraction, then stored coverage confidence. An inferred balancing tax cannot
+make a conflicting printed tax pass. Item variance and unresolved review reasons
+remain visible even when one source is selected. Ties retain the
+oldest ID. Coverage confidence is not proof of correctness. This selection never
+changes the extracted values or bypasses human duplicate confirmation.
+
+Repeat the same command with `--apply --expected-version VERSION_FROM_PREVIEW`
+after reviewing it. Apply requires the updated reporting views installed through
+`ledger --env-file .env.dev database setup`. It relinks duplicate evidence to the
+chosen purchase, records confirmed duplicate links, retains the old expense and
+its items as superseded history, and excludes that expense from active analytics
+and the duplicate source from the normal receipt list. Both original documents,
+OCR observations and item decisions remain stored. An atomic audit retains the
+before/after state and selection reason. Stale previews, rejected pairs and bank
+links on the purchase being superseded require separate review. Same-merge
+retries are idempotent. Receipt refresh preserves the merge markers and cannot
+reactivate the superseded purchase.
+
+Explicit DATE/TIME rows outrank unlabeled dates. Contest/promotion closing dates
+are metadata. A timed full date corroborated by a separately printed short date
+in the same pass can resolve a single-character date conflict when observed
+clock readings agree. Multiple corroborated dates, larger differences and
+conflicting times remain in review. This rule applies across merchants/documents.
+
+
+Confirmed superseded source copies show **Duplicate of [canonical expense]** in
+receipt Status. Their original extraction warnings are available under
+**Historical extraction**, rather than active review prompts. Item/allocation
+review actions belong to the active purchase. Raw processing/extraction fields
+remain unchanged in the API, alongside derived `receipt_status` and `duplicate_of`.
+Canonical expense links skip superseded evidence when choosing a document.
