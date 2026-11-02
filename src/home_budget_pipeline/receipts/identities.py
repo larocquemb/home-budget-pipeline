@@ -8,7 +8,8 @@ from pathlib import Path
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .ingest import extract_merchant_store, extract_receipt_id, pdf_merchant_hint, sha256_file
+from .store_contact import extract_store_contact
+from .ingest import extract_merchant_store, extract_store_address, extract_receipt_id, pdf_merchant_hint, sha256_file
 from .payment import extract_payment_provenance
 
 
@@ -19,12 +20,18 @@ def identity_plan(rows):
         text = row['raw_text'] or ''
         old = {key: row.get(key) for key in ('merchant', 'receipt_id', 'payment_method', 'card_last4')}
         old['store'] = (row.get('raw_payload') or {}).get('store')
+        old['store_address'] = (row.get('raw_payload') or {}).get('store_address')
+        for key in ('store_phone', 'tax_registration_number'):
+            old[key] = (row.get('raw_payload') or {}).get(key)
         merchant, store = extract_merchant_store(text, row.get('merchant_hint'), observations=row.get('ocr_observations', []))
         payment = extract_payment_provenance(text)
         new = {'merchant': merchant or (old['merchant'] if old['merchant'] != store else None), 'store': store or old['store'],
+               'store_address': extract_store_address(text, observations=row.get('ocr_observations', [])) or old['store_address'],
                'receipt_id': extract_receipt_id(text) or old['receipt_id'],
                'payment_method': payment.payment_method or old['payment_method'],
                'card_last4': payment.card_last4 or old['card_last4']}
+        contact = extract_store_contact(text, observations=row.get('ocr_observations', []))
+        new.update({key: value or old[key] for key, value in contact.items()})
         for correction in row.get('feedback_fields') or []:
             for key in new.keys() & correction.keys():
                 new[key] = old[key]
@@ -102,9 +109,9 @@ def run(args):
                 new = change['after']
                 conn.execute('''UPDATE budget.receipt_evidence
                     SET merchant=%s,receipt_id=%s,payment_method=%s,card_last4=%s,
-                        raw_payload=COALESCE(raw_payload,'{}'::jsonb)||jsonb_build_object('store',%s::text),
+                        raw_payload=COALESCE(raw_payload,'{}'::jsonb)||jsonb_build_object('store',%s::text,'store_address',%s::text,'store_phone',%s::text,'tax_registration_number',%s::text),
                         updated_at=NOW() WHERE id=%s''',
-                    (new['merchant'],new['receipt_id'],new['payment_method'],new['card_last4'],new['store'],change['id']))
+                    (new['merchant'],new['receipt_id'],new['payment_method'],new['card_last4'],new['store'],new['store_address'],new['store_phone'],new['tax_registration_number'],change['id']))
                 conn.execute('''INSERT INTO lineage.receipt_events
                     (id,source_sha256,source_reference,payload) VALUES (%s,%s,%s,%s)''',
                     (uuid.uuid4(),change['source_sha256'],change['source_reference'],Jsonb({

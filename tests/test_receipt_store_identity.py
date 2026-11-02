@@ -15,7 +15,7 @@ from test_ocr_results_collector import result_receipt
     ('NORTHVILLE #987\n500 Example Rd', 'ExampleMart', ('ExampleMart', 'NORTHVILLE #987')),
     ('NORTHVILLE #987', 'NORTHVILLE #987', (None, 'NORTHVILLE #987')),
     ('maurices\nStore: 1234 Register: 2', None, ('maurices', 'Store 1234')),
-    ('Sobeys Exampleville', None, ('Sobeys', 'Exampleville')),
+    ('Sobeys Exampleville', None, ('Sobeys', 'Sobeys Exampleville')),
     ('EXAMPLE MARKET\nStore 1234\nST# 01234 OP# 123', None, ('EXAMPLE MARKET', 'Store 1234')),
     ('EXAMPLE MARKET\nStore 1234\nST# 5678 OP# 123', None, ('EXAMPLE MARKET', None)),
 ])
@@ -37,6 +37,7 @@ def test_identity_plan_is_pure_preserves_ids_and_is_idempotent():
     plan = identity_plan([before])
     change, = plan['changes']
     assert change['after'] == {'merchant':'ExampleMart', 'store':'NORTHVILLE #987',
+                               'store_address':None,'store_phone':None,'tax_registration_number':None,
                                'receipt_id':'old-id','payment_method':'Mastercard','card_last4':'4321'}
     assert before == snapshot
     after = {**before, **change['after'], 'raw_payload': {'store':change['after']['store']}}

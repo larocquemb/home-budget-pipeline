@@ -217,12 +217,18 @@ class LedgerQueryService:
             """
             SELECT a.*, e.raw_payload->'items' AS source_items,
                    COALESCE(re.merchant,a.store_name) AS merchant,
-                   COALESCE(re.raw_payload->>'store',e.raw_payload->>'store') AS store
+                   COALESCE(re.raw_payload->>'store',e.raw_payload->>'store') AS store,
+                   COALESCE(re.raw_payload->>'store_address',e.raw_payload->>'store_address') AS store_address,
+                   COALESCE(re.raw_payload->>'store_phone',e.raw_payload->>'store_phone') AS store_phone,
+                   COALESCE(re.raw_payload->>'tax_registration_number',e.raw_payload->>'tax_registration_number') AS tax_registration_number
               FROM budget.analytics_expenses a
               JOIN budget.expenses e ON e.id=a.expense_pk
               LEFT JOIN LATERAL (
                   SELECT merchant,raw_payload FROM budget.receipt_evidence
-                   WHERE expense_pk=a.expense_pk AND raw_payload->>'store' IS NOT NULL
+                   WHERE expense_pk=a.expense_pk AND (raw_payload->>'store' IS NOT NULL
+                        OR raw_payload->>'store_address' IS NOT NULL
+                        OR raw_payload->>'store_phone' IS NOT NULL
+                        OR raw_payload->>'tax_registration_number' IS NOT NULL)
                    ORDER BY is_primary_source DESC,updated_at DESC,id DESC LIMIT 1
               ) re ON TRUE
              WHERE a.expense_pk = %s
@@ -246,16 +252,21 @@ class LedgerQueryService:
             (expense_pk,),
         )
         from ..receipts.item_codes import item_identity
+        from ..receipts.departments import item_department
         source_items = expense.pop('source_items', None)
         expense["items"] = tuple(
-            {**item, **item_identity(item, expense.get('merchant') or expense.get('store_name'), source_items)}
+            {**item, **item_identity(item, expense.get('merchant') or expense.get('store_name'), source_items),
+             'department': item_department(item, source_items)}
             for item in expense["items"]
         )
         expense["evidence"] = self._fetch(
             """
             SELECT id, evidence_type, source_reference, transaction_datetime,
                    merchant, receipt_id, total, extraction_status,
-                   extraction_confidence, card_last4, raw_payload->>'store' AS store, has_handwritten_notes,
+                   extraction_confidence, card_last4, raw_payload->>'store' AS store,
+                   raw_payload->>'store_address' AS store_address,
+                   raw_payload->>'store_phone' AS store_phone,
+                   raw_payload->>'tax_registration_number' AS tax_registration_number, has_handwritten_notes,
                    has_category_markup
               FROM budget.receipt_evidence
              WHERE expense_pk = %s
@@ -773,7 +784,10 @@ class LedgerQueryService:
             """
             SELECT id, expense_pk, evidence_type, source_reference, source_sha256, raw_payload, mime_type,
                    transaction_datetime, merchant, receipt_id, total,
-                   payment_method, card_last4, raw_payload->>'store' AS store, extraction_status,
+                   payment_method, card_last4, raw_payload->>'store' AS store,
+                   raw_payload->>'store_address' AS store_address,
+                   raw_payload->>'store_phone' AS store_phone,
+                   raw_payload->>'tax_registration_number' AS tax_registration_number, extraction_status,
                    extraction_confidence, raw_text, page_text,
                    raw_payload->'receipt'->'possible_duplicate_expense_pks' AS possible_duplicate_expense_pks,
                    has_handwritten_notes, has_category_markup

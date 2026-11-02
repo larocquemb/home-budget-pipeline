@@ -183,6 +183,9 @@ def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = 
     schema = _safe_schema(schema)
     payload = {"receipt_id": getattr(receipt, "receipt_id", None), "review_reasons": getattr(receipt, "review_reasons", []), "payer": getattr(receipt, "payer", None)}
     payload['store'] = getattr(receipt, 'store', None)
+    payload['store_address'] = getattr(receipt, 'store_address', None)
+    payload['store_phone'] = getattr(receipt, 'store_phone', None)
+    payload['tax_registration_number'] = getattr(receipt, 'tax_registration_number', None)
     payload['field_decisions'] = getattr(receipt, 'field_decisions', {})
     payload['items'] = [asdict(item) for item in getattr(receipt, 'items', [])]
     with conn.cursor() as cur:

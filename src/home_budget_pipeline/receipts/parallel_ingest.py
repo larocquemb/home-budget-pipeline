@@ -28,6 +28,7 @@ from receipt_evidence import attach_evidence, find_match, resolve_merchant_alias
 from receipt_payment import extract_payment_provenance
 from receipt_total_reconcile import reconcile_total_from_text
 from .duplicate_review import capture_candidates
+from .departments import HEADING as DEPARTMENT_RE, label_pages
 
 
 def _page_text_lines(page: str) -> list[str]:
@@ -102,7 +103,7 @@ def _structured_layout(cache_path: Path) -> list[dict]:
     for page in pages:
         if not isinstance(page, dict) or not all(isinstance(line, dict) for line in page.get("lines", [])):
             return []
-    return pages
+    return label_pages(pages)
 
 
 def _ocr_run_metadata(cache_path: Path) -> dict:
@@ -141,11 +142,6 @@ def has_ocr_cache(cache_dir: Path, source_reference: str, source_sha256: str) ->
         cache_dir / f"{source_sha256}.json",
     ))
 
-
-DEPARTMENT_RE = re.compile(
-    r"^(?:BAKERY|DELI|DAIRY|FROZEN(?: FOODS?)?|GROCERY|MEAT|PRODUCE|SEAFOOD|PHARMACY|HOUSEHOLD)$",
-    re.I,
-)
 
 
 def _page_indent_layout(lines: list[scan.OCRLine]) -> list[dict | None]:
@@ -241,7 +237,8 @@ def _cache_layout_pages(layout_pages: list[list[scan.OCRLine]]) -> list[dict]:
             cached_lines.append(cached_line)
             if is_item:
                 preceding_item = {"page_number": page_number, "line_number": line_number}
-        result.append({"page_number": page_number, "lines": _nest_cache_lines(cached_lines)})
+        labelled = label_pages([{"page_number": page_number, "lines": cached_lines}])[0]["lines"]
+        result.append({"page_number": page_number, "lines": _nest_cache_lines(labelled)})
     return result
 
 
@@ -261,11 +258,11 @@ def _nest_cache_lines(lines: list[dict]) -> list[dict]:
             item = None
         elif line_type == "item":
             line["children"] = []
-            (department["children"] if department else roots).append(line)
+            (department["children"] if department and line.get("department") == department["text"].strip().upper() else roots).append(line)
             item = line
-        elif line_type in supporting_types and item is not None:
+        elif line_type in supporting_types and item is not None and line.get("department") == item.get("department"):
             item["children"].append(line)
-        elif line_type == "text" and department is not None:
+        elif line_type == "text" and department is not None and line.get("department") == department["text"].strip().upper():
             department["children"].append(line)
         else:
             roots.append(line)
@@ -481,6 +478,7 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool, *
             source_sha256=source_sha256,
             merchant=scan.prefer_filename_merchant(merchant, filename_merchant),
             store=store,
+            store_address=scan.extract_store_address(text, observations=run.get('ocr_passes', [])),
             transaction_date=transaction_date,
             receipt_id=scan.extract_receipt_id(text),
             subtotal=subtotal,
@@ -493,6 +491,11 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool, *
             ocr_layout=_structured_layout(_cache_path(cache_dir, source_reference, source_sha256)),
             text=text,
         )
+    from .departments import assign_items
+    from .store_contact import extract_store_contact
+    assign_items(receipt.items, receipt.ocr_layout)
+    for name, value in extract_store_contact(text, observations=run.get("ocr_passes", [])).items():
+        setattr(receipt, name, value)
     receipt.ocr_run = run
     receipt.transaction_datetime = transaction_datetime
     from .summary_evidence import apply
@@ -590,7 +593,7 @@ def _receipt_to_dict(receipt: scan.ScannedReceipt) -> dict:
 
 def _persist_transaction_datetime(conn, receipt: scan.ScannedReceipt, schema: str) -> None:
     value = getattr(receipt, "transaction_datetime", None)
-    if not value:
+    if not value and 'transaction_datetime' not in receipt.field_decisions:
         return
     with conn.cursor() as cur:
         cur.execute(

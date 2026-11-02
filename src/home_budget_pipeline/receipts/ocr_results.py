@@ -212,7 +212,7 @@ class OcrResultMessage:
             "subtotal", "tax", "total", "payment_method", "card_last4", "payer",
             "items", "text", "extraction_confidence", "extraction_status", "review_reasons",
         }
-        if set(receipt) - {'store', 'field_decisions'} != required_receipt:
+        if set(receipt) - {'store', 'store_address', 'store_phone', 'tax_registration_number', 'field_decisions'} != required_receipt:
             raise InvalidOcrResultMessage("receipt payload has unexpected fields")
         if not isinstance(receipt.get('field_decisions', {}), dict):
             raise InvalidOcrResultMessage('receipt field_decisions must be an object')
@@ -223,12 +223,16 @@ class OcrResultMessage:
                 raise InvalidOcrResultMessage('receipt field decision is invalid')
             _optional_text(decision.get('value'), 'receipt field decision value')
         _optional_text(receipt.get('store'), 'receipt store')
+        _optional_text(receipt.get('store_address'), 'receipt store_address')
+        for name in ('store_phone', 'tax_registration_number'):
+            _optional_text(receipt.get(name), f'receipt {name}')
         if not isinstance(receipt["items"], list) or not all(
-            isinstance(item, dict) and set(item) == {"item_name", "line_total"}
+            isinstance(item, dict) and set(item) - {"department"} == {"item_name", "line_total"}
             for item in receipt["items"]
         ):
             raise InvalidOcrResultMessage("receipt items are invalid")
         for item in receipt["items"]:
+            _optional_text(item.get("department"), "receipt item department")
             if not isinstance(item["item_name"], str) or not item["item_name"]:
                 raise InvalidOcrResultMessage("receipt item_name is required")
             _optional_number(item["line_total"], "receipt item line_total")
@@ -456,6 +460,9 @@ def _receipt_payload(receipt: scan.ScannedReceipt) -> dict[str, Any]:
     return {
         "merchant": receipt.merchant,
         "store": receipt.store,
+        "store_address": receipt.store_address,
+        "store_phone": receipt.store_phone,
+        "tax_registration_number": receipt.tax_registration_number,
         "transaction_date": receipt.transaction_date,
         "transaction_datetime": getattr(receipt, "transaction_datetime", None),
         "receipt_id": receipt.receipt_id,
@@ -485,6 +492,9 @@ def receipt_from_message(message: OcrResultMessage) -> scan.ScannedReceipt:
         source_sha256=message.source_sha256,
         merchant=payload["merchant"],
         store=payload.get("store"),
+        store_address=payload.get('store_address'),
+        store_phone=payload.get('store_phone'),
+        tax_registration_number=payload.get('tax_registration_number'),
         transaction_date=payload["transaction_date"],
         receipt_id=payload["receipt_id"],
         subtotal=payload["subtotal"],
