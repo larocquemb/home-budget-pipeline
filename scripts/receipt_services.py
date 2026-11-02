@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage per-user macOS receipt worker and collector LaunchAgents."""
+"""Manage per-user macOS receipt worker, collector and graph LaunchAgents."""
 from __future__ import annotations
 
 import argparse
@@ -22,13 +22,13 @@ def is_worker(name: str) -> bool:
 
 
 def configured_names(workers: int) -> tuple[str, ...]:
-    return ('worker', *(f'worker-{i}' for i in range(2, workers + 1)), 'collector')
+    return ('worker', *(f'worker-{i}' for i in range(2, workers + 1)), 'collector', 'graph')
 
 
 def installed_names(agents: Path) -> set[str]:
     prefix = 'com.brownrook.home-budget.'
     return {p.stem[len(prefix):] for p in agents.glob(prefix + '*.plist')
-            if is_worker(p.stem[len(prefix):]) or p.stem[len(prefix):] == 'collector'}
+            if is_worker(p.stem[len(prefix):]) or p.stem[len(prefix):] in {'collector', 'graph'}}
 
 
 def positive_count(value: str) -> int:
@@ -80,7 +80,7 @@ def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
     config = {
         'Label': service_label(name),
         'ProgramArguments': ['/bin/sh', str(root / 'scripts' / (
-            'run_receipt_service.sh' if is_worker(name) or name == 'collector' else 'run_local_telemetry.sh')), name],
+            'run_receipt_service.sh' if is_worker(name) or name in {'collector', 'graph'} else 'run_local_telemetry.sh')), name],
         'WorkingDirectory': str(root),
         'RunAtLoad': True,
         'KeepAlive': True,
@@ -104,6 +104,12 @@ def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
             if bundle_id:
                 config['AssociatedBundleIdentifiers'] = [bundle_id]
             break
+
+    if name == 'graph':
+        # One bounded replay at startup, then every ten minutes. launchd does
+        # not overlap invocations of this job or restart a successful run.
+        config['KeepAlive'] = False
+        config['StartInterval'] = 600
 
     if name in {'web', 'progress'}:
         script = 'mac_web_agent.py' if name == 'web' else 'receipt_progress.py'
@@ -137,7 +143,7 @@ def main() -> int:
     parser.add_argument('action', choices=('start', 'stop', 'restart', 'reload', 'status', 'logs'))
     parser.add_argument('--workers', type=positive_count, help='Number of receipt consumers; saved for subsequent commands')
     parser.add_argument('--ocr-threads', type=positive_count, help='CPU threads per OCR engine in each worker')
-    parser.add_argument('--only', choices=('collector',), help='Control the collector without interrupting OCR workers')
+    parser.add_argument('--only', choices=('collector', 'graph'), help='Control one service without interrupting OCR workers')
     args = parser.parse_args()
     if (args.workers is not None or args.ocr_threads is not None) and args.action not in {'start', 'restart'}:
         parser.error('Worker settings apply to start or restart only')
@@ -189,6 +195,10 @@ def main() -> int:
             if not loaded:
                 print(f'{name}: not loaded; use services start')
                 return 1
+            if name == 'graph':
+                launchctl('kickstart', target)
+                print('graph: projection requested; an active projection is left running')
+                continue
             # The consumer signal handler finishes its current delivery/ACK.
             # KeepAlive then launches a fresh interpreter with the new code.
             launchctl('kill', 'SIGTERM', target)

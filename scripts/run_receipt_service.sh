@@ -6,7 +6,8 @@ cd "$repo_root"
 case "${1:-}" in
   worker|worker-[0-9]*) mode=consume ;;
   collector) mode=collect ;;
-  *) echo "Usage: run_receipt_service.sh worker|collector" >&2; exit 2 ;;
+  graph) mode=graph ;;
+  *) echo "Usage: run_receipt_service.sh worker|collector|graph" >&2; exit 2 ;;
 esac
 
 set -a
@@ -32,5 +33,7 @@ fi
 case "$mode" in
   consume) export OTEL_SERVICE_NAME=home-budget-local-receipt-worker ;;
   collect) export OTEL_SERVICE_NAME=home-budget-local-ocr-collector ;;
+  graph) export OTEL_SERVICE_NAME=home-budget-local-receipt-graph
+    exec "$repo_root/.venv/bin/ledger" receipts graph --all ;;
 esac
 exec "$repo_root/.venv/bin/ledger" receipts "$mode"

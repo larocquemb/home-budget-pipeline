@@ -363,6 +363,49 @@ def story_index(sha, item_id='', run_id=''):
     return result, time
 
 
+@app.get(f'{BASE_PATH}/api/graph/receipts/{{sha}}/ocr')
+def ocr_readings(sha: str, run_id: str = '', _: dict = Depends(authenticated_identity)):
+    """Read retained pass evidence from exact published Neo4j memberships."""
+    if not graph.re.fullmatch('[0-9a-f]{64}', sha):
+        raise HTTPException(422, 'Invalid receipt')
+    headers = read('MATCH (s:ReceiptSnapshot {sha:$sha}) RETURN s.observed_at AS time,s.version AS version', sha=sha)
+    if not headers:
+        raise HTTPException(404, 'No projected snapshot for this receipt; refresh the development graph')
+    if headers[0]['version'] != graph.VERSION:
+        raise HTTPException(409, 'Receipt graph version changed; refresh its projection')
+    observed = headers[0]['time']
+    catalog = read('''MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time})-[r:HAS_ENTITY]->()
+        WHERE r.kind IN ['OCRRun','OCRPass']
+        RETURN r.node_id AS id,r.kind AS kind,r.story_json AS story LIMIT 2001''', sha=sha, time=observed)
+    if len(catalog) > 2000:
+        raise HTTPException(413, 'Too many OCR records for interactive comparison')
+    runs = snapshot_nodes(sha, observed, [r['id'] for r in catalog if r['kind'] == 'OCRRun'])
+    runs.sort(key=lambda r: (str(r['properties'].get('processed_at') or ''), r['id']), reverse=True)
+    if run_id and not any(str(r['properties'].get('run_uuid')) == run_id for r in runs):
+        raise HTTPException(404, 'OCR run not present in this receipt snapshot')
+    selected = run_id or (str(runs[0]['properties']['run_uuid']) if runs else '')
+    ids = [r['id'] for r in catalog if r['kind'] == 'OCRPass'
+           and str(json.loads(r['story']).get('run_uuid')) == selected]
+    passes = snapshot_nodes(sha, observed, ids)
+    passes.sort(key=lambda p: p['properties'].get('pass_id', 0))
+    for node in passes:
+        props = node['properties']
+        retained = props.get('provenance') or {}
+        if isinstance(retained, str):
+            retained = json.loads(retained)
+        lines = retained.get('lines') or []
+        props['reading_text'] = props.get('extracted_text') or '\n'.join(
+            line['text'] for line in lines if isinstance(line, dict) and isinstance(line.get('text'), str)
+        )
+        props['reading_source'] = 'extracted_text' if props.get('extracted_text') else (
+            'provenance.lines' if lines else 'unavailable')
+    if not read('MATCH (s:ReceiptSnapshot {sha:$sha,observed_at:$time}) RETURN s.observed_at AS time', sha=sha, time=observed):
+        raise HTTPException(409, 'Receipt projection changed; refresh the graph')
+    return {'observed_at': observed, 'run_id': selected,
+            'runs': [{'run_uuid': r['properties']['run_uuid'], 'processed_at': r['properties'].get('processed_at')} for r in runs],
+            'passes': passes}
+
+
 @app.get(f'{BASE_PATH}/api/graph/receipts/{{sha}}')
 def receipt(sha: str, perspective: str = 'lineage', offset: int = Query(0, ge=0),
             limit: int = Query(100, ge=1, le=200), item_id: str = '', run_id: str = '',

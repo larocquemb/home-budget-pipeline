@@ -85,7 +85,7 @@ def test_worker_scaling_persists_settings_and_removes_extra_agents(tmp_path, mon
     monkeypatch.setattr(module, 'launchctl', launchctl)
     monkeypatch.setattr(sys, 'argv', ['receipt_services.py', 'start', '--workers', '3', '--ocr-threads', '4'])
     module.main()
-    assert loaded == {module.service_label(n) for n in ('worker', 'worker-2', 'worker-3', 'collector')}
+    assert loaded == {module.service_label(n) for n in ('worker', 'worker-2', 'worker-3', 'collector', 'graph')}
     agents = home / 'Library/LaunchAgents'
     config = plistlib.loads((agents / (module.service_label('worker-2') + '.plist')).read_bytes())
     assert config['ProgramArguments'][1:] == [str(root / 'scripts/run_receipt_service.sh'), 'worker-2']
@@ -93,11 +93,11 @@ def test_worker_scaling_persists_settings_and_removes_extra_agents(tmp_path, mon
     assert config['StandardOutPath'].endswith('/worker-2.log')
     monkeypatch.setattr(sys, 'argv', ['receipt_services.py', 'restart'])
     module.main()
-    assert len(loaded) == 4
+    assert len(loaded) == 5
     monkeypatch.setattr(sys, 'argv', ['receipt_services.py', 'start', '--workers', '1'])
     module.main()
-    assert loaded == {module.service_label(n) for n in ('worker', 'collector')}
-    assert module.installed_names(agents) == {'worker', 'collector'}
+    assert loaded == {module.service_label(n) for n in ('worker', 'collector', 'graph')}
+    assert module.installed_names(agents) == {'worker', 'collector', 'graph'}
     monkeypatch.setattr(sys, 'argv', ['receipt_services.py', 'stop'])
     module.main()
     assert not loaded
@@ -204,5 +204,6 @@ def test_reload_signals_consumers_without_unloading_active_agents(tmp_path, monk
     monkeypatch.setattr(sys,'argv',['receipt_services.py','reload'])
     assert module.main() == 0
     assert [c[1] for c in calls if c[0]=='kill'] == ['SIGTERM']*3
-    assert all(c[0] in {'print','kill'} for c in calls)
+    assert ('kickstart', f'gui/{module.os.getuid()}/{module.service_label("graph")}') in calls
+    assert all(c[0] in {'print','kill','kickstart'} for c in calls)
     assert not (tmp_path/'home/Library/LaunchAgents').exists()

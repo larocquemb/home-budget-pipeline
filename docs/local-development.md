@@ -112,6 +112,51 @@ the batch summary tracks cache-rebuild requests with a batch ID.
 
 ## Command interface
 
+### Development receipt provenance
+
+Development uses the same `home_budget_pipeline.receipt_graph.main` projector as
+production's CronJob. Both launch `ledger receipts graph --all`. The normal
+`receipts services start` installs workers, the collector and the graph schedule;
+normal status, reload and stop commands include all three stages. To start just
+the graph schedule without interrupting workers:
+
+```bash
+ledger --env-file .env.dev receipts services start --only graph
+ledger --env-file .env.dev receipts services status --only graph
+```
+
+The agent projects at startup and every ten minutes, without overlapping its
+scheduled invocations. A finished idle agent is normal; inspect its last exit
+code and `.local-services/graph.log`. Worker and collector processing remains
+independent of Neo4j availability. To request another scheduled run:
+
+```bash
+ledger --env-file .env.dev receipts services reload --only graph
+```
+
+For a targeted manual refresh, avoid overlapping the scheduled projector:
+
+```bash
+ledger --env-file .env.dev receipts graph --sha SOURCE_SHA256
+```
+
+These commands update only the derived graph. They do not rerun OCR or edit
+receipt accounting records. The authenticated Provenance page compares retained
+OCR readings by run and pass from exact Neo4j snapshot memberships, including
+`provenance.lines` when `extracted_text` is absent. It identifies missing text
+and projection timestamps explicitly. The selected base and coverage are not
+accuracy measurements. The comparison UI and API are shared by both environments.
+
+Alloy's native configuration collects `graph.log` with `environment=development`
+and `app=receipt-graph`. Existing Alloy instances must reload that configuration
+after this change before those scheduled-projector logs appear in Loki.
+
+Matching source paths and execution flow do not establish runtime parity:
+compare the deployed commit, package/engine/model versions, enabled engines and
+configuration against development before attributing differing results to OCR.
+Platform acceleration and resource limits must also be recorded. A local change
+is not present in production until its image has been built and deployed.
+
 Use `make` for software builds, tests, documentation, and infrastructure setup.
 Use `ledger` for application operations: processing receipts, maintaining caches,
 rebuilding application databases, and controlling receipt workers and collectors.

@@ -70,11 +70,16 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
 
     receipts = commands.add_parser("receipts", help="Process receipt evidence.")
     receipt_commands = receipts.add_subparsers(dest="receipt_command", required=True)
+    graph = receipt_commands.add_parser("graph", help="Project retained receipt history into the configured Neo4j graph.")
+    graph_target = graph.add_mutually_exclusive_group(required=True)
+    graph_target.add_argument("--sha", help="Project one receipt source SHA-256.")
+    graph_target.add_argument("--all", action="store_true", help="Project all receipts in bounded batches.")
+    graph.set_defaults(handler=_project_receipt_graph)
     services = receipt_commands.add_parser("services", help="Control native Mac receipt workers and collector.")
     services.add_argument("action", choices=("start", "stop", "restart", "reload", "status", "logs"))
     services.add_argument("--workers", type=int)
     services.add_argument("--ocr-threads", type=int)
-    services.add_argument("--only", choices=("collector",), help="Control only the collector, leaving OCR workers running.")
+    services.add_argument("--only", choices=("collector", "graph"), help="Control only the selected service, leaving OCR workers running.")
     services.set_defaults(handler=_receipt_services)
     process = receipt_commands.add_parser("process", help="Queue the receipt backlog through RabbitMQ.")
     process.add_argument("receipt_root", nargs="?", default=_receipt_root_default())
@@ -343,6 +348,11 @@ def _correct_allocation(args):
 def _receipt_services(args):
     from .local_operations import run_receipt_services
     return run_receipt_services(args)
+
+
+def _project_receipt_graph(args):
+    from .receipt_graph import main as project
+    return project(["--sha", args.sha] if args.sha else ["--all"])
 
 
 def _clean_local_cache(args):

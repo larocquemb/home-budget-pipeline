@@ -45,5 +45,5 @@ RUN tesseract --version \
     && tesseract --list-langs | grep -qx eng \
     && python -m home_budget_pipeline.receipts.ocr_smoke
 
-ENTRYPOINT ["python", "-m"]
-CMD ["home_budget_pipeline.receipts.queue_ingest", "publish", "/data/receipts/raw/scanned/inbox"]
+ENTRYPOINT ["ledger"]
+CMD ["receipts", "process"]
