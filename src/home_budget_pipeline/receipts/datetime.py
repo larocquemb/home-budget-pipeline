@@ -201,9 +201,14 @@ def transaction_datetime_evidence(text: str) -> list[dict]:
     for rank, line_number, segment in _purpose_segments(text):
         if rank < 0:
             continue
-        candidates.extend(dict(purpose_rank=rank, format_rank=fmt, line_number=line_number + 1,
-                               position=position, value=_with_labeled_time(value, line_number, lines))
-                          for fmt, position, value in _date_candidates(segment, labeled=rank < 3))
+        for fmt, position, value in _date_candidates(segment, labeled=rank < 3):
+            patterns = {0: (MONTH_NAME_RE, 3), 1: (YMD_RE, 1), 2: (MDY_RE, 3),
+                        3: (YMD2_RE, 1), 4: (DAY_MONTH_NAME_RE, 3)}
+            pattern, year_group = patterns.get(fmt, (None, None))
+            match = pattern.match(segment, position) if pattern else None
+            candidates.append(dict(purpose_rank=rank, format_rank=fmt, line_number=line_number + 1,
+                position=position, value=_with_labeled_time(value, line_number, lines),
+                year_digits=len(match[year_group]) if match else None))
     return candidates
 
 

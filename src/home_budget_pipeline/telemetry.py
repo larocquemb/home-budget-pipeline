@@ -27,6 +27,13 @@ from uuid import uuid4
 
 
 LOG = logging.getLogger(__name__)
+
+
+def print_json_event(payload: Mapping[str, Any], *, level: str = 'INFO', file=None) -> None:
+    """Keep CLI JSON machine-readable while giving log collectors real severity."""
+    event = {'timestamp': datetime.now(timezone.utc).isoformat(), **payload, 'level': level}
+    print(json.dumps(event, default=str, sort_keys=True, ensure_ascii=False), file=file, flush=True)
+
 _TRUTHY = {"1", "true", "yes", "on"}
 _run_uuid: ContextVar[str | None] = ContextVar("receipt_run_uuid", default=None)
 _pass_id: ContextVar[int | None] = ContextVar("receipt_pass_id", default=None)

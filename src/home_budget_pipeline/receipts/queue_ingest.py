@@ -58,9 +58,9 @@ def record_receipt_heartbeat(message, attempt_id, queue):
     log_receipt_activity(message, 1, attempt_id)
 
 
-def _print_json(payload: object) -> None:
+def _print_json(payload: dict, *, level='INFO', file=None) -> None:
     """Emit one JSON object per stdout line for container log collectors."""
-    print(json.dumps(payload, sort_keys=True), flush=True)
+    telemetry.print_json_event(payload, level=level, file=file)
 
 
 def _cache_rebuild_marker(cache_dir: Path, message: ReceiptMessage) -> Path:
@@ -374,7 +374,7 @@ def publish_reprocess(args) -> int:
         if getattr(args, "use_ocr_cache", False):
             return publish_cached_reprocess(message, args)
         if args.verbose:
-            print(f"Publishing reprocess request {request_id} for {message.source_reference}", file=sys.stderr, flush=True)
+            _print_json({'message': f'Publishing reprocess request {request_id} for {message.source_reference}'}, file=sys.stderr)
         connection = connect_broker(args.rabbitmq_url)
         try:
             channel = connection.channel()
@@ -392,8 +392,9 @@ def publish_reprocess(args) -> int:
     except (ValueError, RuntimeError, OSError, AMQPError) as exc:
         # Connection errors can contain URLs; report their type without credentials.
         detail = str(exc) if isinstance(exc, InvalidReceiptMessage) or type(exc) is ValueError else type(exc).__name__
-        print(f"Cannot queue reprocess request {request_id}: {detail}", file=sys.stderr)
-        print(f"If publication was uncertain, retry with --request-id {request_id}.", file=sys.stderr)
+        _print_json({'message': f'Cannot queue reprocess request {request_id}: {detail}. '
+                     f'If publication was uncertain, retry with --request-id {request_id}.'},
+                    level='ERROR', file=sys.stderr)
         return 1
     _print_json({
         "source_reference": message.source_reference,
@@ -530,18 +531,14 @@ def publish_batch(args, *, cache_only: bool = False) -> int:
                 )
                 published += 1
                 if args.verbose:
-                    print(
-                        f"[{published}/{selected}] Queued {reference} batch={batch_id}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
+                    _print_json({'message': f'[{published}/{selected}] Queued {reference} batch={batch_id}'}, file=sys.stderr)
         finally:
             if connection.is_open:
                 connection.close()
     except (ValueError, RuntimeError, OSError, AMQPError) as exc:
         detail = str(exc) if type(exc) is ValueError else type(exc).__name__
-        print(f"Cannot finish batch {batch_id}: {detail}; {published} publication(s) confirmed.", file=sys.stderr)
-        print(f"Retry with --request-id {batch_id} to reuse these requests.", file=sys.stderr)
+        _print_json({'message': f'Cannot finish batch {batch_id}: {detail}; {published} publication(s) confirmed. '
+                     f'Retry with --request-id {batch_id} to reuse these requests.'}, level='ERROR', file=sys.stderr)
         return 1
     summary = {
         "discovered": discovered,
@@ -946,7 +943,7 @@ def _publish_normal(args, topology):
                                 'Inspect receipt status before explicit receipts retry/reprocess recovery.'
                             ) from exc
                         if getattr(args, 'verbose', False):
-                            print(f'[{index}/{len(messages)}] Queued {message.source_reference}', file=sys.stderr, flush=True)
+                            _print_json({'message': f'[{index}/{len(messages)}] Queued {message.source_reference}'}, file=sys.stderr)
                 finally:
                     if connection.is_open:
                         connection.close()

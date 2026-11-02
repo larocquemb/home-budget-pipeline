@@ -26,6 +26,7 @@ from home_budget_pipeline.receipts.ingest import (
 
 from .queries import LedgerQueryService, RECEIPT_PROCESSING_SORT_COLUMNS, processing_month
 from .render import esc, money, page, pager, table
+from .receipt_fields import receipt_datetime, receipt_date_note
 
 BASE_PATH = os.getenv("LEDGER_BASE_PATH", "/ledger").rstrip("/") or "/ledger"
 RECEIPT_SOURCE_ROOT = Path(os.getenv("RECEIPT_SOURCE_ROOT", "/data/receipts/raw/scanned")).resolve()
@@ -74,28 +75,34 @@ def _post_ocr_text(evidence: dict, expense: Optional[dict]) -> str:
     lines = [
         f"Merchant: {prefer_filename_merchant(extracted_merchant, filename_merchant) or ''}",
         f"Store: {evidence.get('store') or (expense or {}).get('store') or ''}",
-        f"Date/time: {evidence.get('transaction_datetime') or (expense or {}).get('transaction_datetime') or (expense or {}).get('order_date') or filename_date or ''}",
+        f"Address: {evidence.get('store_address') or (expense or {}).get('store_address') or ''}",
+        f"Phone: {evidence.get('store_phone') or (expense or {}).get('store_phone') or ''}",
+        f"Tax registration (RT): {evidence.get('tax_registration_number') or (expense or {}).get('tax_registration_number') or ''}",
+        f"Date/time: {receipt_datetime(evidence, expense, filename_date) or ''}",
         f"Receipt ID: {evidence.get('receipt_id') or ''}",
         f"Total: {evidence.get('total') or (expense or {}).get('expense_total') or filename_total or ''}",
         f"Payment method: {evidence.get('payment_method') or ''}",
         f"Card last four: {evidence.get('card_last4') or ''}",
     ]
+    if receipt_date_note(evidence):
+        lines.append(receipt_date_note(evidence))
     items = (expense or {}).get("items") or (evidence.get("raw_payload") or {}).get("items") or ()
     lines.append("")
     lines.append("Line items:")
     if items:
-        grouped: dict[str, list] = {}
+        grouped: dict[tuple, list] = {}
         for item in items:
             name = clean_extracted_item_name(str(item.get("item_name") or ""))
-            grouped.setdefault(name, []).append(item.get("line_total"))
-        for name, amounts in grouped.items():
+            grouped.setdefault((item.get("department"), name), []).append(item.get("line_total"))
+        for (department, name), amounts in grouped.items():
             try:
                 numeric = [Decimal(str(amount)) for amount in amounts if amount is not None]
                 amount = sum(numeric, Decimal("0")) if len(numeric) == len(amounts) else ""
             except InvalidOperation:
                 amount = ""
             suffix = f" ({len(amounts)} entries combined)" if len(amounts) > 1 else ""
-            lines.append(f"- {name}: {amount}{suffix}")
+            label = f" [{department}]" if department else ""
+            lines.append(f"- {name}{label}: {amount}{suffix}")
     else:
         lines.append("(none extracted)")
     return "\n".join(lines)
@@ -736,6 +743,7 @@ def expense_page(expense_pk: int, service: LedgerQueryService = Depends(query_se
         )
         item_rows.append(f"""<tr>
 <td>{esc(item.get('item_name'))}</td>
+<td>{esc(item.get('department'))}</td>
 <td><form class="item-description-form" data-item-id="{esc(item.get('expense_item_id'))}"><input name="product_description" value="{esc(item.get('product_description'))}" placeholder="Additional description"><input name="product_url" type="url" value="{esc(item.get('product_url'))}" placeholder="Merchant product URL"><button type="submit">Save</button><small class="description-save-status muted"></small>{f'<br><a href="{esc(item.get("product_url"))}" target="_blank" rel="noopener">View product</a>' if item.get('product_url') else ''}</form></td>
 <td><form class="category-override-form" data-item-id="{esc(item.get('expense_item_id'))}">
 <select name="category" aria-label="Category for {esc(item.get('item_name'))}">{options}</select>
@@ -747,7 +755,7 @@ def expense_page(expense_pk: int, service: LedgerQueryService = Depends(query_se
 <td>{esc(item.get('category_confidence'))}</td>
 </tr>""")
     detail += """<h2>Line items</h2><table><thead><tr>
-<th>Receipt item</th><th>Additional description</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th><th>Confidence</th>
+<th>Receipt item</th><th>Department</th><th>Additional description</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th><th>Confidence</th>
 </tr></thead><tbody>""" + "".join(item_rows) + """</tbody></table>
 <script>
 for (const form of document.querySelectorAll('.item-description-form')) {

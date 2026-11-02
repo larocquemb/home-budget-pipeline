@@ -89,6 +89,7 @@ MERCHANT_ALIASES = (
 class ScannedItem:
     item_name: str
     line_total: float
+    department: Optional[str] = None
 
 
 @dataclass
@@ -114,6 +115,9 @@ class ScannedReceipt:
     review_reasons: List[str] = field(default_factory=list)
     store: Optional[str] = None
     field_decisions: dict = field(default_factory=dict)
+    store_address: Optional[str] = None
+    store_phone: Optional[str] = None
+    tax_registration_number: Optional[str] = None
 
     @property
     def canonical_order_id(self) -> str:
@@ -1279,10 +1283,73 @@ def extract_merchant_store(text: str, merchant_hint: Optional[str] = None, *, ob
             if match:
                 remainder = merchant[match.end():].strip(' #:-')
                 if remainder and not store and not stores:
-                    store = remainder
+                    store = merchant
                 merchant = replacement or normalize_merchant(match[0])
                 break
+        # Merchant corroboration may identify a separate logo rather than the
+        # branch header. Retain a complete printed merchant/location line when
+        # the following street address establishes that it is a store header.
+        labels = []
+        for reading in _store_header_readings(text, observations):
+            header = _store_header_lines(reading)
+            for index, line in enumerate(header):
+                if (line.casefold().startswith(merchant.casefold() + ' ')
+                        and not MONEY_RE.search(line) and not _merchant_address_line(line)
+                        and any(_store_street_line(row) for row in header[index + 1:index + 3])):
+                    labels.append(line)
+            if labels and reading == text and len(stores) <= 1 and len(set(labels)) == 1:
+                return merchant, labels[0]
+        unique = {_line_key(label): label for label in labels}
+        if len(unique) == 1 and len(stores) <= 1:
+            store = next(iter(unique.values()))
     return merchant, store
+
+
+def _store_header_lines(text):
+    result = []
+    for raw in text.splitlines()[:12]:
+        line = normalize_line(raw)
+        if re.match(r'^(?:bill\s*to\b|ship\s*to\b|sold\s*to\b|customer\s+(?:name|address)\b|member\b|loyalty\b|served\s+by\b|subtotal\b|total(?:\s*[:$]|\s+\d|\s*$))', line, re.I):
+            break
+        result.append(line)
+    return result
+
+
+def _store_street_line(line):
+    return not MONEY_RE.search(line) and bool(re.fullmatch(
+        r"(?:\d{1,5}\s*[-/]\s*)?\d{1,6}[A-Za-z]?\s+[^@\n]{2,100}\b"
+        r"(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|way|court|ct|parkway|pkwy|highway|hwy|crescent|cres|place|pl|trail)"
+        r"\.?\s*(?:[NSEW]{1,2}|(?:unit|suite)\s*#?\s*[A-Za-z0-9-]+)?", line, re.I))
+
+
+def _store_header_readings(text, observations):
+    yield text
+    for observation in observations or ():
+        if not isinstance(observation, dict):
+            continue
+        if observation.get('page_number') != 1 or observation.get('status') not in (None, 'success'):
+            continue
+        provenance = observation.get('provenance') or {}
+        if isinstance(provenance, str):
+            provenance = json.loads(provenance)
+        reading = observation.get('text') or observation.get('extracted_text') or '\n'.join(
+            row['text'] for row in provenance.get('lines', []) if isinstance(row, dict) and isinstance(row.get('text'), str))
+        if isinstance(reading, str) and reading and not _looks_like_tesseract_tsv(reading):
+            yield reading
+
+
+def extract_store_address(text, *, observations=()):
+    """Read a printed street in the store header; never a customer address."""
+    alternatives = {}
+    for reading in _store_header_readings(text, observations):
+        addresses = [line for line in _store_header_lines(reading) if _store_street_line(line)]
+        if len(addresses) == 1:
+            if reading == text:
+                return addresses[0]
+            alternatives[_line_key(addresses[0])] = addresses[0]
+        elif len(addresses) > 1:
+            return None
+    return next(iter(alternatives.values())) if len(alternatives) == 1 else None
 
 
 def _tax_code(line: str) -> Optional[str]:
@@ -1497,7 +1564,7 @@ def clean_extracted_item_name(name: str) -> str:
 def normalize_item_signs(items: List[ScannedItem], total: Optional[float]) -> List[ScannedItem]:
     """Apply a refund total's sign when OCR loses trailing item minus signs."""
     if total is not None and total < 0:
-        return [ScannedItem(item.item_name, -abs(item.line_total)) for item in items]
+        return [ScannedItem(item.item_name, -abs(item.line_total), item.department) for item in items]
     return items
 
 
@@ -1587,7 +1654,7 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
     observations = []
     pages = extract_page_text(path, observations)
     text = merge_page_text(pages)
-    merchant, store = extract_merchant_store(text, pdf_merchant_hint(path))
+    merchant, store = extract_merchant_store(text, pdf_merchant_hint(path), observations=observations)
     subtotal, tax, total = extract_totals(text)
     filename_date, filename_merchant, filename_total = receipt_info_from_filename(path)
     payment = extract_payment_provenance(text)
@@ -1599,11 +1666,19 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
         path=str(path), source_reference=reference, source_sha256=sha256_file(path),
         merchant=prefer_filename_merchant(merchant, filename_merchant),
         store=store,
+        store_address=extract_store_address(text, observations=observations),
         transaction_date=extract_date(text) or (filename_date if allows_filename_date(text) else None),
         receipt_id=extract_receipt_id(text), subtotal=subtotal, tax=tax, total=total,
         payment_method=payment.payment_method, card_last4=payment.card_last4,
         items=normalize_item_signs(extract_items(text), total), page_text=list(pages), text=text,
     )
+    from .parallel_ingest import _cache_layout_pages
+    from .departments import assign_items
+    from .store_contact import extract_store_contact
+    receipt.ocr_layout = _cache_layout_pages(extract_page_layout(path, pages))
+    assign_items(receipt.items, receipt.ocr_layout)
+    for name, value in extract_store_contact(text, observations=observations).items():
+        setattr(receipt, name, value)
     if receipt.total is None:
         receipt.total = filename_total
     from .summary_evidence import apply
@@ -1639,6 +1714,10 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
 
     payload = {
         "store": receipt.store,
+        "store_address": receipt.store_address,
+        "store_phone": receipt.store_phone,
+        "tax_registration_number": receipt.tax_registration_number,
+        "items": [asdict(item) for item in receipt.items],
         "source_reference": receipt.source_reference,
         "source_sha256": receipt.source_sha256,
         "receipt_id": receipt.receipt_id,

@@ -24,8 +24,8 @@ def test_persist_unlinked_items_and_render_extraction(monkeypatch):
     )
     evidence.upsert_evidence(SimpleNamespace(cursor=Cursor), receipt)
     payload = json.loads(saved[0][-1])
-    assert payload['items'] == [{'item_name':'FIRST PRODUCT', 'line_total':10},
-                                {'item_name':'SECOND PRODUCT', 'line_total':20}]
+    assert payload['items'] == [{'item_name':'FIRST PRODUCT', 'line_total':10,'department':None},
+                                {'item_name':'SECOND PRODUCT', 'line_total':20,'department':None}]
     rendered = _post_ocr_text({'raw_payload':payload}, None)
     assert '- FIRST PRODUCT: 10' in rendered
     assert '- SECOND PRODUCT: 20' in rendered

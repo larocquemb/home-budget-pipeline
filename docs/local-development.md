@@ -164,16 +164,39 @@ retained successful OCR passes. Card numbers require a masked tail in a bounded
 payment block; product, address and loyalty rows stop that search. Dates retain
 their purchase/payment/print purpose. Conflicting dates at the strongest purpose
 remain unknown and require review; repeated passes do not vote away a conflict.
+An observed full year can resolve a single-character year disagreement when it
+agrees with a separately printed short-year date in the same original pass.
+All observed short dates must agree, as must the month/day and available clock
+times. This uses separate printed evidence rather than a majority of OCR passes;
+other conflicts remain in review. Raw engine metadata is excluded from readings.
 Conflicting times on one agreed date preserve the date and require time review.
 This field-level resolution currently covers card last-four and transaction
 date/time; item descriptions and amounts still use the existing line consensus.
+
+Store extraction retains a complete printed branch header separately from the
+merchant brand. A separate optional store address reads a numbered street from
+that header, stopping before customer/billing/shipping, loyalty and totals sections.
+Successful retained first-page readings can supply a missing header. Contradictory
+alternative headers remain unresolved. Store/address extraction is shared by fresh
+and cached processing and audited identity refresh; the receipt detail displays
+the address separately. Original receipt text is preserved.
 
 Decisions retain policy, candidate values and pass/line references in receipt
 evidence. Graph projection exposes the latest stored extraction's field decisions
 and links them to available OCR passes. Older records have no invented decisions.
 Source text and original OCR observations remain unchanged.
+An explicit unknown extraction date also clears a stale OCR-derived accounting
+timestamp during normal persistence; audited date corrections remain protected.
+Receipt display, list sorting/search and purchase-month filtering honor that
+unknown instead of falling back to an older accounting date or filename.
 
-Result messages can now carry optional field-decision evidence. Upgrade/reload
+Publisher and graph-projector JSON output includes UTC timestamps and explicit
+INFO/ERROR severity. Failed projections retain ERROR severity. Existing historical
+logs are not relabeled, and these source changes do not classify every third-party
+library log. Native workers load the logging change on reload; scheduled graph
+invocations load it on their next start.
+
+Result messages can now carry optional field-decision and store-address evidence. Upgrade/reload
 collectors before workers or cache-reprocessing publishers emit these messages;
 older collectors reject unknown receipt fields. New collectors accept retained
 older messages without this optional field. Production Argo CD applies dependencies
@@ -1016,3 +1039,26 @@ Document and image-preview requests refuse files with a different SHA-256 from
 the recorded evidence, preventing reuse of a filename from displaying a
 replacement PDF against older receipt data. No OCR refresh is needed for source
 location reconciliation.
+
+
+### Printed departments and store contact fields
+
+Receipt extraction retains optional store phone and printed tax registration
+(RT) numbers separately from payment identifiers. Header phone extraction
+excludes fax, customer, shipping and billing sections; conflicting readings
+remain empty. Tax registration requires an observed full numeric RT account.
+These optional fields do not add a review requirement when absent.
+
+Printed department headings and original item coordinates determine department
+membership, allowing OCR alignment variation. Dedented rows, summaries and new
+pages end the scope; missing geometry does not imply membership. Fresh and
+cached parsing share this rule, including rechecking older cached labels.
+Department stays separate from accounting Category. It is retained on extracted
+items in evidence and expense JSON, projected conservatively onto matching
+canonical items and displayed in receipt and expense details. This requires no
+new database column. Item names/amounts changed by review are not assigned a
+stale department from a different source item.
+
+After updating this result-message shape, reload the collector before workers
+and cached re-extraction. Existing messages without optional metadata remain
+readable. Re-extraction does not require deleting the OCR cache.

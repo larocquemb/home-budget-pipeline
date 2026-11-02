@@ -11,6 +11,7 @@ import os
 import re
 from uuid import UUID, uuid4, uuid5
 from urllib.parse import urlencode
+from .telemetry import print_json_event
 
 VERSION = 8
 
@@ -611,20 +612,20 @@ def project(dsn, *, sha=None, limit=100, after=''):
             conn.commit()
             failed = 0
             for row in rows:
-                print(encoded({'event': 'receipt_graph_projection_started', 'sha': row['source_sha256']}), flush=True)
+                print_json_event({'event': 'receipt_graph_projection_started', 'sha': row['source_sha256']})
                 try:
                     conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
                     observed = conn.execute('SELECT transaction_timestamp() AS time').fetchone()['time'].astimezone(timezone.utc).isoformat(timespec='microseconds')
                     graph = build(load(conn, row['source_sha256']))
                     conn.commit()
                     write_snapshot(session, row['source_sha256'], graph, observed)
-                    print(encoded({'event': 'receipt_graph_projection_completed', 'sha': row['source_sha256'],
-                                   'nodes': len(graph['nodes']), 'edges': len(graph['edges'])}), flush=True)
+                    print_json_event({'event': 'receipt_graph_projection_completed', 'sha': row['source_sha256'],
+                                      'nodes': len(graph['nodes']), 'edges': len(graph['edges'])})
                 except Exception as exc:
                     conn.rollback()
                     failed += 1
-                    print(encoded({'event': 'receipt_graph_projection_failed', 'sha': row['source_sha256'],
-                                   'error_type': type(exc).__name__}), flush=True)
+                    print_json_event({'event': 'receipt_graph_projection_failed', 'sha': row['source_sha256'],
+                                      'error_type': type(exc).__name__}, level='ERROR')
                 finally:
                     # Assignment alone retains the prior graph while building the next.
                     if 'graph' in locals():
@@ -647,13 +648,14 @@ def main(argv=None):
         failed = 0
         while True:
             result = project(os.environ['DATABASE_URL'], sha=args.sha, limit=args.limit, after=after)
-            print(encoded(result), flush=True)
+            print_json_event({'event': 'receipt_graph_projection_summary', **result},
+                             level='ERROR' if result['failed'] else 'INFO')
             after = result['after']
             failed += result['failed']
             if not args.all or args.sha or result['scanned'] < args.limit:
                 break
     except Exception as exc:
-        print(encoded({'event': 'receipt_graph_projection_failed', 'error_type': type(exc).__name__}))
+        print_json_event({'event': 'receipt_graph_projection_failed', 'error_type': type(exc).__name__}, level='ERROR')
         return 1
     return 1 if failed else 0
 

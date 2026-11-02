@@ -29,6 +29,7 @@ from ..product_labels import product_name, corrected_reading, ocr_variants
 from ..receipts.catalogue import RECEIPT_CATALOGUE
 from .render import esc, money, page, pager
 from . import receipt_graph as _receipt_graph_routes
+from .receipt_fields import RECEIPT_DATETIME_SQL, receipt_datetime, receipt_date_note
 
 _RECEIPT_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _EXPENSE_DETAIL_RE = re.compile(rf"^{re.escape(BASE_PATH)}/expenses/(\d+)$")
@@ -38,7 +39,7 @@ _RECEIPT_SORT_COLUMNS = {
     'receipt': 'r.source_reference',
     'merchant': 'COALESCE(re.merchant, e.store_name)',
     'store': "re.raw_payload->>'store'",
-    'date': 'COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp)',
+    'date': RECEIPT_DATETIME_SQL,
     'total': 'COALESCE(re.total, e.expense_total)',
     'processing': 's.status',
     'extraction': 'COALESCE(re.extraction_status, e.extraction_status)',
@@ -105,17 +106,16 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
         conditions.append("COALESCE(re.raw_payload->>'source_archived','false') <> 'true'")
         conditions.append('NOT r.source_archived')
     if bounds:
-        conditions.append('COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp) >= %s '
-                          'AND COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp) < %s')
+        conditions.append(f'{RECEIPT_DATETIME_SQL} >= %s AND {RECEIPT_DATETIME_SQL} < %s')
         params.extend(bounds)
     # Each word can match a different field (e.g. "Sobeys 2026-02-14").
     for word in q.split():
         pattern = '%' + word.removeprefix('$').replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
-        conditions.append("""(
+        conditions.append(f"""(
             concat_ws(' ', re.expense_pk::text, r.source_reference,
                       COALESCE(re.merchant, e.store_name),
                       re.raw_payload->>'store',
-                      COALESCE(re.transaction_datetime, e.transaction_datetime, e.order_date::timestamp)::text,
+                      {RECEIPT_DATETIME_SQL}::text,
                       COALESCE(re.total, e.expense_total)::text,
                       s.status, COALESCE(re.extraction_status, e.extraction_status)) ILIKE %s
             OR EXISTS (SELECT 1 FROM budget.expense_items i
@@ -134,8 +134,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
                (COALESCE(re.raw_payload->>'source_archived','false')='true' OR r.source_archived) AS source_archived,
                COALESCE(re.merchant, e.store_name) AS merchant,
                re.raw_payload->>'store' AS store,
-               COALESCE(re.transaction_datetime, e.transaction_datetime,
-                        e.order_date::timestamp) AS transaction_datetime,
+               {RECEIPT_DATETIME_SQL} AS transaction_datetime,
                COALESCE(re.total, e.expense_total) AS total,
                COALESCE(re.extraction_status, e.extraction_status) AS extraction_status,
                re.extraction_confidence
@@ -239,6 +238,7 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
         if receipt['extraction_status'] == 'complete' and assessment.get('reconciled') is False:
             receipt['extraction_status'] = 'review'
     receipt["expense"] = expense
+    receipt['transaction_datetime'] = receipt_datetime(evidence, expense)
     return receipt
 
 
@@ -616,7 +616,7 @@ def receipt_page(
     evidence_id = receipt.get("evidence_id")
     expense_pk = receipt.get("expense_pk") or expense.get("expense_pk")
     merchant = evidence.get('merchant') or expense.get('store_name')
-    receipt_date = evidence.get('transaction_datetime') or expense.get('transaction_datetime') or expense.get('order_date')
+    receipt_date = receipt_datetime(evidence, expense)
     total = evidence.get('total')
     if total is None:
         total = expense.get('expense_total')
@@ -631,7 +631,10 @@ def receipt_page(
 <div><strong>Receipt</strong><br>{esc(filename)}</div>
 <div><strong>Merchant</strong><br>{esc(merchant)}</div>
 <div><strong>Store</strong><br>{esc(evidence.get('store') or expense.get('store'))}</div>
-<div><strong>Date/time</strong><br>{esc(receipt_date)}</div>
+<div><strong>Address</strong><br>{esc(evidence.get('store_address') or expense.get('store_address'))}</div>
+<div><strong>Phone</strong><br>{esc(evidence.get('store_phone') or expense.get('store_phone'))}</div>
+<div><strong>Tax registration (RT)</strong><br>{esc(evidence.get('tax_registration_number') or expense.get('tax_registration_number'))}</div>
+<div><strong>Date/time</strong><br>{esc(receipt_date)}<small>{esc(receipt_date_note(evidence))}</small></div>
 <div><strong>Total</strong><br>{money(total)}</div>
 <div><strong>Processing</strong><br>{esc(receipt.get('processing_status'))}</div>
 <div><strong>Extraction</strong><br>{esc(receipt.get('extraction_status'))}</div>
@@ -657,6 +660,7 @@ def receipt_page(
         item_rows.append(
             "<tr>"
             f"<td>{code_html}</td>"
+            f"<td>{esc(item.get('department'))}</td>"
             f"<td>{_item_reading_html(dict(item))}</td>"
             f"<td>{description_html}</td>"
             f"<td>{_enrichment_html(dict(item))}{_recommendation_html(dict(item), source_sha256)}</td>"
@@ -677,7 +681,7 @@ def receipt_page(
         + (f'<form id="refresh-items" data-receipt="{esc(source_sha256)}"><button type="submit">Apply accepted matches and category rules</button>'
            '<p>Fills empty product fields from previously accepted matches and categorizes unresolved items. Existing descriptions and categories are preserved. No model or search calls.</p>'
            '<p id="refresh-status" role="status"></p></form>' if expense.get('items') else '')
-        + '<table><thead><tr><th>Product code</th><th>Receipt item</th><th>Description</th>'
+        + '<table><thead><tr><th>Product code</th><th>Department</th><th>Receipt item</th><th>Description</th>'
         "<th>Enrichment</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th>"
         "</tr></thead><tbody>"
         + "".join(item_rows)

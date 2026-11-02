@@ -92,6 +92,9 @@ def test_publisher_passes_configured_cache_and_reprocess_message_type(completed_
     import uuid
     summary = json.loads(output)
     batch_id = summary.pop("batch_id")
+    assert summary.pop('level') == 'INFO'
+    from datetime import datetime
+    assert datetime.fromisoformat(summary.pop('timestamp')).utcoffset().total_seconds() == 0
     assert str(uuid.UUID(batch_id)) == batch_id
     assert publication["properties"].headers["batch_id"] == batch_id
     assert summary == {

@@ -34,7 +34,8 @@ def test_purchase_month_is_parameterized_and_preserved_in_page_navigation():
                          q='2026-12', service=service, identity={'user': 'test'})
     sql, params = service.calls[0]
     assert params == (date(2026, 12, 1), date(2027, 1, 1))
-    assert 'transaction_datetime, e.transaction_datetime, e.order_date::timestamp) >= %s' in sql
+    from home_budget_pipeline.web.receipt_fields import RECEIPT_DATETIME_SQL
+    assert RECEIPT_DATETIME_SQL + ' >= %s' in sql
     assert 'ILIKE' not in sql
     assert 'type="month" name="month" value="2026-12"' in html
     assert 'name="q" value=""' in html

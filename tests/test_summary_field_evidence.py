@@ -44,6 +44,58 @@ def test_competing_years_review_without_majority_or_engine_guess(reverse):
     assert {c['source']['pass_id'] for c in result['candidates']} == set(range(1, 8))
 
 
+@pytest.mark.parametrize('reverse', [False, True])
+def test_repeated_printed_date_resolves_single_glyph_year_error(reverse):
+    readings = [observation('DATE 07/12/2091 TIME 09:42:13\nApproved\nStore Oper 07/12/31', i)
+                for i in range(1, 7)]
+    readings += [observation('DATE 07/12/2031\nRESP 001\nAUTH 12345\nTIME 09:42:13\nApproved\n07/12/31', 7)]
+    if reverse:
+        readings.reverse()
+    result = summary_evidence.resolve('', readings)['transaction_datetime']
+    assert result['value'] == '2031-07-12T09:42:13'
+    assert result['status'] == 'selected'
+    assert result['reason'] == 'full_year_supported_by_separately_printed_short_date'
+    assert any(c['value'].startswith('2091') for c in result['candidates'])
+
+
+@pytest.mark.parametrize('other', [
+    'DATE 08/12/2091 TIME 09:42:13',
+    'DATE 07/12/2099 TIME 09:42:13',
+    'DATE 07/12/2091 TIME 09:44:13',
+    'DATE 07/12/2091 TIME 09:42:13\nApproved\n07/12/91',
+])
+def test_repeated_date_does_not_resolve_different_day_multiple_glyphs_time_or_short_year_conflict(other):
+    readings = [observation(other), observation('DATE 07/12/2031 TIME 09:42:13\nApproved\n07/12/31', 2)]
+    assert summary_evidence.resolve('', readings)['transaction_datetime']['status'] == 'conflict'
+
+
+def test_short_year_in_another_pass_is_not_independent_printed_corroboration():
+    readings = [observation('DATE 07/12/2091'), observation('DATE 07/12/2031', 2),
+                observation('07/12/31', 3)]
+    assert summary_evidence.resolve('', readings)['transaction_datetime']['status'] == 'conflict'
+
+
+@pytest.mark.parametrize('value,decision,updates', [(None, {}, False),
+    (None, {'transaction_datetime': {'value': None, 'status': 'conflict'}}, True),
+    ('2031-07-12T09:42:13', {'transaction_datetime': {'value': '2031-07-12T09:42:13', 'status': 'selected'}}, True)])
+def test_canonical_datetime_replaces_stale_ocr_value_but_preserves_audited_correction(value, decision, updates):
+    receipt = ingest.ScannedReceipt(path='', source_reference='', source_sha256='a' * 64,
+        merchant='Example Shop', transaction_date=None, receipt_id=None, subtotal=None, tax=None, total=None,
+        field_decisions=decision)
+    receipt.transaction_datetime = value
+    calls = []
+    class Connection:
+        def cursor(self): return self
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def execute(self, sql, params): calls.append((sql, params))
+    parallel_ingest._persist_transaction_datetime(Connection(), receipt, 'budget')
+    assert bool(calls) is updates
+    if updates:
+        assert calls[0][1][0] == value
+        assert "NOT (COALESCE(raw_payload,'{}'::jsonb) ? 'receipt_date_correction')" in calls[0][0]
+
+
 def test_purchase_purpose_outranks_print_and_payment_dates_across_passes():
     readings = [observation('Printed 08/13/2031\nPayment date 07/13/2031', 1),
                 observation('Purchase date 07/12/2031', 2)]
@@ -68,6 +120,14 @@ def test_failed_pass_and_metadata_do_not_supply_date_or_card():
     assert decisions['transaction_datetime']['value'] == '2031-07-12'
     assert decisions['card_last4']['value'] == '7654'
     assert decisions['card_last4']['candidates'][0]['line_numbers'] == [2, 3, 4, 5]
+
+
+def test_flattened_engine_metadata_is_not_transaction_evidence():
+    metadata = 'level page_num block_num par_num line_num word_num left top width height conf text\nDATE 07/12/2091\nVisa ****2222'
+    decisions = summary_evidence.resolve('', [observation(metadata),
+        observation('DATE 07/12/2031\nVisa ****7654', 2)])
+    assert decisions['transaction_datetime']['value'] == '2031-07-12'
+    assert decisions['card_last4']['value'] == '7654'
 
 
 def test_conflicting_cards_never_choose_first():
