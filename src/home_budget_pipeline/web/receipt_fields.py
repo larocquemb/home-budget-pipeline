@@ -21,3 +21,20 @@ def receipt_date_note(evidence):
     if decision.get('status') == 'conflict':
         return 'Conflicting OCR date/time readings require review.'
     return ''
+
+
+def duplicate_expense(receipt):
+    value = receipt.get('duplicate_of')
+    if value is None:
+        value = ((receipt.get('raw_payload') or {}).get('duplicate_merge') or {}).get('canonical_expense_pk')
+    return value if type(value) is int and value > 0 else None
+
+
+def receipt_status(receipt):
+    if duplicate_expense(receipt):
+        return 'duplicate'
+    status = receipt.get('processing_status')
+    if status:
+        return status
+    extraction = receipt.get('extraction_status')
+    return 'review_required' if extraction in {'review', 'unreadable'} else extraction

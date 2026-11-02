@@ -18,6 +18,9 @@ class FakeCursor:
     def execute(self, sql, params=()):
         self.executed.append((sql, params))
 
+    def fetchall(self):
+        return []
+
     def fetchone(self):
         return self._fetchone
 

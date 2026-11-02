@@ -16,6 +16,31 @@ if not TEST_DATABASE_URL:
     pytest.skip("TEST_DATABASE_URL is not set", allow_module_level=True)
 
 
+def test_ocr_refresh_categorizes_and_preserves_reviewed_item_identity():
+    import psycopg
+    from uuid import uuid4
+
+    receipt = ingest.ScannedReceipt('example.png','example.png',str(uuid4()),
+        'Example Shop',None,None,10,0,10,items=[
+            ingest.ScannedItem('Unknown product',5,'BAKERY'),
+            ingest.ScannedItem('Unknown product',5,'BAKERY')])
+    with psycopg.connect(TEST_DATABASE_URL) as conn:
+        try:
+            with patch.object(ingest,'resolve_owner_from_db',return_value=None):
+                pk = ingest.upsert_receipt(conn,receipt)
+                rows = conn.execute('SELECT id,budget_category FROM budget.expense_items WHERE expense_pk=%s ORDER BY id',(pk,)).fetchall()
+                assert len(rows) == 2 and all(row[1] == 'Groceries' for row in rows)
+                conn.execute("UPDATE budget.expense_items SET budget_category='Indoor Supplies',category_source='manual' WHERE id=%s",(rows[0][0],))
+                assert ingest.upsert_receipt(conn,receipt) == pk
+                refreshed = conn.execute('SELECT id,budget_category FROM budget.expense_items WHERE expense_pk=%s ORDER BY id',(pk,)).fetchall()
+                assert refreshed == [(rows[0][0],'Indoor Supplies'),(rows[1][0],'Groceries')]
+                receipt.items = [ingest.ScannedItem('Changed OCR text',10,'BAKERY')]
+                assert ingest.upsert_receipt(conn,receipt) == pk
+                assert conn.execute('SELECT id,budget_category FROM budget.expense_items WHERE expense_pk=%s ORDER BY id',(pk,)).fetchall() == refreshed
+        finally:
+            conn.rollback()
+
+
 def test_uncategorized_ocr_item_satisfies_real_postgres_schema():
     import psycopg
 
@@ -29,8 +54,8 @@ def test_uncategorized_ocr_item_satisfies_real_postgres_schema():
         subtotal=5.0,
         tax=0.0,
         total=5.0,
-        items=[ingest.ScannedItem("Milk", 5.0)],
-        text="Sobeys\nMilk 5.00\nTOTAL 5.00",
+        items=[ingest.ScannedItem("Mystery object", 5.0)],
+        text="Sobeys\nMystery object 5.00\nTOTAL 5.00",
         extraction_confidence=1.0,
         extraction_status="complete",
     )

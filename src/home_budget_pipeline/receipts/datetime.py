@@ -51,13 +51,13 @@ DATE_PURPOSE_RE = re.compile(r"""
     (?P<transaction>\b(?:(?:transaction|purchase|sale|invoice|order)\s+date(?:/time)?
         |date\s+of\s+(?:purchase|sale|invoice|order)|purchased\s+on)\b)
   | (?P<completion>\b(?:(?:work|service)\s+completed|(?:completion|service)\s+date)\b)
-  | (?P<payment>\b(?:payment\s+date|cashier\s+date|date\s+paid|paid\s+on)\b)
+  | (?P<payment>\b(?:payment\s+date|cashier\s+date|date\s+paid|paid\s+on|date(?:/time)?(?=\s*[:;]?\s*(?:\d|$)))\b)
   | (?P<metadata>\b(?:(?:date|time)\s*(?:printed|reprinted|generated|downloaded|exported)
         |(?:print(?:ed)?|reprint(?:ed)?|generated|downloaded|exported)(?:\s*(?:date|time|on|at)|(?=\s*[:#0-9])|(?=\s*$))
         |due(?:\s+date)?|delivery(?:\s+date)?|shipped(?:\s+on)?|ship\s+date
         |date\s+promised|promised(?:\s+(?:date|on))?
         |effective|polic(?:y|ies)|expires?|expiry|expiration|clearance|warranty
-        |vehicle\s+received)\b)
+        |(?:contest|promotion|offer)\s+(?:ends?|closes?|ending|deadline)|vehicle\s+received)\b)
 """, re.I | re.X | re.M)
 DAY_MONTH_NAME_RE = re.compile(
     r"\b(\d{1,2})[- ](Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[- ,]+(20\d{2})"

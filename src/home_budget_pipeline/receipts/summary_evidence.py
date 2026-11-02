@@ -5,7 +5,32 @@ from .. import telemetry
 from .datetime import transaction_datetime_evidence
 from .payment import card_last4_evidence
 
-POLICY = 'cross-pass-summary-evidence-v2'
+POLICY = 'cross-pass-summary-evidence-v3'
+
+
+def _corroborated_printed_date(eligible, candidates):
+    """A timed full date and separate printed short date can disambiguate one glyph."""
+    clocks = {c['value'][11:] for c in eligible if 'T' in c['value']}
+    if len(clocks) != 1:
+        return None
+    supported = set()
+    for candidate in eligible:
+        if candidate.get('year_digits') != 4 or 'T' not in candidate['value']:
+            continue
+        source = candidate['source']
+        if source.get('pass_id') is None:
+            continue
+        identity = tuple(source.get(k) for k in ('run_uuid','pass_id','page_number'))
+        if any(other.get('year_digits') == 2 and other['value'][:10] == candidate['value'][:10]
+               and tuple(other['source'].get(k) for k in ('run_uuid','pass_id','page_number')) == identity
+               and abs(candidate['line_number']-other['line_number']) >= 2 for other in candidates):
+            supported.add(candidate['value'][:10])
+    if len(supported) != 1:
+        return None
+    target = supported.pop()
+    if any(sum(a != b for a,b in zip(c['value'][:10],target)) > 1 for c in eligible):
+        return None
+    return target
 
 
 def _corroborated_year(eligible, candidates):
@@ -75,11 +100,14 @@ def resolve(text, observations):
             # Same-day time disagreements preserve the date, but remain review.
             dates = {c['value'][:10] for c in eligible}
             if len(dates) > 1:
-                corroborated = _corroborated_year(eligible, candidates)
+                year = _corroborated_year(eligible, candidates)
+                corroborated = year or _corroborated_printed_date(eligible, candidates)
                 if corroborated:
                     eligible = [c for c in eligible if c['value'][:10] == corroborated]
                     dates = {corroborated}
-                    reason = 'full_year_supported_by_separately_printed_short_date'
+                    reason = ('full_year_supported_by_separately_printed_short_date'
+                              if year
+                              else 'timed_date_supported_by_separately_printed_short_date')
             timed = {c['value'] for c in eligible if 'T' in c['value']}
             value = next(iter(timed)) if len(dates) == 1 and len(timed) == 1 else (
                 next(iter(dates)) if len(dates) == 1 else None)

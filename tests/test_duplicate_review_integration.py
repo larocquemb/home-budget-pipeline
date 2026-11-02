@@ -11,6 +11,42 @@ from home_budget_pipeline.receipts.duplicate_review import capture_candidates, r
 pytestmark = pytest.mark.integration
 
 
+def test_existing_purchase_merge_is_audited_and_excluded_from_spend():
+    from home_budget_pipeline.receipts.expense_merge import merge
+    from home_budget_pipeline import db_setup
+    dsn = os.environ['TEST_DATABASE_URL']
+    connect = lambda: psycopg.connect(dsn,row_factory=dict_row)
+    expenses, shas = [], [uuid.uuid4().hex*2 for _ in range(2)]
+    try:
+        with connect() as conn:
+            conn.execute(db_setup.ANALYTICS_SCHEMA.read_text())
+            for index,sha in enumerate(shas):
+                total = 24.60 if index == 0 else 24.68
+                pk = conn.execute("INSERT INTO budget.expenses(source,order_id,receipt_item_subtotal,expense_total) VALUES ('scanned',%s,%s,%s) RETURNING id",
+                    ('scan:'+sha,24.60,total)).fetchone()['id']
+                expenses.append(pk)
+                conn.execute("INSERT INTO budget.expense_items(expense_pk,item_name,line_total,budget_category) VALUES (%s,'Synthetic product',%s,'Groceries')",(pk,total))
+                conn.execute("INSERT INTO budget.receipt_evidence(expense_pk,evidence_type,source_reference,source_sha256,merchant,total,raw_text) VALUES (%s,'scanned',%s,%s,'Synthetic Shop',%s,'Original OCR')",(pk,sha+'.pdf',sha,total))
+            original_items = conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=ANY(%s) ORDER BY id',(expenses,)).fetchall()
+        args = {'reason':'Verified synthetic duplicate','actor':'Test reviewer','auto_select':True}
+        preview = merge(connect,*expenses,**args)
+        assert preview['keeper'] == expenses[0]
+        result = merge(connect,*expenses,**args,apply=True,expected_version=preview['version'])
+        with connect() as conn:
+            assert conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=ANY(%s) ORDER BY id',(expenses,)).fetchall() == original_items
+            assert conn.execute('SELECT expense_pk FROM budget.analytics_expenses WHERE expense_pk=ANY(%s)',(expenses,)).fetchall() == [{'expense_pk':expenses[0]}]
+            assert conn.execute('SELECT count(*) AS n FROM budget.analytics_expense_items WHERE expense_pk=%s',(expenses[1],)).fetchone()['n'] == 0
+            evidence = conn.execute('SELECT expense_pk,raw_text FROM budget.receipt_evidence WHERE source_sha256=ANY(%s)',(shas,)).fetchall()
+            assert all(e['expense_pk'] == expenses[0] and e['raw_text'] == 'Original OCR' for e in evidence)
+            assert conn.execute('SELECT count(*) AS n FROM lineage.receipt_events WHERE id=%s',(result['audit_id'],)).fetchone()['n'] == 1
+        assert merge(connect,*reversed(expenses),**args,apply=True,expected_version='old')['unchanged']
+    finally:
+        with connect() as conn:
+            conn.execute('DELETE FROM lineage.receipt_events WHERE source_sha256=ANY(%s)',(shas,))
+            conn.execute('DELETE FROM budget.receipt_evidence WHERE source_sha256=ANY(%s)',(shas,))
+            conn.execute('DELETE FROM budget.expenses WHERE id=ANY(%s)',(expenses,))
+
+
 @pytest.mark.parametrize('action', ['confirm', 'reject', 'auto'])
 def test_real_duplicate_decision_preserves_purchase_and_originals(action):
     dsn = os.environ['TEST_DATABASE_URL']

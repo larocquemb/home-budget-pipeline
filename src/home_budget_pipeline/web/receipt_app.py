@@ -29,7 +29,7 @@ from ..product_labels import product_name, corrected_reading, ocr_variants
 from ..receipts.catalogue import RECEIPT_CATALOGUE
 from .render import esc, money, page, pager
 from . import receipt_graph as _receipt_graph_routes
-from .receipt_fields import RECEIPT_DATETIME_SQL, receipt_datetime, receipt_date_note
+from .receipt_fields import RECEIPT_DATETIME_SQL, receipt_datetime, receipt_date_note, duplicate_expense, receipt_status
 
 _RECEIPT_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _EXPENSE_DETAIL_RE = re.compile(rf"^{re.escape(BASE_PATH)}/expenses/(\d+)$")
@@ -41,7 +41,7 @@ _RECEIPT_SORT_COLUMNS = {
     'store': "re.raw_payload->>'store'",
     'date': RECEIPT_DATETIME_SQL,
     'total': 'COALESCE(re.total, e.expense_total)',
-    'processing': 's.status',
+    'processing': "CASE WHEN re.raw_payload ? 'duplicate_merge' THEN 'duplicate' ELSE s.status END",
     'extraction': 'COALESCE(re.extraction_status, e.extraction_status)',
 }
 
@@ -52,6 +52,13 @@ def receipt_url(source_sha256: str) -> str:
 
 def receipt_graph_url(source_sha256: str) -> str:
     return f"{BASE_PATH}/graph?receipt={quote(source_sha256, safe='')}"
+
+
+def _receipt_status_html(receipt):
+    canonical = duplicate_expense(receipt)
+    if canonical:
+        return f'<a href="{BASE_PATH}/expenses/{canonical}">Duplicate of {canonical}</a>'
+    return esc(receipt_status(receipt))
 
 
 def receipt_label(expense_pk, merchant, receipt_date, total) -> str:
@@ -105,6 +112,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
     if not include_archived:
         conditions.append("COALESCE(re.raw_payload->>'source_archived','false') <> 'true'")
         conditions.append('NOT r.source_archived')
+        conditions.append("NOT (COALESCE(re.raw_payload, '{}'::jsonb) ? 'duplicate_merge')")
     if bounds:
         conditions.append(f'{RECEIPT_DATETIME_SQL} >= %s AND {RECEIPT_DATETIME_SQL} < %s')
         params.extend(bounds)
@@ -131,6 +139,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
         SELECT r.source_sha256, r.source_reference,
                COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts,
                re.id AS evidence_id, re.expense_pk,
+               (re.raw_payload->'duplicate_merge'->>'canonical_expense_pk')::bigint AS duplicate_of,
                (COALESCE(re.raw_payload->>'source_archived','false')='true' OR r.source_archived) AS source_archived,
                COALESCE(re.merchant, e.store_name) AS merchant,
                re.raw_payload->>'store' AS store,
@@ -238,6 +247,8 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
         if receipt['extraction_status'] == 'complete' and assessment.get('reconciled') is False:
             receipt['extraction_status'] = 'review'
     receipt["expense"] = expense
+    receipt["duplicate_of"] = duplicate_expense(evidence or {})
+    receipt["receipt_status"] = receipt_status(receipt)
     receipt['transaction_datetime'] = receipt_datetime(evidence, expense)
     return receipt
 
@@ -249,6 +260,7 @@ def _receipt_for_expense(service: LedgerQueryService, expense_pk: int) -> str | 
           FROM budget.receipt_evidence
          WHERE expense_pk = %s
            AND COALESCE(raw_payload->>'source_archived','false') <> 'true'
+           AND NOT (COALESCE(raw_payload, '{}'::jsonb) ? 'duplicate_merge')
          ORDER BY is_primary_source DESC, id
          LIMIT 1
         """,
@@ -407,7 +419,7 @@ def receipts_page(
     result = _receipt_list(service, limit=limit, offset=offset, sort=sort, direction=direction, q=q, month=month, include_archived=include_archived)
     headers = []
     for key, label in [('expense_id', 'Expense ID'), ('receipt', 'Receipt'), ('merchant', 'Merchant'), ('store', 'Store'),
-                       ('date', 'Date/time'), ('total', 'Total'), ('processing', 'Processing'),
+                       ('date', 'Date/time'), ('total', 'Total'), ('processing', 'Status'),
                        ('extraction', 'Extraction')]:
         next_direction = 'desc' if sort == key and direction == 'asc' else 'asc'
         query = {'sort': key, 'direction': next_direction, 'limit': limit}
@@ -442,8 +454,8 @@ def receipts_page(
             f"<td>{esc(receipt.get('store'))}</td>"
             f"<td>{esc(receipt.get('transaction_datetime'))}</td>"
             f'<td class="num">{money(receipt.get("total"))}</td>'
-            f"<td>{esc(receipt.get('processing_status'))}</td>"
-            f"<td>{esc(receipt.get('extraction_status'))}</td>"
+            f"<td>{_receipt_status_html(receipt)}</td>"
+            f"<td>{esc(receipt.get('extraction_status')) if not duplicate_expense(receipt) else 'Historical'}</td>"
             "</tr>"
         )
     body = (
@@ -627,6 +639,8 @@ def receipt_page(
         if expense_pk
         else '<span class="muted">Not created</span>'
     )
+    duplicate = duplicate_expense(receipt)
+    extraction_html = '' if duplicate else f"<div><strong>Extraction</strong><br>{esc(receipt.get('extraction_status'))}</div>"
     header = f"""<div class="card"><div class="grid">
 <div><strong>Receipt</strong><br>{esc(filename)}</div>
 <div><strong>Merchant</strong><br>{esc(merchant)}</div>
@@ -634,16 +648,21 @@ def receipt_page(
 <div><strong>Address</strong><br>{esc(evidence.get('store_address') or expense.get('store_address'))}</div>
 <div><strong>Phone</strong><br>{esc(evidence.get('store_phone') or expense.get('store_phone'))}</div>
 <div><strong>Tax registration (RT)</strong><br>{esc(evidence.get('tax_registration_number') or expense.get('tax_registration_number'))}</div>
-<div><strong>Date/time</strong><br>{esc(receipt_date)}<small>{esc(receipt_date_note(evidence))}</small></div>
+<div><strong>Date/time</strong><br>{esc(receipt_date)}<small>{esc(receipt_date_note(evidence)) if not duplicate else ""}</small></div>
 <div><strong>Total</strong><br>{money(total)}</div>
-<div><strong>Processing</strong><br>{esc(receipt.get('processing_status'))}</div>
-<div><strong>Extraction</strong><br>{esc(receipt.get('extraction_status'))}</div>
+<div><strong>Status</strong><br>{_receipt_status_html(receipt)}</div>
+{extraction_html}
 <div><strong>Source</strong><br>{esc(source_reference)}</div>
 <div><strong>Accounting record</strong><br>{canonical_expense}</div>
 </div></div>"""
 
+    merged = (evidence.get('raw_payload') or {}).get('duplicate_merge')
+    if merged:
+        header += f'<p class="card">Duplicate source retained for history. Review the active purchase <a href="{BASE_PATH}/expenses/{duplicate}">{duplicate}</a> if needed.</p>'
+        header += f'<details><summary>Historical extraction</summary><p>Recorded extraction: {esc(receipt.get("extraction_status"))}. This duplicate copy requires no review.</p></details>'
+
     possible_duplicates = evidence.get('possible_duplicate_expense_pks') or []
-    if possible_duplicates:
+    if possible_duplicates and not duplicate:
         links = ', '.join(f'<a href="{BASE_PATH}/expenses/{int(pk)}">Expense {int(pk)}</a>'
                           for pk in possible_duplicates)
         header += f'<div class="card">Possible duplicate purchase: compare {links} before including both accounting records.</div>'
@@ -671,7 +690,7 @@ def receipt_page(
             "</tr>"
         )
     allocation_review = ''
-    if expense_pk and hasattr(service, 'receipt_allocation'):
+    if not duplicate and expense_pk and hasattr(service, 'receipt_allocation'):
         from .allocation_html import allocation_html
         allocation_review = allocation_html(receipt.get('allocation') or service.receipt_allocation(source_sha256), source_sha256)
     items_html = (
@@ -681,18 +700,21 @@ def receipt_page(
         + (f'<form id="refresh-items" data-receipt="{esc(source_sha256)}"><button type="submit">Apply accepted matches and category rules</button>'
            '<p>Fills empty product fields from previously accepted matches and categorizes unresolved items. Existing descriptions and categories are preserved. No model or search calls.</p>'
            '<p id="refresh-status" role="status"></p></form>' if expense.get('items') else '')
-        + '<table><thead><tr><th>Product code</th><th>Department</th><th>Receipt item</th><th>Description</th>'
+        + '<table><thead><tr><th>Product code</th><th>Section</th><th>Receipt item</th><th>Description</th>'
         "<th>Enrichment</th><th>Category</th><th>Group</th><th>Amount</th><th>Category source</th>"
         "</tr></thead><tbody>"
         + "".join(item_rows)
         + "</tbody></table>"
     )
 
+    if duplicate:
+        items_html = f'<p>Item review belongs to <a href="{BASE_PATH}/expenses/{duplicate}">the active purchase {duplicate}</a>. Original readings remain in the recorded extraction below.</p>'
+
     review_html = ""
     if (evidence.get('raw_payload') or {}).get('source_archived'):
         review_html = '<p class="card">Archived source copy. Original extraction and audit history are retained; this document is hidden from the normal receipt list.</p>'
     elif evidence_id and evidence:
-        extracted_text = html.escape(_post_ocr_text(evidence, expense or None))
+        extracted_text = html.escape(_post_ocr_text(evidence, None if duplicate else expense or None))
         ocr_text = html.escape(str(evidence.get("raw_text") or ""))
         review_html = f"""<div class="receipt-review-grid">
 <section><h2>Receipt document</h2>{_receipt_preview_html(int(evidence_id), evidence)}</section>

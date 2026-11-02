@@ -26,6 +26,7 @@ def test_sql_directory_can_be_configured_for_installed_runtime(tmp_path, monkeyp
 
 def _write_upgrade_files(tmp_path):
     paths = {
+        "analytics": tmp_path / "analytics_views.sql",
         "constraints": tmp_path / "schema_constraints.sql",
         "audit": tmp_path / "category_mapping_audit.sql",
         "descriptions": tmp_path / "expense_item_descriptions.sql",
@@ -39,6 +40,7 @@ def _write_upgrade_files(tmp_path):
         "enrichment": tmp_path / "product_enrichment.sql",
         "template": tmp_path / "receipt_processing_template.sql",
     }
+    paths["analytics"].write_text("CREATE OR REPLACE VIEW budget.analytics_expenses AS SELECT 1;")
     paths["constraints"].write_text("DROP INDEX IF EXISTS budget.uq_expense_items_natural;", encoding="utf-8")
     paths["audit"].write_text("CREATE TABLE IF NOT EXISTS budget.audit_test(id int);", encoding="utf-8")
     paths["descriptions"].write_text("ALTER TABLE budget.expense_items ADD COLUMN IF NOT EXISTS product_description text;", encoding="utf-8")
@@ -55,6 +57,7 @@ def _write_upgrade_files(tmp_path):
 
 
 def _patch_upgrade_files(monkeypatch, paths):
+    monkeypatch.setattr(db_setup, "ANALYTICS_SCHEMA", paths["analytics"])
     monkeypatch.setattr(db_setup, "CONSTRAINTS_SCHEMA", paths["constraints"])
     monkeypatch.setattr(db_setup, "CATEGORY_MAPPING_AUDIT_MIGRATION", paths["audit"])
     monkeypatch.setattr(db_setup, "ITEM_DESCRIPTIONS_MIGRATION", paths["descriptions"])
@@ -93,7 +96,7 @@ def test_existing_base_schema_applies_shared_upgrades_and_ensures_receipt_schema
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.ocr_result_events(message_id text);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_reprocess_requests(request_id uuid);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_duplicate_links(id bigint);")
-    assert conn.commit.call_count == 11
+    assert conn.commit.call_count == 12
     ensure.assert_called_once_with(conn, paths["template"])
 
 
@@ -125,5 +128,5 @@ def test_blank_database_loads_base_and_shared_schemas_before_receipt_schema(tmp_
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.ocr_result_events(message_id text);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_reprocess_requests(request_id uuid);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_duplicate_links(id bigint);")
-    assert conn.commit.call_count == 12
+    assert conn.commit.call_count == 13
     ensure.assert_called_once_with(conn, paths["template"])

@@ -19,6 +19,7 @@ MERCHANT_ALIASES_MIGRATION = SQL_DIR / "migrations" / "merchant_aliases.sql"
 RECEIPT_OCR_LINES_MIGRATION = SQL_DIR / "migrations" / "receipt_ocr_lines.sql"
 RECEIPT_OCR_LEARNING_MIGRATION = SQL_DIR / "migrations" / "receipt_ocr_learning.sql"
 OCR_RESULT_COLLECTOR_SCHEMA = SQL_DIR / "ocr_result_collector.sql"
+ANALYTICS_SCHEMA = SQL_DIR / "analytics_views.sql"
 DUPLICATE_SCHEMA = SQL_DIR / "receipt_deduplication.sql"
 RECEIPT_REPROCESS_SCHEMA = SQL_DIR / "receipt_reprocess_requests.sql"
 MERCHANT_ALIASES_DATA = SQL_DIR / "merchant_aliases.sql"
@@ -58,6 +59,8 @@ def ensure_database_schema(conn) -> dict[str, bool]:
 
     enrichment_created = not _relation_exists(conn, "enrichment.product_cache")
     _execute_sql_file(conn, ENRICHMENT_SCHEMA)
+
+    _execute_sql_file(conn, ANALYTICS_SCHEMA)
 
     receipt_changed = ensure_receipt_schema(conn, RECEIPT_TEMPLATE)
     return {
