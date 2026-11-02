@@ -20,6 +20,12 @@ def test_queue_overlay_renders_publisher_workers_and_persistent_broker():
     worker_deployment = resources["Deployment", "receipt-worker"]["spec"]
     collector_spec = resources["Deployment", "ocr-results-collector"]["spec"]
     collector = collector_spec["template"]["spec"]["containers"][0]
+    # Optional result metadata must be understood by every collector before
+    # new workers publish it; wave zero still creates their dependencies.
+    collector_wave = int(resources["Deployment", "ocr-results-collector"]["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"])
+    assert collector_wave > 0
+    for name in ('receipt-worker', 'receipt-worker-longbow'):
+        assert int(resources["Deployment", name]["metadata"]["annotations"]["argocd.argoproj.io/sync-wave"]) > collector_wave
     assert worker_deployment["strategy"] == {
         "type": "RollingUpdate", "rollingUpdate": {"maxSurge": 0, "maxUnavailable": 1},
     }

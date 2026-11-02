@@ -56,6 +56,19 @@ def test_graph_connects_shared_evidence_without_accepting_proposals():
     assert g.build(evidence()) == graph
 
 
+def test_field_decisions_link_to_actual_ocr_pass_without_claiming_canonical_acceptance():
+    data = evidence()
+    data['receipt']['field_decisions'] = {'card_last4': {'value': '7654', 'status': 'selected',
+        'policy': 'cross-pass-summary-evidence-v1', 'candidates': [{'value': '7654',
+        'line_numbers': [2, 3, 4], 'source': {'run_uuid': 'ocr-1', 'pass_id': 1}}]}}
+    result = g.build(data)
+    decision = next(n for n in result['nodes'] if n['kind'] == 'FieldDecision')
+    actual_pass = next(n for n in result['nodes'] if n['kind'] == 'OCRPass')
+    assert decision['properties']['scope'] == 'latest stored extraction'
+    assert any(e['source'] == decision['id'] and e['target'] == actual_pass['id']
+               and e['kind'] == 'BASED_ON' for e in result['edges'])
+
+
 def test_expansion_graph_keeps_each_reading_and_links_actual_search():
     data = evidence()
     payload = data['collaborations'][0]['payload']

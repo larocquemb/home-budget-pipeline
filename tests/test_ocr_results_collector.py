@@ -71,6 +71,20 @@ def result_receipt(path: Path) -> ingest.ScannedReceipt:
     return receipt
 
 
+def test_field_decisions_survive_worker_collector_round_trip(tmp_path):
+    source = tmp_path / 'receipt.pdf'
+    source.write_bytes(b'receipt')
+    receipt = result_receipt(source)
+    receipt.field_decisions = {'card_last4': {'policy': 'test-policy', 'value': '1234',
+        'status': 'selected', 'candidates': [{'value': '1234', 'source': {'pass_id': 7}}]}}
+    event = ocr_results.result_messages_for_receipt(receipt)[0]
+    restored = ocr_results.receipt_from_message(event)
+    assert restored.field_decisions == receipt.field_decisions
+    # Retained older messages remain readable without the optional evidence.
+    event.payload['receipt'].pop('field_decisions')
+    assert ocr_results.receipt_from_message(event).field_decisions == {}
+
+
 def test_versioned_run_and_pass_contract_round_trip_with_artifact(tmp_path):
     source = tmp_path / "receipt.pdf"
     source.write_bytes(b"receipt")

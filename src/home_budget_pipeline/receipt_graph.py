@@ -317,6 +317,15 @@ def build(data):
         graph.edge(run_id, 'HAS_PASS', invocation)
         model = graph.node('OCRMethod', (p['engine'], encoded(p.get('engine_options', {}))), p['engine'], options=p.get('engine_options'))
         graph.edge(invocation, 'USES_METHOD', model)
+    for name, decision in (evidence.get('field_decisions') or {}).items():
+        field = graph.node('FieldDecision', (sha, name), name.replace('_', ' '), **decision,
+                           scope='latest stored extraction', field_name=name)
+        graph.edge(receipt, 'HAS_FIELD_DECISION', field)
+        for candidate in decision.get('candidates', []):
+            source = candidate.get('source') or {}
+            invocation = identifier('OCRPass', (str(source.get('run_uuid')), source.get('pass_id')))
+            if invocation in graph.nodes:
+                graph.edge(field, 'BASED_ON', invocation)
     previous_retry = {}
     for event in data.get('events', []):
         e = event['payload']
@@ -426,7 +435,10 @@ def load_collaborations(conn, expense_id):
 def load(conn, sha):
     """Read one consistent authoritative snapshot; no graph or model calls."""
     from .receipts.catalogue import RECEIPT_CATALOGUE
-    receipt = conn.execute(f'''SELECT ir.*,r.*,s.status,s.attempts FROM {RECEIPT_CATALOGUE} r
+    receipt = conn.execute(f'''SELECT ir.*,r.*,s.status,s.attempts,
+        (SELECT e.raw_payload->'field_decisions' FROM budget.receipt_evidence e
+         WHERE e.source_sha256=r.source_sha256 ORDER BY e.updated_at DESC,e.id DESC LIMIT 1) AS field_decisions
+        FROM {RECEIPT_CATALOGUE} r
         LEFT JOIN ingest.receipts ir USING(source_sha256)
         LEFT JOIN ingest.receipt_processing_status s USING(source_sha256)
         WHERE r.source_sha256=%s''', (sha,)).fetchone()
