@@ -34,7 +34,7 @@ document.getElementById('refresh-imports').onclick=async function(){
   const result=await response.json();if(!response.ok)throw new Error(result.detail||'Import failed');
   if(result.busy){status.textContent='An import is already running. Check import status.';return;}
   status.textContent='Imported '+result.new_transactions+' new transactions; '+result.unchanged+' unchanged files; '+result.failed+' failed; '+result.waiting+' still writing.';
-  const link=document.createElement('a');link.href=window.location.pathname;link.textContent=' Refresh view';status.append(link);
+  const link=document.createElement('a');link.href=window.location.href;link.textContent=' Refresh view';status.append(link);
  }catch(error){status.textContent=error.message;}finally{this.disabled=false;}
 };</script>'''
 
@@ -176,7 +176,8 @@ def accounts_page(identity:dict=Depends(authenticated_identity)):
     body='<p>Accounts use last-four identifiers. Shared card accounts use the primary card ending. Full account and card numbers are not stored. Ownership assertions are separate from historical payer attribution.</p>'
     body+=table(rows,(('nickname','Nickname'),('account_reference','Account'),('institution','Institution'),('account_type','Type'),('currency','Currency'),('primary_card_last4','Primary card ending'),
                      ('last4','Account / card ending'),('owner_name','Owner / cardholder'),('ownership_role','Role'),
-                     ('effective_from','Effective from'),('effective_to','Effective to'),('asserted_at','Recorded at')))
+                     ('effective_from','Effective from'),('effective_to','Effective to'),('asserted_at','Recorded at'),('id','Transactions')),
+                links={'id':f'{BASE_PATH}/cad-ledger?account_id={{value}}'},link_labels={'id':'View transactions'})
     body+='<p>Blank effective dates mean historical ownership dates have not been supplied.</p>'
     return page('Accounts and ownership',body,base_path=BASE_PATH,identity=identity)
 
@@ -214,13 +215,13 @@ def refresh_fx(x_ledger_action:str|None=Header(default=None),identity:dict=Depen
 
 
 @app.get(f'{BASE_PATH}/cad-ledger',response_class=HTMLResponse)
-def cad_ledger_page(limit:int=100,offset:int=0,account:str='',from_date:str='',to_date:str='',direction:str='desc',
+def cad_ledger_page(limit:int=100,offset:int=0,account:str='',from_date:str='',to_date:str='',direction:str='desc',account_id:int|None=None,
                     identity:dict=Depends(authenticated_identity)):
     from datetime import date
     from ..transactions.ledger import ledger_rows
     from .render import pager
     try:
-        result=ledger_rows(accounting_service(),limit=limit,offset=offset,account=account,direction=direction,
+        result=ledger_rows(accounting_service(),limit=limit,offset=offset,account=account,direction=direction,account_id=account_id,
             start=date.fromisoformat(from_date) if from_date else None,end=date.fromisoformat(to_date) if to_date else None)
     except ValueError as exc:
         raise HTTPException(422,str(exc)) from exc
@@ -229,7 +230,10 @@ def cad_ledger_page(limit:int=100,offset:int=0,account:str='',from_date:str='',t
 CAD equivalents use <a href="https://www.bankofcanada.ca/rates/exchange/daily-exchange-rates/">Bank of Canada daily reference rates</a>,
 using the latest available business-day rate on or before the bank date (up to seven days).
 These are reporting equivalents, not bank settlement costs. Transfers and card payments remain visible.</p>'''
-    body+=f'''<form method="get"><label>Account or ending <input name="account" value="{esc(account)}"></label>
+    account_filter = f'<input type="hidden" name="account_id" value="{account_id}">' if account_id is not None else ''
+    if account_id is not None:
+        body += f'<p>Showing this account only. <a href="{BASE_PATH}/accounts">Choose another account</a> · <a href="{BASE_PATH}/cad-ledger">All accounts</a></p>'
+    body+=f'''<form method="get">{account_filter}<label>Account or ending <input name="account" value="{esc(account)}"></label>
 <label>From <input type="date" name="from_date" value="{esc(from_date)}"></label>
 <label>To <input type="date" name="to_date" value="{esc(to_date)}"></label>
 <label>Order <select name="direction"><option value="desc" {'selected' if direction=='desc' else ''}>Newest first</option>
@@ -244,7 +248,7 @@ These are reporting equivalents, not bank settlement costs. Transfers and card p
         ('fx_rate','CAD per unit'),('rate_date','Rate date'),('conversion','Conversion')),
         links={'transaction_id':f'{BASE_PATH}/transactions/{{value}}'},money_columns={'original_amount','amount_cad'})
     body+=pager(BASE_PATH+'/cad-ledger',limit=limit,offset=offset,row_count=len(rows),total_count=result['total'],
-                query={'account':account,'from_date':from_date,'to_date':to_date,'direction':direction})
+                query={'account':account,'from_date':from_date,'to_date':to_date,'direction':direction,'account_id':account_id})
     body+='''<script>document.getElementById('refresh-fx').onclick=async function(){
  const status=document.getElementById('fx-result');this.disabled=true;status.textContent='Updating reference rates…';
  try{const response=await fetch('''+repr(BASE_PATH+'/api/transactions/fx-update')+''',{method:'POST',headers:{'X-Ledger-Action':'fx-update'}});

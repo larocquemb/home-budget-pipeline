@@ -66,10 +66,14 @@ def update_rates(conn,actor,*,fetch=None):
             'purpose':'CAD reporting equivalents; original bank amounts and settlement costs remain unchanged'}
 
 
-def ledger_rows(service,*,limit=100,offset=0,direction='desc',account='',start=None,end=None):
+def ledger_rows(service,*,limit=100,offset=0,direction='desc',account='',start=None,end=None,account_id=None):
     if not 1<=limit<=500 or offset<0 or direction not in {'asc','desc'}:
         raise ValueError('Invalid ledger pagination or sort direction')
     where=[];params=[]
+    if account_id is not None:
+        if type(account_id) is not int or account_id <= 0:
+            raise ValueError('Account ID must be a positive integer')
+        where.append('account_id=%s');params.append(account_id)
     if account:
         where.append("(account ILIKE %s OR account_last4=%s)");params.extend(('%'+account+'%',account))
     if start is not None:

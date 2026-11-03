@@ -109,3 +109,20 @@ def test_candidate_selection_and_saved_receipt_source_are_available_in_each_spli
         {'expense_pk':17,'merchant':'<market>','transaction_datetime':date(2026,3,12),'total':Decimal('12.34')}])
     assert 'data-receipt-choice' in text and 'value="17" data-receipt-source="">&lt;market&gt;' in text
     assert f'href="{BASE_PATH}/receipts/{"b"*64}"' in text
+
+
+def test_accounts_link_to_exact_account_and_keep_selection_when_paging(client, monkeypatch):
+    from home_budget_pipeline.transactions import accounts, ledger
+    monkeypatch.setattr(accounts, 'account_rows', lambda *args: [
+        {'id':7,'nickname':'House'}, {'id':8,'nickname':'House US'}])
+    headers={'X-Forwarded-User':'reviewer'}
+    response=client.get(f'{BASE_PATH}/accounts',headers=headers)
+    assert f'href="{BASE_PATH}/cad-ledger?account_id=7">View transactions</a>' in response.text
+    assert f'href="{BASE_PATH}/cad-ledger?account_id=8">View transactions</a>' in response.text
+    calls=[]
+    monkeypatch.setattr(ledger,'ledger_rows',lambda *args,**kw:calls.append(kw) or {'rows':[],'total':101,'missing_rates':0})
+    response=client.get(f'{BASE_PATH}/cad-ledger?account_id=7&from_date=2026-01-01&direction=asc',headers=headers)
+    assert response.status_code==200 and calls[0]['account_id']==7
+    assert '<input type="hidden" name="account_id" value="7">' in response.text
+    assert 'offset=100' in response.text and 'account_id=7' in response.text
+    assert 'All accounts</a>' in response.text

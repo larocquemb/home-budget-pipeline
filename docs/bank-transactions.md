@@ -349,3 +349,10 @@ bank transactions**, with links back to transaction details and both the full
 bank amount and the amount allocated to that receipt. Links use the original
 receipt source identity, so a reused expense ID after a receipt rebuild cannot
 attach an unrelated receipt. Existing CAD currency validation still applies.
+
+
+From **Accounts**, choose **View transactions** on an account row to see only
+that account's activity, sorted by bank date. The account selection stays in
+place when changing date/order filters or paging. Use **All accounts** to
+return to the combined CAD ledger. Linked cards on a shared account open the
+same account ledger.
