@@ -37,11 +37,36 @@ def phone_evidence(text, observations=()):
             'candidates':candidates}
 
 
+def registration_evidence(text, observations=()):
+    """Keep optional RT conflicts unless one value has independent-engine support."""
+    from .ingest import _store_header_readings
+    candidates=[]
+    support=defaultdict(set)
+    for observation in (None, *(observations or ())):
+        if observation is not None and not isinstance(observation,dict):
+            continue
+        source=({'kind':'selected_text'} if observation is None else
+                {k:observation.get(k) for k in ('run_uuid','pass_id','page_number','engine')})
+        readings=(_store_header_readings(text, ()) if observation is None else
+                  _store_header_readings('', (observation,)))
+        for reading in readings:
+            for number,line in enumerate(reading.splitlines(),1):
+                for match in RT.finditer(line):
+                    value=re.sub(r'\D','',match[1])+'RT'+match[2]
+                    candidates.append({'value':value,'source':{**source,'line_number':number}})
+                    if source.get('run_uuid') and source.get('engine'):
+                        support[(source['run_uuid'],value)].add(source['engine'])
+    values={c['value'] for c in candidates}
+    corroborated={value for (_,value),engines in support.items() if len(engines)>=2}
+    value=(next(iter(values)) if len(values)==1 else
+           next(iter(corroborated)) if len(corroborated)==1 else None)
+    return {'policy':'printed-tax-registration-v1','value':value,
+            'status':'selected' if value is not None or not values else 'conflict',
+            'reason':'independent_engines_agree' if value and len(values)>1 else
+                     'unambiguous_printed_registration' if value else 'missing_or_conflicting_registration',
+            'candidates':candidates}
+
+
 def extract_store_contact(text, *, observations=()):
-    from .ingest import _store_header_readings, _store_header_lines
-    registrations = set()
-    for reading in _store_header_readings(text, observations):
-        for match in RT.finditer(reading):
-            registrations.add(re.sub(r'\D', '', match[1]) + 'RT' + match[2])
     return {'store_phone': phone_evidence(text,observations)['value'],
-            'tax_registration_number': next(iter(registrations)) if len(registrations) == 1 else None}
+            'tax_registration_number': registration_evidence(text,observations)['value']}
