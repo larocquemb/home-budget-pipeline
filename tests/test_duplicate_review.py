@@ -134,14 +134,14 @@ def test_capture_does_not_reopen_rejected_pair(monkeypatch):
     store.save_score.assert_not_called()
 
 
-def test_duplicate_api_requires_identity_and_action_header(monkeypatch):
+def test_duplicate_review_api_is_retired(monkeypatch):
     from home_budget_pipeline.web.app import app, BASE_PATH
     monkeypatch.delenv('LEDGER_PROXY_SECRET', raising=False)
     with TestClient(app) as client:
         path = BASE_PATH + '/api/duplicates/resolve'
         data = {'left': 45, 'right': 49, 'expense': 45, 'reason': 'verified'}
-        assert client.post(path, json=data).status_code == 401
-        assert client.post(path, json=data, headers={'X-Forwarded-User': 'paul'}).status_code == 403
+        assert client.post(path, json=data).status_code == 404
+        assert client.post(path, json=data, headers={'X-Forwarded-User': 'paul'}).status_code == 404
 
 
 def test_confirmed_import_link_is_not_rematched_or_replaced(monkeypatch):
@@ -193,7 +193,7 @@ def test_ambiguous_exact_targets_never_auto_link(monkeypatch):
     store.auto_link_exact.assert_not_called()
 
 
-def test_import_does_not_create_purchase_for_unresolved_candidate(monkeypatch):
+def test_import_keeps_uncertain_candidate_as_separate_purchase(monkeypatch):
     from home_budget_pipeline.receipts import parallel_ingest as parallel
     from types import SimpleNamespace
     conn = MagicMock()
@@ -202,18 +202,21 @@ def test_import_does_not_create_purchase_for_unresolved_candidate(monkeypatch):
     monkeypatch.setattr(parallel, 'upsert_evidence', lambda *a, **k: 49)
     monkeypatch.setattr(parallel, 'capture_candidates', lambda *a, **k: ['review candidate'])
     monkeypatch.setattr(parallel, 'find_match', lambda *a: SimpleNamespace(disposition='new', expense_pk=None))
-    canonical = MagicMock()
+    canonical = MagicMock(return_value=42)
+    monkeypatch.setattr(parallel, '_persist_transaction_datetime', lambda *a: None)
+    monkeypatch.setattr(parallel, 'attach_evidence', lambda *a: None)
     monkeypatch.setattr(parallel.scan, 'upsert_receipt', canonical)
     result = parallel.persist_evidence_first(conn, [SimpleNamespace(merchant='OCR merchant')], 'budget')
     assert result['ambiguous'] == 1
-    canonical.assert_not_called()
+    canonical.assert_called_once()
+    assert result['new'] == 1
 
 
 def test_refreshing_secondary_evidence_preserves_canonical_purchase(monkeypatch):
     from home_budget_pipeline.receipts import parallel_ingest as parallel
     from types import SimpleNamespace
     conn = MagicMock()
-    conn.cursor.return_value.__enter__.return_value.fetchone.side_effect = [(45,), ({}, 'canonical-sha')]
+    conn.cursor.return_value.__enter__.return_value.fetchone.side_effect = [(45, False), (45,), ({}, 'canonical-sha')]
     monkeypatch.setattr(parallel, 'resolve_merchant_alias', lambda *a: 'Costco')
     monkeypatch.setattr(parallel, 'upsert_evidence', lambda *a, **k: 49)
     canonical = MagicMock()

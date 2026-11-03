@@ -220,7 +220,8 @@ class FakeService:
 def test_dashboard_links_to_human_friendly_pages():
     text = web_app.ledger_home(identity=IDENTITY)
     assert f'{web_app.BASE_PATH}/expenses' in text
-    assert f'{web_app.BASE_PATH}/duplicates' in text
+    assert f'{web_app.BASE_PATH}/receipts?include_archived=true' in text
+    assert '>Duplicates<' not in text
     assert "/api/analytics/expenses" not in text
 
 
@@ -352,10 +353,10 @@ def test_evidence_page_embeds_cropped_pdf_preview_and_keeps_original_link():
     assert "<summary>OCR text</summary>" in text
 
 
-def test_duplicate_page_links_both_evidence_records():
-    text = web_app.duplicates_page(service=FakeService(), identity=IDENTITY, limit=50, offset=0)
-    assert f'{web_app.BASE_PATH}/evidence/7' in text
-    assert f'{web_app.BASE_PATH}/evidence/8' in text
+def test_old_duplicate_page_redirects_to_receipts():
+    response = web_app.retired_duplicate_review()
+    assert response.status_code == 307
+    assert response.headers['location'] == web_app.BASE_PATH + '/receipts'
 
 
 def test_transaction_page_links_matched_expense():

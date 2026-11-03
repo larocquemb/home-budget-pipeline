@@ -122,6 +122,7 @@ def find_match(conn, receipt, schema: str = "budget") -> MatchResult:
                    raw_payload ->> 'receipt_id' AS receipt_id
               FROM {schema}.expenses
              WHERE NOT (COALESCE(raw_payload, '{{}}'::jsonb) ? 'duplicate_merge')
+               AND NOT (COALESCE(raw_payload, '{{}}'::jsonb) ? 'receipt_deleted')
                AND (%s::date IS NULL OR order_date = %s::date OR transaction_datetime::date = %s::date)
                AND (%s::numeric IS NULL OR ABS(COALESCE(receipt_total_charged, expense_total) - %s::numeric) <= 0.01)
              {rejected_clause}
@@ -216,6 +217,8 @@ def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = 
                 page_text = EXCLUDED.page_text,
                 raw_payload = EXCLUDED.raw_payload || CASE WHEN {schema}.receipt_evidence.raw_payload ? 'duplicate_merge'
                     THEN jsonb_build_object('duplicate_merge',{schema}.receipt_evidence.raw_payload->'duplicate_merge')
+                    ELSE '{{}}'::jsonb END || CASE WHEN {schema}.receipt_evidence.raw_payload ? 'receipt_deleted'
+                    THEN jsonb_build_object('receipt_deleted',{schema}.receipt_evidence.raw_payload->'receipt_deleted')
                     ELSE '{{}}'::jsonb END,
                 updated_at = NOW()
             RETURNING id

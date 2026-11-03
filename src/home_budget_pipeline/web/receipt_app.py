@@ -29,6 +29,7 @@ from ..product_labels import product_name, corrected_reading, ocr_variants
 from ..receipts.catalogue import RECEIPT_CATALOGUE
 from .render import esc, money, page, pager
 from . import receipt_graph as _receipt_graph_routes
+from .receipt_delete_html import control as deletion_control, script as deletion_script
 from .receipt_fields import RECEIPT_DATETIME_SQL, receipt_datetime, receipt_date_note, duplicate_expense, receipt_status
 
 _RECEIPT_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -55,6 +56,8 @@ def receipt_graph_url(source_sha256: str) -> str:
 
 
 def _receipt_status_html(receipt):
+    if receipt.get('deleted'):
+        return 'Deleted'
     canonical = duplicate_expense(receipt)
     if canonical:
         return f'<a href="{BASE_PATH}/expenses/{canonical}">Duplicate of {canonical}</a>'
@@ -112,6 +115,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
     if not include_archived:
         conditions.append("COALESCE(re.raw_payload->>'source_archived','false') <> 'true'")
         conditions.append('NOT r.source_archived')
+        conditions.append("NOT (COALESCE(re.raw_payload, '{}'::jsonb) ? 'receipt_deleted')")
         conditions.append("NOT (COALESCE(re.raw_payload, '{}'::jsonb) ? 'duplicate_merge')")
     if bounds:
         conditions.append(f'{RECEIPT_DATETIME_SQL} >= %s AND {RECEIPT_DATETIME_SQL} < %s')
@@ -140,6 +144,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
                COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts,
                re.id AS evidence_id, re.expense_pk,
                (re.raw_payload->'duplicate_merge'->>'canonical_expense_pk')::bigint AS duplicate_of,
+               COALESCE(re.raw_payload ? 'receipt_deleted',FALSE) AS deleted,
                (COALESCE(re.raw_payload->>'source_archived','false')='true' OR r.source_archived) AS source_archived,
                COALESCE(re.merchant, e.store_name) AS merchant,
                re.raw_payload->>'store' AS store,
@@ -247,6 +252,7 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
         if receipt['extraction_status'] == 'complete' and assessment.get('reconciled') is False:
             receipt['extraction_status'] = 'review'
     receipt["expense"] = expense
+    receipt['deleted'] = bool(((evidence or {}).get('raw_payload') or {}).get('receipt_deleted'))
     receipt["duplicate_of"] = duplicate_expense(evidence or {})
     receipt["receipt_status"] = receipt_status(receipt)
     receipt['transaction_datetime'] = receipt_datetime(evidence, expense)
@@ -261,6 +267,7 @@ def _receipt_for_expense(service: LedgerQueryService, expense_pk: int) -> str | 
          WHERE expense_pk = %s
            AND COALESCE(raw_payload->>'source_archived','false') <> 'true'
            AND NOT (COALESCE(raw_payload, '{}'::jsonb) ? 'duplicate_merge')
+           AND NOT (COALESCE(raw_payload, '{}'::jsonb) ? 'receipt_deleted')
          ORDER BY is_primary_source DESC, id
          LIMIT 1
         """,
@@ -299,6 +306,32 @@ async def receipt_first_redirects(request: Request, call_next):
 @app.get(f"{BASE_PATH}/dashboard", response_class=HTMLResponse)
 def dashboard(identity: dict[str, str] = Depends(authenticated_identity)) -> str:
     return ledger_home(identity)
+
+
+def _change_receipt_deletion(sha, deleted, action, service, identity):
+    if action != ('receipt-delete' if deleted else 'receipt-restore'):
+        raise HTTPException(403, 'Receipt action header required')
+    from .receipt_deletion import change
+    try:
+        return change(service._connect, sha, deleted=deleted, actor=identity['user'])
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.delete(f"{BASE_PATH}/api/receipts/{{source_sha256}}")
+def delete_receipt(source_sha256: str, x_ledger_action: str | None = Header(default=None),
+                   service: LedgerQueryService = Depends(query_service),
+                   identity: dict = Depends(authenticated_identity)):
+    return _change_receipt_deletion(source_sha256, True, x_ledger_action, service, identity)
+
+
+@app.post(f"{BASE_PATH}/api/receipts/{{source_sha256}}/restore")
+def restore_receipt(source_sha256: str, x_ledger_action: str | None = Header(default=None),
+                    service: LedgerQueryService = Depends(query_service),
+                    identity: dict = Depends(authenticated_identity)):
+    return _change_receipt_deletion(source_sha256, False, x_ledger_action, service, identity)
 
 
 @app.get(f"{BASE_PATH}/api/receipts/{{source_sha256}}")
@@ -455,7 +488,8 @@ def receipts_page(
             f"<td>{esc(receipt.get('transaction_datetime'))}</td>"
             f'<td class="num">{money(receipt.get("total"))}</td>'
             f"<td>{_receipt_status_html(receipt)}</td>"
-            f"<td>{esc(receipt.get('extraction_status')) if not duplicate_expense(receipt) else 'Historical'}</td>"
+            f"<td>{esc(receipt.get('extraction_status')) if not (duplicate_expense(receipt) or receipt.get('deleted')) else 'Historical'}</td>"
+            f'<td>{deletion_control(source_sha256, receipt.get("deleted"))}</td>'
             "</tr>"
         )
     body = (
@@ -466,15 +500,15 @@ def receipts_page(
         f'<label>Search receipts<input type="search" name="q" value="{esc(q)}" '
         'placeholder="Merchant, date, total, filename, expense ID or item" size="48"></label>'
         f'<label>Rows<input name="limit" type="number" min="1" max="500" value="{limit}"></label>'
-        f'<label><input type="checkbox" name="include_archived" value="true" {"checked" if include_archived else ""}>Show archived sources</label>'
+        f'<label><input type="checkbox" name="include_archived" value="true" {"checked" if include_archived else ""}>Show archived or deleted receipts</label>'
         '<button type="submit">Search</button>'
         f'<a href="{BASE_PATH}/receipts">Clear</a>'
         f'<span><strong>{total:,}</strong> {"matching " if q or month else ""}{noun}</span>'
         f'<a href="{BASE_PATH}/dashboard">Accounting &amp; review dashboard</a></form>'
         '<p class="muted">Purchase month uses the displayed receipt date. Receipts without a date are excluded when a month is selected. '
         'Search also matches filenames and folder names.</p>'
-        '<table><thead><tr>' + ''.join(headers) + '</tr></thead><tbody>'
-        + ("".join(rows) or '<tr><td colspan="8" class="muted">No receipts match your search.</td></tr>')
+        '<table><thead><tr>' + ''.join(headers) + '<th>Actions</th></tr></thead><tbody>'
+        + ("".join(rows) or '<tr><td colspan="9" class="muted">No receipts match your search.</td></tr>')
         + "</tbody></table>"
     )
     body += pager(
@@ -485,6 +519,7 @@ def receipts_page(
         total_count=result.total_count,
         query={'sort': sort, 'direction': direction, 'q': q, **({'month': month} if month else {}), **({'include_archived': 'true'} if include_archived else {})},
     )
+    body += deletion_script(BASE_PATH)
     return page("Receipts", body, base_path=BASE_PATH, identity=identity)
 
 
@@ -640,7 +675,10 @@ def receipt_page(
         else '<span class="muted">Not created</span>'
     )
     duplicate = duplicate_expense(receipt)
-    extraction_html = '' if duplicate else f"<div><strong>Extraction</strong><br>{esc(receipt.get('extraction_status'))}</div>"
+    deleted = receipt.get("deleted", False)
+    if deleted:
+        canonical_expense = '<span class="muted">Retained in history</span>'
+    extraction_html = '' if duplicate or deleted else f"<div><strong>Extraction</strong><br>{esc(receipt.get('extraction_status'))}</div>"
     header = f"""<div class="card"><div class="grid">
 <div><strong>Receipt</strong><br>{esc(filename)}</div>
 <div><strong>Merchant</strong><br>{esc(merchant)}</div>
@@ -648,7 +686,7 @@ def receipt_page(
 <div><strong>Address</strong><br>{esc(evidence.get('store_address') or expense.get('store_address'))}</div>
 <div><strong>Phone</strong><br>{esc(evidence.get('store_phone') or expense.get('store_phone'))}</div>
 <div><strong>Tax registration (RT)</strong><br>{esc(evidence.get('tax_registration_number') or expense.get('tax_registration_number'))}</div>
-<div><strong>Date/time</strong><br>{esc(receipt_date)}<small>{esc(receipt_date_note(evidence)) if not duplicate else ""}</small></div>
+<div><strong>Date/time</strong><br>{esc(receipt_date)}<small>{esc(receipt_date_note(evidence)) if not (duplicate or deleted) else ""}</small></div>
 <div><strong>Total</strong><br>{money(total)}</div>
 <div><strong>Status</strong><br>{_receipt_status_html(receipt)}</div>
 {extraction_html}
@@ -656,16 +694,13 @@ def receipt_page(
 <div><strong>Accounting record</strong><br>{canonical_expense}</div>
 </div></div>"""
 
+    header += deletion_control(source_sha256, deleted)
+    if deleted:
+        header += '<p class="card">Deleted from the active ledger. The original document and recorded extraction are retained. Restore this receipt to use it again.</p>'
     merged = (evidence.get('raw_payload') or {}).get('duplicate_merge')
     if merged:
         header += f'<p class="card">Duplicate source retained for history. Review the active purchase <a href="{BASE_PATH}/expenses/{duplicate}">{duplicate}</a> if needed.</p>'
         header += f'<details><summary>Historical extraction</summary><p>Recorded extraction: {esc(receipt.get("extraction_status"))}. This duplicate copy requires no review.</p></details>'
-
-    possible_duplicates = evidence.get('possible_duplicate_expense_pks') or []
-    if possible_duplicates and not duplicate:
-        links = ', '.join(f'<a href="{BASE_PATH}/expenses/{int(pk)}">Expense {int(pk)}</a>'
-                          for pk in possible_duplicates)
-        header += f'<div class="card">Possible duplicate purchase: compare {links} before including both accounting records.</div>'
 
     item_rows = []
     displayed_items = expense.get("items") or (evidence.get("raw_payload") or {}).get("items") or ()
@@ -690,7 +725,7 @@ def receipt_page(
             "</tr>"
         )
     allocation_review = ''
-    if not duplicate and expense_pk and hasattr(service, 'receipt_allocation'):
+    if not (duplicate or deleted) and expense_pk and hasattr(service, 'receipt_allocation'):
         from .allocation_html import allocation_html
         allocation_review = allocation_html(receipt.get('allocation') or service.receipt_allocation(source_sha256), source_sha256)
     items_html = (
@@ -707,7 +742,9 @@ def receipt_page(
         + "</tbody></table>"
     )
 
-    if duplicate:
+    if deleted:
+        items_html = '<p>This deleted receipt requires no review.</p>'
+    elif duplicate:
         items_html = f'<p>Item review belongs to <a href="{BASE_PATH}/expenses/{duplicate}">the active purchase {duplicate}</a>. Original readings remain in the recorded extraction below.</p>'
 
     review_html = ""
@@ -730,6 +767,7 @@ def receipt_page(
         + review_html
         + '<style>.receipt-recommendation{min-width:18rem;max-width:26rem;overflow-wrap:anywhere}.receipt-recommendation pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>'
         + items_html
+        + deletion_script(BASE_PATH)
         + """<script>
 const allocationForm=document.getElementById('allocation-correction');
 if(allocationForm){

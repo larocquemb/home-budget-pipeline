@@ -5,7 +5,39 @@ from .. import telemetry
 from .datetime import transaction_datetime_evidence
 from .payment import card_last4_evidence
 
-POLICY = 'cross-pass-summary-evidence-v3'
+POLICY = 'cross-pass-summary-evidence-v4'
+
+
+def _independently_corroborated_date(eligible, candidates):
+    """Require two printed date rows and agreement from a different OCR engine.
+
+    Repeated passes are not votes. Only a full timed reading supported by a
+    separate short date in its own page/pass and a full date from another engine
+    on that same page/run can resolve otherwise conflicting timestamps.
+    """
+    supported = set()
+    for candidate in eligible:
+        if candidate.get('year_digits') != 4 or 'T' not in candidate['value']:
+            continue
+        source = candidate['source']
+        keys = ('run_uuid', 'pass_id', 'page_number', 'engine')
+        if any(source.get(k) is None for k in keys):
+            continue
+        date = candidate['value'][:10]
+        printed = any(other.get('year_digits') == 2
+            and other['value'][:10] == date
+            and all(other['source'].get(k) == source[k] for k in keys)
+            and abs(other['line_number'] - candidate['line_number']) >= 2
+            for other in candidates)
+        independent = any(other.get('year_digits') == 4
+            and other['value'][:10] == date
+            and other['source'].get('engine') not in (None, source['engine'])
+            and other['source'].get('run_uuid') == source['run_uuid']
+            and other['source'].get('page_number') == source['page_number']
+            for other in eligible)
+        if printed and independent:
+            supported.add(date)
+    return next(iter(supported)) if len(supported) == 1 else None
 
 
 def _corroborated_printed_date(eligible, candidates):
@@ -100,12 +132,14 @@ def resolve(text, observations):
             # Same-day time disagreements preserve the date, but remain review.
             dates = {c['value'][:10] for c in eligible}
             if len(dates) > 1:
+                independent = _independently_corroborated_date(eligible, candidates)
                 year = _corroborated_year(eligible, candidates)
-                corroborated = year or _corroborated_printed_date(eligible, candidates)
+                corroborated = independent or year or _corroborated_printed_date(eligible, candidates)
                 if corroborated:
                     eligible = [c for c in eligible if c['value'][:10] == corroborated]
                     dates = {corroborated}
-                    reason = ('full_year_supported_by_separately_printed_short_date'
+                    reason = ('timed_date_supported_by_printed_date_and_independent_engine'
+                              if independent else 'full_year_supported_by_separately_printed_short_date'
                               if year
                               else 'timed_date_supported_by_separately_printed_short_date')
             timed = {c['value'] for c in eligible if 'T' in c['value']}

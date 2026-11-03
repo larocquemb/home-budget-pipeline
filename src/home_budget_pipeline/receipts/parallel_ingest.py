@@ -599,7 +599,8 @@ def _persist_transaction_datetime(conn, receipt: scan.ScannedReceipt, schema: st
         cur.execute(
             f"UPDATE {schema}.expenses SET transaction_datetime = %s WHERE source = 'scanned' AND order_id = %s "
             "AND NOT (COALESCE(raw_payload,'{}'::jsonb) ? 'receipt_date_correction') "
-            "AND NOT (COALESCE(raw_payload,'{}'::jsonb) ? 'duplicate_merge')",
+            "AND NOT (COALESCE(raw_payload,'{}'::jsonb) ? 'duplicate_merge') "
+            "AND NOT (COALESCE(raw_payload,'{}'::jsonb) ? 'receipt_deleted')",
             (value, receipt.canonical_order_id),
         )
 
@@ -627,6 +628,12 @@ def persist_evidence_first(
             reference = getattr(receipt, "source_reference", "") or ""
             evidence_type = "electronic" if reference.startswith("electronic/") else "scanned"
             evidence_id = upsert_evidence(conn, receipt, schema, evidence_type=evidence_type)
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT expense_pk, raw_payload ? 'receipt_deleted' FROM {schema}.receipt_evidence WHERE id=%s", (evidence_id,))
+            disposition = cur.fetchone()
+        if disposition and len(disposition) > 1 and disposition[1] is True:
+            stats['matched'] += 1
+            continue
         if not replace_existing:
             with conn.cursor() as cur:
                 cur.execute(f'SELECT expense_pk FROM {schema}.receipt_evidence WHERE id=%s', (evidence_id,))
@@ -665,9 +672,6 @@ def persist_evidence_first(
         if linked and isinstance(linked[0], int):
             stats['matched'] += 1
             continue
-        if candidates:
-            stats['ambiguous'] += 1
-            continue
         with telemetry.span("receipt.reconciliation", attributes):
             match = find_match(conn, receipt, schema)
 
@@ -677,9 +681,8 @@ def persist_evidence_first(
             stats["matched"] += 1
             continue
 
-        if match.disposition == "ambiguous":
+        if candidates or match.disposition == "ambiguous":
             stats["ambiguous"] += 1
-            continue
 
         with telemetry.span("receipt.persistence", {**attributes, "receipt.persistence.phase": "canonical"}):
             expense_pk = scan.upsert_receipt(conn, receipt, schema)

@@ -297,14 +297,14 @@ Existing scanned references such as `2026-10-31/file.pdf` stay unchanged when
 moving the dated folders out of `inbox`; update the scanned root setting and
 restart receipt and web services after such a move. Electronic references use
 `electronic/2026-10-27/file.pdf`. Cache keys, reprocess/cache rebuild commands,
-duplicate review and the GUI retain those identities. Configured roots must be
+receipt history and the GUI retain those identities. Configured roots must be
 separate directories; `electronic/` is reserved in the shared namespace.
 An explicitly supplied different review root remains scoped to that directory.
 For a month review, select by source-folder month rather than a purchase date
 guessed by OCR. The collector retains the electronic evidence type and the GUI
 resolves originals against the corresponding configured root.
 Count source documents separately from canonical purchases: multiple documents
-may support one expense or require duplicate review.
+may support one expense. Uncertain matches remain separate purchases; they do not wait for duplicate review.
 
 Normal `receipts process`/`receipts publish` intake checks durable publication
 records as well as completed extraction. Its summary reports `skipped_inflight`
@@ -1031,8 +1031,8 @@ ledger --env-file .env.dev receipts reconcile-sources --source-prefix electronic
 
 The command locates moved files by SHA-256, archives records whose source is
 missing or replaced, and records every change in the audit history. Purchases,
-items, categories and OCR caches remain intact. The receipt list and duplicate review queue
-hide archived source copies by default. Select **Show archived sources** on the
+items, categories and OCR caches remain intact. The receipt list
+hides archived source copies by default. Select **Show archived or deleted receipts** on the
 receipt list to inspect retained history. Reconcile again after restoring an
 original file to reactivate that source record. An unavailable source folder
 aborts the operation; a changed folder or record requires a fresh preview.
@@ -1116,8 +1116,12 @@ reactivate the superseded purchase.
 Explicit DATE/TIME rows outrank unlabeled dates. Contest/promotion closing dates
 are metadata. A timed full date corroborated by a separately printed short date
 in the same pass can resolve a single-character date conflict when observed
-clock readings agree. Multiple corroborated dates, larger differences and
-conflicting times remain in review. This rule applies across merchants/documents.
+clock readings agree. Larger date/time corruption can be resolved when that
+full timed date also agrees with a full date from a different OCR engine on the
+same page/run. Repeated passes do not count as independent engines. Multiple
+equally supported dates and conflicting times on the selected date remain in
+review. Original candidates and the selection reason are retained. These rules
+apply across merchants/documents.
 
 
 Confirmed superseded source copies show **Duplicate of [canonical expense]** in
@@ -1126,3 +1130,18 @@ receipt Status. Their original extraction warnings are available under
 review actions belong to the active purchase. Raw processing/extraction fields
 remain unchanged in the API, alongside derived `receipt_status` and `duplicate_of`.
 Canonical expense links skip superseded evidence when choosing a document.
+
+
+### Discarding receipts in the app
+
+Use **Delete receipt** on the receipt list or detail page to discard an unwanted
+receipt. **Undo** restores it immediately; **Show archived or deleted receipts**
+also provides a **Restore receipt** action later. No CLI command is required.
+
+Deleted receipts leave the active list. A purchase leaves active accounting totals
+when all its supporting receipts are deleted. Another retained receipt keeps a
+shared purchase active. Original files, OCR results, item identities, categories
+and audit history remain intact. Reprocessing preserves the deletion. Restoring
+reactivates the retained purchase; a receipt deleted before extraction still needs
+normal processing after restoration. The former duplicate-review page redirects
+to the receipt list. Historical duplicate decisions remain available as evidence.

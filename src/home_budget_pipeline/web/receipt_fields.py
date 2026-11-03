@@ -31,6 +31,8 @@ def duplicate_expense(receipt):
 
 
 def receipt_status(receipt):
+    if receipt.get('deleted'):
+        return 'deleted'
     if duplicate_expense(receipt):
         return 'duplicate'
     status = receipt.get('processing_status')

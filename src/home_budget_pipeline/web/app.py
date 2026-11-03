@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, RedirectResponse
 
 from home_budget_pipeline.receipts.ingest import (
     clean_extracted_item_name,
@@ -269,37 +269,6 @@ def api_item_description(request: ItemDescriptionRequest, x_ledger_action: Optio
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@app.get(f"{BASE_PATH}/api/duplicates")
-def api_duplicates(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
-    return service.pending_duplicates(limit=limit, offset=offset)
-
-
-class DuplicateReviewRequest(BaseModel):
-    left: int = Field(gt=0)
-    right: int = Field(gt=0)
-    expense: int | None = Field(default=None, gt=0)
-    reject: bool = False
-    reason: str = Field(min_length=1, max_length=2000)
-    expected_version: str | None = None
-    apply: bool = False
-
-
-@app.post(f'{BASE_PATH}/api/duplicates/resolve')
-def api_duplicate_review(request: DuplicateReviewRequest,
-                         x_ledger_action: str | None = Header(default=None),
-                         service: LedgerQueryService = Depends(query_service),
-                         identity: dict = Depends(authenticated_identity)):
-    if x_ledger_action != 'duplicate-review':
-        raise HTTPException(403, 'Duplicate review action header required')
-    from ..receipts.duplicate_review import resolve
-    try:
-        return resolve(service._connect, **request.model_dump(), actor=identity['user'])
-    except LookupError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
 @app.get(f"{BASE_PATH}/api/transactions")
 def api_transactions(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), service: LedgerQueryService = Depends(query_service), _: dict[str, str] = Depends(authenticated_identity)):
     return service.transaction_reconciliation(limit=limit, offset=offset)
@@ -493,7 +462,7 @@ def ledger_home(identity: dict[str, str] = Depends(authenticated_identity)) -> s
 <div class="card"><h2><a href="{BASE_PATH}/category-spend">Category spend</a></h2><p>Review spending totals by date, category group, and category.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/review-queue">Review queue</a></h2><p>See canonical expenses requiring extraction, reconciliation, or quality review.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/extraction-audit">Extraction audit</a></h2><p>Find receipts with suspiciously few canonical line items.</p></div>
-<div class="card"><h2><a href="{BASE_PATH}/duplicates">Duplicates</a></h2><p>Inspect unresolved receipt duplicate candidates.</p></div>
+<div class="card"><h2><a href="{BASE_PATH}/receipts?include_archived=true">Deleted receipts</a></h2><p>View retained records and restore discarded receipts.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/transactions">Transactions</a></h2><p>Inspect matched, ambiguous, and unmatched financial transactions.</p></div>
 <div class="card"><h2><a href="{BASE_PATH}/receipt-processing">Receipt processing</a></h2><p>See processing attempts, failures, and receipts requiring review.</p></div>
 </div>"""
@@ -635,49 +604,9 @@ def extraction_audit_page(limit: int = Query(100, ge=1, le=500), offset: int = Q
     return page("Extraction audit", body, base_path=BASE_PATH, identity=identity)
 
 
-@app.get(f"{BASE_PATH}/duplicates", response_class=HTMLResponse)
-def duplicates_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
-    result = service.pending_duplicates(limit=limit, offset=offset)
-    body = table(result.rows, (("id", "Candidate"), ("left_evidence_id", "Left evidence"), ("right_evidence_id", "Right evidence"), ("score", "Score"), ("disposition", "Disposition"), ("item_similarity", "Item similarity"), ("reasons", "Reasons")), links={"left_evidence_id": f"{BASE_PATH}/evidence/{{value}}", "right_evidence_id": f"{BASE_PATH}/evidence/{{value}}"})
-    body += '<p>Compare both source documents before confirming. Confirmation links evidence to one existing expense; it does not merge purchases or change items or categories.</p>'
-    for row in result.rows:
-        target = row.get('left_expense') or row.get('right_expense') or ''
-        body += f"""<section class="card"><h2>Evidence {row['left_evidence_id']} and {row['right_evidence_id']}</h2>
-<p><a href="{BASE_PATH}/evidence/{row['left_evidence_id']}">{esc(row.get('left_source'))}</a> · {esc(row.get('left_merchant'))} · {money(row.get('left_total'))} · Expense {esc(row.get('left_expense'))}</p>
-<p><a href="{BASE_PATH}/evidence/{row['right_evidence_id']}">{esc(row.get('right_source'))}</a> · {esc(row.get('right_merchant'))} · {money(row.get('right_total'))} · Expense {esc(row.get('right_expense'))}</p>
-<form class="duplicate-review" data-left="{row['left_evidence_id']}" data-right="{row['right_evidence_id']}">
-<label>Decision<select name="decision"><option value="confirm">Same purchase</option><option value="reject">Different purchases</option></select></label>
-<label>Keep expense ID<input name="expense" type="number" min="1" value="{target}"></label>
-<label>Review reason<input name="reason" required maxlength="2000"></label>
-<button type="submit">Preview decision</button> <button type="button" class="apply" disabled>Apply decision</button>
-<p class="result" role="status"></p></form></section>"""
-    body += """<script>
-for(const form of document.querySelectorAll('.duplicate-review')) {
- let version=null;
- const button=form.querySelector('.apply'), status=form.querySelector('.result');
- const payload=()=>({left:Number(form.dataset.left),right:Number(form.dataset.right),
-   expense:form.expense.value ? Number(form.expense.value):null,
-   reject:form.decision.value==='reject',reason:form.reason.value});
- form.addEventListener('input',()=>{version=null;button.disabled=true;status.textContent='Preview the updated decision.';});
- async function send(apply){
-   button.disabled=true;
-   try {
-     const response=await fetch('""" + f"{BASE_PATH}/api/duplicates/resolve" + """', {
-       method:'POST',headers:{'Content-Type':'application/json','X-Ledger-Action':'duplicate-review'},
-       body:JSON.stringify({...payload(),apply,expected_version:version})});
-     const result=await response.json();
-     if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'Review could not be saved.');
-     if(apply){status.textContent='Decision saved. Original documents retained.';version=null;}
-     else {version=result.version;status.textContent=payload().reject?'Will mark these as different purchases.':
-       'Will link both documents to expense '+payload().expense+'. Items and categories are preserved.';button.disabled=false;}
-   } catch(error){status.textContent=error.message;version=null;}
- }
- form.addEventListener('submit',event=>{event.preventDefault();send(false);});
- button.addEventListener('click',()=>{if(version)send(true);});
-}
-</script>"""
-    body += pager(f"{BASE_PATH}/duplicates", limit=limit, offset=offset, row_count=len(result.rows))
-    return page("Duplicate review", body, base_path=BASE_PATH, identity=identity)
+@app.get(f"{BASE_PATH}/duplicates", include_in_schema=False)
+def retired_duplicate_review():
+    return RedirectResponse(f"{BASE_PATH}/receipts", status_code=307)
 
 
 @app.get(f"{BASE_PATH}/transactions", response_class=HTMLResponse)
