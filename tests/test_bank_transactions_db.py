@@ -128,14 +128,18 @@ def test_last_four_ownership_is_idempotent_and_has_no_invented_effective_dates(b
         for _ in range(2):
             record_ownership(conn,'Test card','5678','Primary',{'5678':'Primary','9012':'Additional'},'Reviewer')
         rows=conn.execute('SELECT owner_name,ownership_role,effective_from FROM accounting.account_ownerships').fetchall()
-        assert len(rows)==3
+        assert len(rows)==2
         assert all(r['effective_from'] is None for r in rows)
         assert conn.execute('SELECT count(*) AS n FROM accounting.account_numbers').fetchone()['n']==2
         assert conn.execute('SELECT count(*) AS n FROM accounting.financial_transactions WHERE payer IS NOT NULL').fetchone()['n']==0
         with pytest.raises(ValueError,match='four'):
             record_ownership(conn,'Test card','1234567890125678','Primary',{'5678':'Primary'},'Reviewer')
-        with pytest.raises(ValueError,match='differs'):
-            record_ownership(conn,'Test card','5678','Other',{'5678':'Other'},'Reviewer')
+        record_ownership(conn,'Test card','5678','Other',{'5678':'Other','9012':'Additional'},'Reviewer',reason='Confirmed correction')
+        assert conn.execute('SELECT count(*) AS n FROM accounting.account_ownerships').fetchone()['n']==2
+        audits=conn.execute('SELECT * FROM accounting.account_ownership_audit ORDER BY id').fetchall()
+        assert len(audits)==2
+        assert audits[-1]['before_ownerships'][0]['owner_name']=='Primary'
+        assert audits[-1]['after_ownerships'][0]['owner_name']=='Other'
 
 
 def test_bank_allocations_survive_receipt_schema_drop_and_recycled_expense_id(bank_db):

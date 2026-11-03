@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS accounting.account_ownerships (
  account_id BIGINT NOT NULL REFERENCES accounting.accounts(id),
  account_number_id BIGINT,
  owner_name TEXT NOT NULL CHECK(length(trim(owner_name))>0),
- ownership_role TEXT NOT NULL CHECK (ownership_role IN ('primary','joint','authorized','cardholder')),
+ ownership_role TEXT NOT NULL CONSTRAINT account_ownerships_roles_v2 CHECK (ownership_role IN ('primary','secondary')),
  effective_from DATE,
  effective_to DATE,
  asserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -35,8 +35,34 @@ CREATE TABLE IF NOT EXISTS accounting.account_ownerships (
  basis TEXT NOT NULL,
  FOREIGN KEY (account_id,account_number_id) REFERENCES accounting.account_numbers(account_id,id),
  CHECK (effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from),
- CHECK ((ownership_role='cardholder') = (account_number_id IS NOT NULL)),
+ CONSTRAINT account_ownerships_card_reference_v2 CHECK (account_number_id IS NOT NULL),
  UNIQUE NULLS NOT DISTINCT (account_id,account_number_id,owner_name,ownership_role,effective_from)
+);
+
+-- Upgrade the initial account-level/cardholder layout without discarding history.
+-- NOT VALID allows the ownership operation to retain the old snapshot in audit
+-- before replacing canonical rows and validating the new constraints.
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='accounting.account_ownerships'::regclass
+               AND conname='account_ownerships_roles_v2') THEN
+  ALTER TABLE accounting.account_ownerships DROP CONSTRAINT IF EXISTS account_ownerships_ownership_role_check;
+  ALTER TABLE accounting.account_ownerships DROP CONSTRAINT IF EXISTS account_ownerships_check1;
+  ALTER TABLE accounting.account_ownerships ADD CONSTRAINT account_ownerships_roles_v2
+      CHECK(ownership_role IN ('primary','secondary')) NOT VALID;
+  ALTER TABLE accounting.account_ownerships ADD CONSTRAINT account_ownerships_card_reference_v2
+      CHECK(account_number_id IS NOT NULL) NOT VALID;
+ END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_account_ownership_card
+ ON accounting.account_ownerships(account_number_id);
+CREATE TABLE IF NOT EXISTS accounting.account_ownership_audit (
+ id BIGSERIAL PRIMARY KEY,
+ account_id BIGINT NOT NULL REFERENCES accounting.accounts(id),
+ actor TEXT NOT NULL,
+ reason TEXT NOT NULL,
+ before_ownerships JSONB NOT NULL,
+ after_ownerships JSONB NOT NULL,
+ recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS accounting.financial_transactions (

@@ -18,15 +18,17 @@ The **Accounts** page shows these records:
 | --- | --- |
 | `accounting.accounts` | Institution, stable account reference and primary card ending |
 | `accounting.account_numbers` | Linked identifiers containing only the last four digits |
-| `accounting.account_ownerships` | Account owners and cardholders, roles, assertion date and optional effective dates |
+| `accounting.account_ownerships` | One current ownership record per card ending, with primary/secondary role |
+| `accounting.account_ownership_audit` | Original and corrected ownership snapshots, actor, reason and timestamp |
 | `accounting.financial_transactions` | Normalized bank rows |
 | `accounting.transaction_imports`, `accounting.transaction_import_rows` | Import and original-row provenance |
 | `accounting.source_artifacts` | Verified source archive paths and hashes |
 | `accounting.transaction_allocations`, `accounting.transaction_allocation_audit` | Splits, receipt source links and correction history |
 
 No full account/card number is accepted as an account identifier. Card input in
-the CSV must already be masked. A shared account's primary holder is separate
-from each linked cardholder. Current ownership assertions do not assign a payer
+the CSV must already be masked. Each linked card has one ownership record: the
+primary card identifies the primary holder, and additional cards are secondary.
+There is no extra account-level ownership row. Current ownership assertions do not assign a payer
 to historical transactions; missing historical effective dates remain unknown.
 
 Record confirmed ownership with a private JSON plan:
