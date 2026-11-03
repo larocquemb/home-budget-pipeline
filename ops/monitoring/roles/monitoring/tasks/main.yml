@@ -1,4 +1,8 @@
 ---
+- name: Update receipt progress dashboard only
+  ansible.builtin.import_tasks: receipt_progress_dashboard.yml
+  tags: [never, monitoring_receipt_progress_dashboard]
+
 - name: Audit Grafana dashboards and datasource references
   ansible.builtin.import_tasks: grafana_audit.yml
   tags: [never, monitoring_grafana_audit]

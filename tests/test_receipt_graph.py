@@ -744,3 +744,19 @@ def test_full_scan_advances_after_failed_receipt_and_reports_failure(monkeypatch
     monkeypatch.setenv('DATABASE_URL', 'unused-by-mock')
     assert g.main(['--all', '--limit', '1']) == 1
     assert calls == ['', 'next']
+
+
+def test_item_price_decisions_link_each_row_to_original_pass():
+    data=evidence()
+    candidate={'value':'8.40','source':{'run_uuid':'ocr-1','pass_id':1,'line_number':3}}
+    row={'page_number':1,'line_number':4,'item_name':'Greek Yogurt','value':'8.40',
+         'status':'selected','included':True,'candidates':[candidate]}
+    data['receipt']['field_decisions']={'items':{'value':'1','status':'selected',
+        'candidates':[candidate],'rows':[row]}}
+    result=g.build(data)
+    decision=next(n for n in result['nodes'] if n['kind']=='ItemAmountDecision')
+    actual=next(n for n in result['nodes'] if n['kind']=='OCRPass')
+    assert decision['properties']['value']=='8.40'
+    assert json.loads(decision['properties']['candidates'])[0]['source']['line_number']==3
+    assert any(e['source']==decision['id'] and e['target']==actual['id'] and e['kind']=='BASED_ON'
+               for e in result['edges'])

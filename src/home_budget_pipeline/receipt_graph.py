@@ -322,6 +322,16 @@ def build(data):
         field = graph.node('FieldDecision', (sha, name), name.replace('_', ' '), **decision,
                            scope='latest stored extraction', field_name=name)
         graph.edge(receipt, 'HAS_FIELD_DECISION', field)
+        if name == 'items':
+            for row in decision.get('rows', []):
+                item_field = graph.node('ItemAmountDecision',
+                    (sha,row['page_number'],row['line_number']),row['item_name'], **row)
+                graph.edge(field,'HAS_ITEM_DECISION',item_field)
+                for candidate in row.get('candidates', []):
+                    source=candidate.get('source') or {}
+                    invocation=identifier('OCRPass',(str(source.get('run_uuid')),source.get('pass_id')))
+                    if invocation in graph.nodes:
+                        graph.edge(item_field,'BASED_ON',invocation)
         for candidate in decision.get('candidates', []):
             source = candidate.get('source') or {}
             invocation = identifier('OCRPass', (str(source.get('run_uuid')), source.get('pass_id')))

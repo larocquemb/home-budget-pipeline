@@ -333,3 +333,10 @@ production-db-rebuild:
 .PHONY: test-paddle-runtime
 test-paddle-runtime:
 	$(PYTHON) -m home_budget_pipeline.receipts.ocr_smoke
+
+.PHONY: monitoring-receipt-progress-check monitoring-receipt-progress-apply
+monitoring-receipt-progress-check:
+	@$(MONITORING_GITOPS) check --tags monitoring_receipt_progress_dashboard
+
+monitoring-receipt-progress-apply:
+	@$(MONITORING_GITOPS) apply --tags monitoring_receipt_progress_dashboard

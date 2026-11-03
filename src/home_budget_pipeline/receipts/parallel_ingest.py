@@ -500,6 +500,8 @@ def _parse_scan_cached(path: Path, root: Path, cache_dir: Path, refresh: bool, *
     receipt.transaction_datetime = transaction_datetime
     from .summary_evidence import apply
     apply(receipt, run.get('ocr_passes', []))
+    from .item_evidence import apply as apply_item_evidence
+    apply_item_evidence(receipt, pages, run.get('ocr_passes', []))
     receipt.worker_pid = os.getpid()
     receipt.worker_host = socket.gethostname()
     receipt.extraction_confidence = scan.confidence_for(receipt)

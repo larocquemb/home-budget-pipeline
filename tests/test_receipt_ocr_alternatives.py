@@ -98,3 +98,9 @@ def test_future_passes_preserve_line_confidence_and_coordinates():
     source = result[1][1]['sources'][0]
     assert source['confidence'] == 92.5
     assert source['geometry'] == dict(x=10,y=20,width=100,height=30)
+
+
+def test_crossing_optimal_matches_are_not_both_claimed_as_unique():
+    from home_budget_pipeline.receipt_ocr_alternatives import unique_ordered_matches
+    assert unique_ordered_matches([[0,2],[2,0]])=={}
+    assert unique_ordered_matches([[2,0],[0,2]])=={0:0,1:1}

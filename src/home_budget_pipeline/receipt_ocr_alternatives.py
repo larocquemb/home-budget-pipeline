@@ -24,22 +24,40 @@ def align(left, right):
             if _ocr_lines_match(a, b):
                 weights[i][j] = 1 + SequenceMatcher(
                     None, _line_key(description(a)), _line_key(description(b))).ratio()
+    return unique_ordered_matches(weights)
+
+
+def unique_ordered_matches(weights):
+    """Only associations shared by all maximum-weight monotonic matchings."""
+    n, m = len(weights), len(weights[0]) if weights else 0
     forward = [[0.0] * (m + 1) for _ in range(n + 1)]
     backward = [[0.0] * (m + 1) for _ in range(n + 1)]
+    prefix_count = [[1] * (m + 1) for _ in range(n + 1)]
+    suffix_count = [[1] * (m + 1) for _ in range(n + 1)]
+    def equal(a,b):
+        return abs(a-b)<1e-8
     for i in range(n):
         for j in range(m):
-            forward[i + 1][j + 1] = max(forward[i][j + 1], forward[i + 1][j],
-                                        forward[i][j] + weights[i][j])
+            best=max(forward[i][j+1],forward[i+1][j],forward[i][j]+weights[i][j])
+            forward[i+1][j+1]=best
+            prefix_count[i+1][j+1]=(prefix_count[i][j+1] if equal(forward[i][j+1],best) else 0)
+            prefix_count[i+1][j+1]+=(prefix_count[i+1][j] if equal(forward[i+1][j],best) else 0)
+            if weights[i][j] and equal(forward[i][j]+weights[i][j],best):
+                prefix_count[i+1][j+1]+=prefix_count[i][j]
     for i in reversed(range(n)):
         for j in reversed(range(m)):
-            backward[i][j] = max(backward[i + 1][j], backward[i][j + 1],
-                                  backward[i + 1][j + 1] + weights[i][j])
-    possible = [(i, j) for i in range(n) for j in range(m) if weights[i][j] and
-                abs(forward[i][j] + weights[i][j] + backward[i + 1][j + 1]
-                    - forward[n][m]) < 1e-8]
-    return {i: j for i, j in possible
-            if sum(a == i for a, _ in possible) == 1 and
-            sum(b == j for _, b in possible) == 1}
+            best=max(backward[i+1][j],backward[i][j+1],backward[i+1][j+1]+weights[i][j])
+            backward[i][j]=best
+            suffix_count[i][j]=(suffix_count[i+1][j] if equal(backward[i+1][j],best) else 0)
+            suffix_count[i][j]+=(suffix_count[i][j+1] if equal(backward[i][j+1],best) else 0)
+            if weights[i][j] and equal(backward[i+1][j+1]+weights[i][j],best):
+                suffix_count[i][j]+=suffix_count[i+1][j+1]
+    # Unique endpoints alone do not establish a shared match: two crossing
+    # alternatives can have separate endpoints yet be mutually exclusive.
+    # Count optimal paths so a returned edge occurs in every optimum.
+    return {i:j for i in range(n) for j in range(m) if weights[i][j]
+            and equal(forward[i][j]+weights[i][j]+backward[i+1][j+1],forward[n][m])
+            and prefix_count[i][j]*suffix_count[i+1][j+1]==prefix_count[n][m]}
 
 
 def alternatives(items, documents, passes):
