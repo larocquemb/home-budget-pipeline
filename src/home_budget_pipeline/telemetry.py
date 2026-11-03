@@ -37,6 +37,7 @@ def print_json_event(payload: Mapping[str, Any], *, level: str = 'INFO', file=No
 _TRUTHY = {"1", "true", "yes", "on"}
 _run_uuid: ContextVar[str | None] = ContextVar("receipt_run_uuid", default=None)
 _pass_id: ContextVar[int | None] = ContextVar("receipt_pass_id", default=None)
+_receipt_identity: ContextVar[dict | None] = ContextVar("receipt_identity", default=None)
 _receipt_session: ContextVar["ReceiptTrace | None"] = ContextVar(
     "receipt_trace_session", default=None,
 )
@@ -266,7 +267,8 @@ def _clean_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def _context_attributes() -> dict[str, Any]:
-    return _clean_attributes({"run_uuid": _run_uuid.get(), "pass_id": _pass_id.get()})
+    return _clean_attributes({**(_receipt_identity.get() or {}),
+                              "run_uuid": _run_uuid.get(), "pass_id": _pass_id.get()})
 
 
 def extract_trace_context(carrier: Mapping[str, str]) -> Any:
@@ -348,10 +350,16 @@ def receipt_process(
     source_sha256: str,
     *,
     run_uuid: str | None = None,
+    request_id: str | None = None,
 ) -> Iterator[ReceiptTrace]:
     """Create the root ``receipt.process`` span and bounded outcome metrics."""
     selected_run_uuid = run_uuid or str(uuid4())
     run_token = _run_uuid.set(selected_run_uuid)
+    identity_token = _receipt_identity.set(_clean_attributes({
+        'receipt.source_reference':source_reference,
+        'receipt.source_sha256':source_sha256,
+        'receipt.request_id':request_id,
+    }))
     started = time.perf_counter()
     try:
         with span(
@@ -365,6 +373,7 @@ def receipt_process(
             session = ReceiptTrace(selected_run_uuid, root, started)
             session_token = _receipt_session.set(session)
             try:
+                record_receipt_progress('claimed')
                 yield session
             except BaseException as exc:
                 session.status = "failed"
@@ -390,7 +399,23 @@ def receipt_process(
                     LOG.warning("Receipt telemetry metric recording failed", exc_info=True)
                 _receipt_session.reset(session_token)
     finally:
+        _receipt_identity.reset(identity_token)
         _run_uuid.reset(run_token)
+
+
+def record_receipt_progress(phase: str, attributes: Mapping[str, Any] | None = None) -> None:
+    """Export a short discovery/progress marker while parent spans remain open.
+
+    This marker is not an operation-duration measurement. Engine spans retain
+    their actual durations and later consensus attributes separately.
+    """
+    if not _receipt_identity.get():
+        return
+    try:
+        with span('receipt.progress',{'receipt.phase':phase,**(attributes or {})}):
+            pass
+    except Exception:
+        LOG.warning('Receipt progress trace failed',exc_info=True)
 
 
 def current_run_uuid() -> str | None:
@@ -526,6 +551,12 @@ def _ocr_metric_attributes(metric: Mapping[str, Any]) -> dict[str, Any]:
 def record_ocr_pass_completion(pass_span: Any, metric: Mapping[str, Any]) -> None:
     """Publish pass metrics and a correlated log as soon as the engine returns."""
     try:
+        record_receipt_progress('ocr_pass_completed',{
+            'pass_id':metric.get('pass_id'),'receipt.page.number':metric.get('page_number'),
+            'ocr.engine':metric.get('engine'),'ocr.dpi':metric.get('dpi'),
+            'ocr.psm':metric.get('psm'),'ocr.variant':metric.get('variant'),
+            'ocr.status':metric.get('status'),'ocr.pass.duration':metric.get('seconds'),
+        })
         bounded = _ocr_metric_attributes(metric)
         if _ocr_pass_counter is not None:
             _ocr_pass_counter.add(1, bounded)
@@ -657,6 +688,10 @@ class JsonLogFormatter(logging.Formatter):
             "run_uuid": getattr(record, "run_uuid", None) or _run_uuid.get(),
             "pass_id": getattr(record, "pass_id", None) or _pass_id.get(),
         }
+        identity=_receipt_identity.get() or {}
+        for name in ('source_reference','source_sha256','request_id'):
+            if identity.get('receipt.'+name) is not None:
+                payload[name]=identity['receipt.'+name]
         for name in self._extra_fields:
             value = getattr(record, name, None)
             if value is not None:

@@ -16,7 +16,7 @@ ADJUSTMENT = re.compile(r'^(?:[I1lT]NSTANT\s+SAVINGS|\+?EHC)\b', re.I)
 
 
 def product_name(line):
-    if (not re.search(r'[A-Za-z]{2}', line) or HEADING.fullmatch(line)
+    if (re.fullmatch(r'[A-Za-z]{1,2}',line) or scan.item_metadata_line(line) or not re.search(r'[A-Za-z]{2}', line) or HEADING.fullmatch(line)
             or scan.TOTAL_WORDS.search(line) or scan.NON_ITEM_WORDS.search(line)
             or ADJUSTMENT.match(line)
             or re.match(r'^\d+(?:\.\d+)?\s*(?:kg|lb)\b', line, re.I)
@@ -36,10 +36,35 @@ def rows(text, *, placeholders=False, provenance=None, include_quantity=False):
     Original line numbers are retained even when the derived reading is joined.
     """
     lines = [scan.normalize_line(l) for l in text.splitlines()]
-    names = [i for i,l in enumerate(lines) if product_name(l) and scan.parse_money(l) is None]
+    names = [i for i,l in enumerate(lines) if (product_name(l) or ADJUSTMENT.match(l)) and scan.parse_money(l) is None]
     prices = [i for i,l in enumerate(lines) if PRICE_ONLY.fullmatch(l) and scan.parse_money(l) is not None
-              and not (i and scan.parse_money(lines[i-1]) is None and (ADJUSTMENT.match(lines[i-1]) or scan.TOTAL_WORDS.search(lines[i-1])
+              and not (i and scan.parse_money(lines[i-1]) is None and (scan.TOTAL_WORDS.search(lines[i-1])
                               or re.search(r'\bsaved\b',lines[i-1],re.I)))]
+    # Within a complete uninterrupted column block, monotonic order pairs
+    # equal numbers of names and amounts, even if the engine emits two prices
+    # before two names. Incomplete blocks keep the conservative local matching.
+    block_pairs={}
+    block=[]
+    def close_block():
+        ns=[k for k in block if k in names]
+        ps=[k for k in block if k in prices]
+        if ns and len(ns)==len(ps) and not (
+                ps[0]<ns[0] and ps[0]>0 and HEADING.fullmatch(lines[ps[0]-1])
+                and (len(ns)==1 or not all(p<n for n,p in zip(ns,ps)))):
+            block_pairs.update(zip(ns,ps))
+        block.clear()
+    for k,line in enumerate(lines):
+        if k in names or k in prices or re.fullmatch(r'[A-Z]{1,2}',line):
+            block.append(k)
+        else:
+            close_block()
+    close_block()
+    directions={}
+    boundaries=[-1]+[i for i,l in enumerate(lines) if HEADING.fullmatch(l)]+[len(lines)]
+    for start,end in zip(boundaries,boundaries[1:]):
+        signs={1 if j>i else -1 for i,j in block_pairs.items() if start<i<end}
+        if len(signs)==1 and sum(start<i<end for i in block_pairs)>=2:
+            for k in range(start+1,end):directions[k]=next(iter(signs))
     geometry={line.get('line_number'):line for line in (provenance or {}).get('lines',[])}
     def row_weight(i,j):
         name,price=geometry.get(i+1,{}),geometry.get(j+1,{})
@@ -51,9 +76,20 @@ def rows(text, *, placeholders=False, provenance=None, include_quantity=False):
                     and price['x']>=name['x']+name['width']-5):
                 return 2+overlap/min(name['height'],price['height'])
             return 0
+        if i in block_pairs:
+            return int(block_pairs[i]==j)
         if j==i-1 and j>0 and HEADING.fullmatch(lines[j-1]):
             return 0  # A price after a section boundary may belong to the prior section.
-        return int(abs(i-j)==1)
+        # Price columns may put tax markers between names and prices, or
+        # separate the price and its tax marker.
+        # Include adjustment labels in the same matching so their amounts cannot
+        # be stolen by an adjacent product. Ambiguous optimal matches abstain.
+        if directions.get(i) and (j-i)*directions[i]<0:
+            return 0
+        between=lines[min(i,j)+1:max(i,j)]
+        return int(abs(i-j)<=3 and all(
+            not l or re.fullmatch(r'[A-Z]{1,2}',l)
+            for k,l in enumerate(between,min(i,j)+1)))
     pairs = unique_ordered_matches([[row_weight(i,j) for j in prices] for i in names])
     money_lines = {}
     for ni,pi in pairs.items():
@@ -82,6 +118,12 @@ def rows(text, *, placeholders=False, provenance=None, include_quantity=False):
                            line_number=found+1,money_line_number=money_lines.get(found,found)+1,
                            currency='$' in lines[found],text=lines[found],gross=scan.parse_money(lines[found])))
         start=found+1
+    weight_detail=re.compile(r'^(\d+(?:\.\d+)?)\s*(kg|lb)\s*@\s*\$?\s*(\d+\.\d{2})\s*/\s*\2\b',re.I)
+    for row in result:
+        following=row['line_number']
+        match=weight_detail.match(lines[following]) if following<len(lines) else None
+        if match:
+            row['weight_detail']=(str(Decimal(match[1])),match[2].lower(),str(Decimal(match[3])))
     if include_quantity:
         weighted = re.compile(r'^(?P<quantity>\d+(?:\.\d+)?)\s*(?P<unit>kg|lb)\s*@\s*\$?\s*(?P<price>\d+\.\d{2})\s*/\s*(?P=unit)\b',re.I)
         for i,line in enumerate(lines[:-1]):
@@ -156,7 +198,14 @@ def resolve(pages, observations):
                 a,b=base[bi],readings[ri]
                 # Different product sizes/codes are not interchangeable prices.
                 if number_signature(a['name']) != number_signature(b['name']):
-                    continue
+                    # A digit introduced into a damaged produce description
+                    # cannot defeat a unique ordered match with the exact same
+                    # printed weight/unit-price detail. Explicit sizes/codes stay
+                    # distinct, and a weight calculation never invents a price.
+                    sized=any(re.search(r'\d+\s*(?:kg|lb|g|ml|l|pk|pack)\b|^\d+\b',name,re.I)
+                              for name in (a['name'],b['name']))
+                    if sized or not a.get('weight_detail') or a.get('weight_detail')!=b.get('weight_detail'):
+                        continue
                 provenance=p.get('provenance') or {}
                 if isinstance(provenance,str):
                     import json
@@ -242,6 +291,8 @@ def collapse_page_overlap(decisions):
     """Collapse matching boundary products only when their observed gross prices agree.
 
     Require two successive products, including a strong description anchor.
+    A conflicting earlier price may defer to a corroborated later price only
+    when that exact later gross was also observed on the earlier row.
     The later page retains its complete adjustment rows; originals remain in
     decisions and its overlap_sources. Never merge repeated rows within a page.
     """
@@ -260,7 +311,11 @@ def collapse_page_overlap(decisions):
                     for a,b in zip(left,right)]
             if (min(ratios)>=.6 and max(ratios)>=.9 and all(
                     a['gross_value'] is not None and b['gross_value'] is not None
-                    and Decimal(a['gross_value'])==Decimal(b['gross_value'])
+                    and (Decimal(a['gross_value'])==Decimal(b['gross_value']) or (
+                        a['status']=='conflict' and b['status']=='selected'
+                        and any(c.get('gross_value') is not None and
+                                Decimal(c['gross_value'])==Decimal(b['gross_value'])
+                                for c in a['candidates'])))
                     for a,b in zip(left,right))):
                 overlap=count
         if overlap:
@@ -304,3 +359,39 @@ def apply(receipt, pages, observations):
                       for d in decisions for candidate in d['candidates']]}
     from .scan_completeness import apply as apply_scan_completeness
     apply_scan_completeness(receipt,pages,observations)
+
+
+def corroborated_missing_adjustments(receipt, issue_count):
+    """Resolve missing discount text only from the same row's two-engine net evidence."""
+    recovered=[]
+    decisions=receipt.field_decisions.get('items',{}).get('rows',[])
+    for page_number,page in enumerate(receipt.page_text,1):
+        lines=page.splitlines()
+        for index,line in enumerate(lines):
+            if not ADJUSTMENT.match(scan.normalize_line(line)) or 'savings' not in line.lower():
+                continue
+            if scan.parse_money(line) is not None:
+                continue
+            if index+1<len(lines) and PRICE_ONLY.fullmatch(lines[index+1].strip()):
+                continue
+            prior=[d for d in decisions if d['page_number']==page_number and d['line_number']<index+1]
+            if not prior:
+                return False
+            row=prior[-1]
+            if row['status']!='selected' or row['value'] is None or row['gross_value'] is None:
+                return False
+            net,gross=Decimal(row['value']),Decimal(row['gross_value'])
+            if not 0<=net<gross:
+                return False
+            support=defaultdict(set)
+            for c in row['candidates']:
+                if Decimal(c['value'])==net and c['gross_value'] is not None and Decimal(c['gross_value'])==gross:
+                    support[c['source'].get('run_uuid')].add(c['source'].get('engine'))
+            if not any(run and len(engines-{None})>=2 for run,engines in support.items()):
+                return False
+            recovered.append({'page_number':page_number,'line_number':index+1,
+                              'item_line_number':row['line_number'],'discount':str(gross-net)})
+    if len(recovered)!=issue_count:
+        return False
+    receipt.field_decisions['items']['recovered_adjustments']=recovered
+    return bool(recovered)

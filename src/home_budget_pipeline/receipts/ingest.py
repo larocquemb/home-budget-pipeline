@@ -1570,6 +1570,13 @@ def extract_tax_components(text: str) -> dict[str, float]:
     return components
 
 
+def item_metadata_line(line: str) -> bool:
+    """Reject contact and unit-price detail even when punctuation resembles money."""
+    from .store_contact import PHONE
+    return bool(PHONE.search(line) or re.match(
+        r"^[^A-Za-z0-9]*\d+(?:\.\d+)?\s*(?:kg|lb)\s*@", line, re.I))
+
+
 def extract_items(text: str, *, issues: Optional[List[str]] = None) -> List[ScannedItem]:
     issues = issues if issues is not None else []
     items: List[ScannedItem] = []
@@ -1585,6 +1592,8 @@ def extract_items(text: str, *, issues: Optional[List[str]] = None) -> List[Scan
         # even when OCR punctuation makes an identifier resemble a price.
         if (re.search(r'\b\d{1,2}:\d{2}', line)
                 and re.search(r'\b(?:reg(?:ister)?|trans(?:action)?)\b', line, re.I)):
+            continue
+        if item_metadata_line(line):
             continue
         adjustment = re.match(r'^(?:[I1lT]NSTANT\s+SAVINGS|\+?EHC)\b', line, re.I)
         if adjustment:
@@ -1735,7 +1744,10 @@ def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
                          receipt.tax, receipt.total)['reasons'])
     adjustment_issues = []
     extract_items(receipt.text, issues=adjustment_issues)
-    reasons.extend(sorted(set(adjustment_issues)))
+    if adjustment_issues:
+        from .item_evidence import corroborated_missing_adjustments
+        if not corroborated_missing_adjustments(receipt, len(adjustment_issues)):
+            reasons.extend(sorted(set(adjustment_issues)))
     components = extract_tax_components(receipt.text)
     if (len(components) > 1 and receipt.tax is not None
             and abs(round(sum(components.values()) - receipt.tax, 2)) > .01):
