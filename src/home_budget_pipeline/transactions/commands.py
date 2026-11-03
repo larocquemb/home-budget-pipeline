@@ -1,4 +1,4 @@
-"""Ledger transaction operations; previews are the default."""
+"""Manual bank import, reporting and audit operations."""
 import json
 import os
 import getpass
@@ -29,13 +29,24 @@ def add_commands(commands):
     tree.add_argument('--account-currency',action='append',default=[],metavar='[BANK/]PRODUCT/xLAST4=USD',
                       help='Explicit currency for an account folder; repeat as needed. Existing accounts retain their registered currency.')
     tree.set_defaults(handler=run)
+    view=sub.add_parser('ledger',help='Read the consolidated CAD activity ledger, sorted by bank date.')
+    view.add_argument('--account',default='',help='Nickname or last four digits.')
+    view.add_argument('--from-date')
+    view.add_argument('--to-date')
+    view.add_argument('--direction',choices=('asc','desc'),default='desc')
+    view.add_argument('--limit',type=int,default=100)
+    view.add_argument('--offset',type=int,default=0)
+    view.add_argument('--json',action='store_true')
+    view.set_defaults(handler=run)
+    rates=sub.add_parser('fx-update',help='Fetch and retain Bank of Canada daily USD/CAD rates for imported transactions.')
+    rates.set_defaults(handler=run)
     scan=sub.add_parser('scan',help='Discover settled downloads in the configured transaction folder and import only new or changed files.')
-    scan.add_argument('--retry-failed',action='store_true',help='Retry failed files without waiting for automatic backoff.')
+    scan.add_argument('--retry-failed',action='store_true',help='Compatibility flag; manual scans already retry failed files.')
     scan.set_defaults(handler=run)
     status=sub.add_parser('status',help='Show automatic transaction import state and errors.')
     status.set_defaults(handler=run)
-    services=sub.add_parser('services',help='Control automatic native Mac transaction discovery.')
-    services.add_argument('action',choices=('start','stop','restart','status','logs'))
+    services=sub.add_parser('services',help='Inspect or disable the legacy development watcher; development imports are manual.')
+    services.add_argument('action',choices=('stop','status','logs'))
     services.set_defaults(handler=run)
     matches = sub.add_parser('suggest', help='Read-only receipt candidates; never confirm links or enrich receipts.')
     matches.add_argument('--transaction-id', type=int)
@@ -56,7 +67,7 @@ def add_commands(commands):
     profile.add_argument('--plan',type=Path,required=True,help='Private JSON list of account profile records.')
     profile.add_argument('--apply',action='store_true')
     profile.set_defaults(handler=run)
-    for p in (setup, imp, tree, scan, split, migration, ownership,profile):
+    for p in (setup, imp, tree, scan, split, migration, ownership,profile,rates):
         p.add_argument('--actor', default=os.getenv('LEDGER_ACTOR') or getpass.getuser(),
                        help='Optional audit identity override; defaults to LEDGER_ACTOR or the local OS user.')
 
@@ -72,11 +83,27 @@ def run(args):
     from .database import service as accounting_service
     bank=accounting_service()
     action = args.transaction_command
+    if action=='ledger':
+        from datetime import date
+        from .ledger import ledger_rows,text_table
+        report=ledger_rows(bank,account=args.account,start=date.fromisoformat(args.from_date) if args.from_date else None,
+            end=date.fromisoformat(args.to_date) if args.to_date else None,limit=args.limit,offset=args.offset,direction=args.direction)
+        if args.json:
+            print(json.dumps(report,default=str,indent=2))
+        else:
+            print(text_table(report['rows']))
+            print(f"Showing {len(report['rows'])} of {report['total']} rows; {report['missing_rates']} rows lack CAD conversion rates.")
+        return 0
+    if action=='fx-update':
+        from .ledger import update_rates
+        with bank._connect() as conn:
+            report=update_rates(conn,args.actor)
+        print(json.dumps(report,default=str,indent=2));return 0
     if action in {'scan','status'}:
         from .discovery import scan,status,source_root
         with bank._connect() as conn:
             report=status(conn) if action=='status' else scan(conn,source_root(),args.actor,
-                settle_seconds=float(os.getenv('TRANSACTION_DISCOVERY_SETTLE_SECONDS','10')),retry_failed=args.retry_failed)
+                settle_seconds=float(os.getenv('TRANSACTION_DISCOVERY_SETTLE_SECONDS','10')),retry_failed=True,immediate=True)
         print(json.dumps(report,default=str,indent=2))
         return 1 if action=='scan' and report.get('failed') else 0
     if action == 'suggest':

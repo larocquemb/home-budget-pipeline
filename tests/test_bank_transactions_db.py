@@ -362,3 +362,52 @@ def test_discovery_recognizes_manual_import_and_requires_registered_currency(ban
         rejected=scan(conn,root,'Test',now=now+timedelta(seconds=11),retained_root=tmp_path/'retained')
         assert rejected['failed']==1 and rejected['new_transactions']==0
         assert conn.execute('SELECT count(*) AS n FROM accounting.accounts').fetchone()['n']==1
+
+
+def test_cad_ledger_retains_originals_and_audits_exchange_rate_corrections(bank_db):
+    import json
+    from decimal import Decimal
+    from home_budget_pipeline.transactions.ledger import update_rates
+    connect,source=bank_db
+    with connect() as conn:
+        import_cibc(conn,source,'USD account','Test',apply=True,currency='USD')
+        assert conn.execute('SELECT count(*) AS n FROM accounting.transaction_ledger_cad WHERE amount_cad IS NULL').fetchone()['n']==3
+        payload={'observations':[{'d':'2026-03-12','FXUSDCAD':{'v':'1.30'}},{'d':'2026-03-13','FXUSDCAD':{'v':'1.40'}}]}
+        update_rates(conn,'Test',fetch=lambda url:json.dumps(payload).encode())
+        row=conn.execute('SELECT * FROM accounting.transaction_ledger_cad WHERE original_amount>0 LIMIT 1').fetchone()
+        assert row['original_amount']==Decimal('12.34') and row['currency']=='USD'
+        assert row['amount_cad']==Decimal('16.04') and row['conversion_status']=='boc_daily'
+        payload['observations'][0]['FXUSDCAD']['v']='1.35'
+        update_rates(conn,'Test',fetch=lambda url:json.dumps(payload).encode())
+        assert conn.execute('SELECT amount_cad FROM accounting.transaction_ledger_cad WHERE original_amount>0 LIMIT 1').fetchone()['amount_cad']==Decimal('16.66')
+        assert conn.execute('SELECT count(*) AS n FROM accounting.exchange_rate_downloads').fetchone()['n']==2
+        assert conn.execute('SELECT count(*) AS n FROM accounting.exchange_rate_observations').fetchone()['n']==4
+        assert conn.execute('SELECT amount FROM accounting.financial_transactions WHERE amount>0 LIMIT 1').fetchone()['amount']==Decimal('12.34')
+
+
+def test_cad_ledger_uses_prior_business_day_without_future_or_stale_rates(bank_db,tmp_path):
+    import json
+    from decimal import Decimal
+    from datetime import date
+    from home_budget_pipeline.transactions.ledger import update_rates
+    connect,_=bank_db
+    source=tmp_path/'weekend.csv';source.write_text('2026-03-14,MARKET,10.00,,1234********5678\n2026-03-30,OTHER,10.00,,1234********5678\n')
+    with connect() as conn:
+        import_cibc(conn,source,'USD account','Test',apply=True,currency='USD')
+        payload={'observations':[{'d':'2026-03-13','FXUSDCAD':{'v':'1.40'}},{'d':'2026-03-16','FXUSDCAD':{'v':'1.50'}}]}
+        update_rates(conn,'Test',fetch=lambda url:json.dumps(payload).encode())
+        rows=conn.execute('SELECT * FROM accounting.transaction_ledger_cad ORDER BY bank_date').fetchall()
+        assert rows[0]['amount_cad']==Decimal('14.00') and rows[0]['rate_date']==date(2026,3,13)
+        assert rows[0]['conversion_status']=='boc_prior_business_day'
+        assert rows[1]['amount_cad'] is None and rows[1]['conversion_status']=='missing_rate'
+
+
+def test_manual_refresh_imports_new_completed_download_immediately(bank_db,tmp_path):
+    from home_budget_pipeline.transactions.discovery import scan
+    from home_budget_pipeline.transactions.accounts import register_account
+    connect,source=bank_db
+    root=tmp_path/'raw';file=root/'cibc/visa/x5678/2026/file.csv';file.parent.mkdir(parents=True);file.write_bytes(source.read_bytes())
+    with connect() as conn:
+        register_account(conn,'CIBC Visa x5678','CIBC','credit_card','5678','Test','Test')
+        result=scan(conn,root,'Test',immediate=True,retained_root=tmp_path/'retained')
+        assert result['new_transactions']==3 and result['waiting']==0

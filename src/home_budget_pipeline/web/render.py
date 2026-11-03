@@ -38,6 +38,7 @@ def page(title: str, body: str, *, base_path: str, identity: Mapping[str, str]) 
         f'<a href="{base_path}/category-rules">Category rules</a>'
         f'<a href="{base_path}/review-queue">Review queue</a>'
         f'<a href="{base_path}/transactions">Transactions</a>'
+        f'<a href="{base_path}/cad-ledger">CAD ledger</a>'
         f'<a href="{base_path}/accounts">Accounts</a>'
         f'<a href="{base_path}/graph">Receipt graph</a>'
     )

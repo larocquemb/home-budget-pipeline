@@ -59,3 +59,28 @@ def test_detail_escapes_bank_and_split_fields_and_payment_has_no_expense_form(mo
     tx['raw_source']['kind']='payment'
     text=web.transaction_page(8,service=Service(),identity={'user':'reviewer'})
     assert 'allocation-form' not in text
+
+
+def test_refresh_button_requires_identity_action_and_runs_immediate_manual_scan(client,monkeypatch):
+    from home_budget_pipeline.transactions import discovery
+    calls=[]
+    monkeypatch.setattr(discovery,'scan',lambda *args,**kw:calls.append((args,kw)) or {'new_transactions':0,'failed':0,'waiting':0,'unchanged':10})
+    url=f'{BASE_PATH}/api/transaction-imports/refresh'
+    assert client.post(url).status_code==401
+    assert client.post(url,headers={'X-Forwarded-User':'reviewer'}).status_code==403
+    result=client.post(url,headers={'X-Forwarded-User':'reviewer','X-Ledger-Action':'transaction-import'})
+    assert result.status_code==200
+    assert calls[0][0][2]=='reviewer'
+    assert calls[0][1]['immediate'] is True
+
+
+def test_cad_ledger_renders_missing_rates_without_zero_conversion(client,monkeypatch):
+    from home_budget_pipeline.transactions import ledger
+    row={'bank_date':date(2026,3,12),'account':'Example','account_last4':'1234','description':'<script>unsafe</script>',
+         'original_amount':Decimal('10.25'),'currency':'USD','amount_cad':None,'fx_rate':None,'rate_date':None,'conversion_status':'missing_rate'}
+    monkeypatch.setattr(ledger,'ledger_rows',lambda *args,**kw:{'rows':[row],'total':1,'missing_rates':1})
+    response=client.get(f'{BASE_PATH}/cad-ledger',headers={'X-Forwarded-User':'reviewer'})
+    assert response.status_code==200
+    assert '&lt;script&gt;unsafe&lt;/script&gt;' in response.text
+    assert '$0.00' not in response.text
+    assert 'Update CAD rates' in response.text and 'Import / refresh transactions' in response.text

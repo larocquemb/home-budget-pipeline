@@ -69,43 +69,52 @@ or the local OS username. No name is required on import commands. `--actor` is a
 optional override; it records who ran an operation and does not assign ownership
 or a payer to transactions.
 
-## Automatic download discovery
+## Manual import and CAD ledger
 
-Drop new exports into the configured `TRANSACTION_SOURCE_ROOT` using the existing
-institution/product/xLAST4/[year]/CSV layout. The native transaction discovery
-service checks every 30 seconds and imports stable new or changed files. No
-per-file command, path or personal name is required.
+Download CSVs from the bank websites into the configured `TRANSACTION_SOURCE_ROOT`
+using the existing institution/product/xLAST4/[year] folders. In **Transactions**
+or **CAD ledger**, select **Import / refresh transactions**. It immediately checks
+for new or changed files, skips unchanged hashes, and reports new/failed files.
+No polling or scheduled transaction import is enabled in development or production.
+The earlier experimental dev watcher is disabled; legacy `services stop/status`
+commands remain available for cleanup only. Native receipt discovery is unchanged.
 
-```sh
-ledger --env-file .env.dev transactions services start
-ledger --env-file .env.dev transactions services status
-ledger --env-file .env.dev transactions status
-```
-
-The service starts at login after it has been enabled. Files must remain stable
-across two observations and pass `TRANSACTION_DISCOVERY_SETTLE_SECONDS` (default
-10 seconds) before processing. Unchanged source hashes are skipped; known manual
-imports are recognized. Original inputs are retained by hash beside the inbox in
-`transactions/retained`, with source artifacts and import attempts recorded in
-accounting. `TRANSACTION_RETAINED_ROOT` can override that location outside `raw`.
-
-Malformed downloads retain their failure status and retry with bounded backoff;
-they do not block other accounts. Corrected content resets the retry delay.
-Automatic imports require an existing account profile/currency, preventing a new
-unknown USD card from being assumed CAD. Current registered accounts are ready.
-
-**Transactions → Import status** shows discovered files, waiting/imported/failed
-states and retry times. For an immediate scan or a deliberate retry:
+The CLI alternative uses the configured folder and audit identity:
 
 ```sh
 ledger --env-file .env.dev transactions scan
-ledger --env-file .env.dev transactions scan --retry-failed
+ledger --env-file .env.dev transactions status
 ```
 
-Use `transactions services stop` to disable automatic startup, or `restart` to
-reload the agent. The service records its actor as `service:transaction-discovery`;
-unattended execution is not human work time. These operations use the accounting
-database independently of receipt processing and receipt rebuilds.
+Imports verify a consistent file snapshot and retain source versions by hash in
+`transactions/retained`, outside `raw`. Malformed files retain errors and do not
+block other accounts. Corrected files can be retried immediately through the GUI;
+`transactions scan --retry-failed` explicitly retries unchanged failed files.
+Account profiles/currencies must be registered before importing new accounts.
+
+**CAD ledger** consolidates all account activity, sorted by bank date with account
+and date filters. It retains original amounts/currencies and shows a separate CAD
+equivalent, rate and rate date. Missing conversions remain blank and are counted.
+Positive values are charges/withdrawals; negative values are payments/deposits.
+Transfers and card payments remain visible; this is not a household spending total
+or an account balance without opening amounts.
+
+Use **Update CAD rates** or the following command to retrieve Bank of Canada
+`FXUSDCAD` daily reference rates (Canadian dollars per US dollar):
+
+```sh
+ledger --env-file .env.dev transactions fx-update
+ledger --env-file .env.dev transactions ledger
+ledger --env-file .env.dev transactions ledger --account House --direction asc
+```
+
+The view multiplies USD amounts by the latest observation on or before the bank
+export date, up to seven calendar days earlier for weekends/holidays. It never
+uses future rates or substitutes zero for missing observations. These reporting
+amounts are not actual bank settlement costs. Public rate payloads, retrieval time,
+source URL and hash are retained; rate corrections preserve prior observations.
+No exchange rates are fetched merely by opening the ledger page. Original bank
+transactions are never overwritten by a CAD conversion.
 
 ## Import CIBC MasterCard CSV
 
@@ -189,9 +198,8 @@ count rows and do not add CAD and USD monetary amounts together.
 
 Receipt-currency verification currently supports CAD; USD transactions do not
 receive CAD receipt suggestions or allow unverified cross-currency receipt links.
-USD category/person allocations can be saved in USD. CAD reporting would need a
-separate converted amount, exchange rate, rate date and source; no conversion or
-exchange rate is currently inferred from an export.
+USD category/person allocations can be saved in USD. The CAD ledger uses separately retained public reference rates; no conversion or
+exchange rate is inferred from an export.
 
 Deposit-account withdrawals are positive and deposits negative, following the
 same outflow/inflow sign convention as the bank transaction ledger. These generic

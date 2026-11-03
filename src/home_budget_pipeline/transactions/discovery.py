@@ -25,7 +25,7 @@ def retain(data,path):
             raise ValueError('Retained source hash does not match its contents')
 
 
-def scan(conn,root,actor,*,settle_seconds=10,now=None,retained_root=None,retry_failed=False):
+def scan(conn,root,actor,*,settle_seconds=10,now=None,retained_root=None,retry_failed=False,immediate=False):
     now=now or datetime.now(timezone.utc)
     root=Path(root).resolve()
     if not root.is_dir():
@@ -77,11 +77,11 @@ def scan(conn,root,actor,*,settle_seconds=10,now=None,retained_root=None,retry_f
                     conn.execute("UPDATE accounting.transaction_discovery SET status='imported',error_summary=NULL,retry_after=NULL WHERE source_uri=%s",(uri,))
                     results.append({'file':uri,'status':'unchanged'})
                     continue
-                if not same or (now-observed).total_seconds()<settle_seconds or now.timestamp()-stat.st_mtime<settle_seconds:
+                if not immediate and (not same or (now-observed).total_seconds()<settle_seconds or now.timestamp()-stat.st_mtime<settle_seconds):
                     conn.execute("UPDATE accounting.transaction_discovery SET status='waiting',error_summary=NULL WHERE source_uri=%s",(uri,))
                     results.append({'file':uri,'status':'waiting'})
                     continue
-                if old['retry_after'] and now<old['retry_after'] and not retry_failed:
+                if same and old['retry_after'] and now<old['retry_after'] and not retry_failed:
                     results.append({'file':uri,'status':'retry_wait'})
                     continue
                 retained=retained_root/digest[:2]/(digest+'.csv')

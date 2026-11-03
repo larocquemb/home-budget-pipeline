@@ -12,6 +12,7 @@ from .cibc import parse_cibc
 def ensure_schema(conn):
     from ..db_setup import SQL_DIR
     conn.execute((SQL_DIR / 'accounting.sql').read_text())
+    conn.execute((SQL_DIR / 'accounting_ledger.sql').read_text())
 
 
 def import_cibc(conn, path, account_reference, actor, *, apply=False,account_type='credit_card',account_last4=None,extra_known=None,currency='CAD'):

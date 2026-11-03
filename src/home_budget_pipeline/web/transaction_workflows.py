@@ -11,6 +11,34 @@ from ..transactions.workflows import allocation_rows, receipt_candidates, save_a
 from ..transactions.database import service as accounting_service
 
 
+@app.post(f'{BASE_PATH}/api/transaction-imports/refresh')
+def refresh_imports(x_ledger_action:str|None=Header(default=None),
+                    identity:dict=Depends(authenticated_identity)):
+    if x_ledger_action!='transaction-import':
+        raise HTTPException(403,'Transaction import action header required')
+    from ..transactions.discovery import scan,source_root
+    try:
+        with accounting_service()._connect() as conn:
+            return scan(conn,source_root(),identity.get('email') or identity['user'],immediate=True,retry_failed=True)
+    except ValueError as exc:
+        raise HTTPException(422,str(exc)) from exc
+
+
+def import_control():
+    return '''<button type="button" id="refresh-imports">Import / refresh transactions</button>
+<span id="import-result" role="status"></span><script>
+document.getElementById('refresh-imports').onclick=async function(){
+ const status=document.getElementById('import-result');this.disabled=true;status.textContent='Importing downloads…';
+ try{const response=await fetch('''+repr(BASE_PATH+'/api/transaction-imports/refresh')+''',{
+  method:'POST',headers:{'X-Ledger-Action':'transaction-import'}});
+  const result=await response.json();if(!response.ok)throw new Error(result.detail||'Import failed');
+  if(result.busy){status.textContent='An import is already running. Check import status.';return;}
+  status.textContent='Imported '+result.new_transactions+' new transactions; '+result.unchanged+' unchanged files; '+result.failed+' failed; '+result.waiting+' still writing.';
+  const link=document.createElement('a');link.href=window.location.pathname;link.textContent=' Refresh view';status.append(link);
+ }catch(error){status.textContent=error.message;}finally{this.disabled=false;}
+};</script>'''
+
+
 class AllocationRequest(BaseModel):
     expected_version: int = Field(ge=0)
     reason: str = Field(min_length=1, max_length=2000)
@@ -155,7 +183,59 @@ def transaction_imports_page(identity:dict=Depends(authenticated_identity)):
         rows=status(conn)
     for row in rows:
         row['file']=str(Path(row['source_uri']).relative_to(row['root_uri']))
-    body='<p>New downloads in the configured archive are discovered automatically. Waiting files are settling; failed files retain their errors and retry automatically.</p>'
+    body=import_control()+'<p>Refresh after downloading exports. Failed files retain their errors for the next refresh.</p>'
     body+=table(rows,(('file','Download'),('status','Status'),('checked_at','Last checked'),
-                     ('imported_at','Imported'),('retry_after','Next retry'),('error_summary','Issue')))
+                     ('imported_at','Imported'),('error_summary','Issue')))
     return page('Transaction imports',body,base_path=BASE_PATH,identity=identity)
+
+
+@app.post(f'{BASE_PATH}/api/transactions/fx-update')
+def refresh_fx(x_ledger_action:str|None=Header(default=None),identity:dict=Depends(authenticated_identity)):
+    if x_ledger_action!='fx-update':
+        raise HTTPException(403,'FX update action header required')
+    from ..transactions.ledger import update_rates
+    try:
+        with accounting_service()._connect() as conn:
+            return update_rates(conn,identity.get('email') or identity['user'])
+    except (ValueError,OSError) as exc:
+        raise HTTPException(502,'Rate update failed; existing rates are unchanged. '+type(exc).__name__) from exc
+
+
+@app.get(f'{BASE_PATH}/cad-ledger',response_class=HTMLResponse)
+def cad_ledger_page(limit:int=100,offset:int=0,account:str='',from_date:str='',to_date:str='',direction:str='desc',
+                    identity:dict=Depends(authenticated_identity)):
+    from datetime import date
+    from ..transactions.ledger import ledger_rows
+    from .render import pager
+    try:
+        result=ledger_rows(accounting_service(),limit=limit,offset=offset,account=account,direction=direction,
+            start=date.fromisoformat(from_date) if from_date else None,end=date.fromisoformat(to_date) if to_date else None)
+    except ValueError as exc:
+        raise HTTPException(422,str(exc)) from exc
+    body=import_control()+''' <button type="button" id="refresh-fx">Update CAD rates</button><span id="fx-result" role="status"></span>
+<p>Original amounts are retained. Positive amounts are charges/withdrawals; negative amounts are payments/deposits.
+CAD equivalents use <a href="https://www.bankofcanada.ca/rates/exchange/daily-exchange-rates/">Bank of Canada daily reference rates</a>,
+using the latest available business-day rate on or before the bank date (up to seven days).
+These are reporting equivalents, not bank settlement costs. Transfers and card payments remain visible.</p>'''
+    body+=f'''<form method="get"><label>Account or ending <input name="account" value="{esc(account)}"></label>
+<label>From <input type="date" name="from_date" value="{esc(from_date)}"></label>
+<label>To <input type="date" name="to_date" value="{esc(to_date)}"></label>
+<label>Order <select name="direction"><option value="desc" {'selected' if direction=='desc' else ''}>Newest first</option>
+<option value="asc" {'selected' if direction=='asc' else ''}>Oldest first</option></select></label><button>Filter</button></form>
+<p>{result['total']} transactions · {result['missing_rates']} missing CAD rates.</p>'''
+    rows=[]
+    for row in result['rows']:
+        rows.append({**row,'conversion':row['conversion_status'].replace('_',' '),
+                     'fx_rate':f"{row['fx_rate']:.4f}" if row['fx_rate'] is not None else ''})
+    body+=table(rows,(('bank_date','Bank date'),('account','Account'),('account_last4','Ending'),('description','Description'),
+        ('original_amount','Original amount'),('currency','Currency'),('amount_cad','CAD equivalent'),
+        ('fx_rate','CAD per unit'),('rate_date','Rate date'),('conversion','Conversion')),
+        money_columns={'original_amount','amount_cad'})
+    body+=pager(BASE_PATH+'/cad-ledger',limit=limit,offset=offset,row_count=len(rows),total_count=result['total'],
+                query={'account':account,'from_date':from_date,'to_date':to_date,'direction':direction})
+    body+='''<script>document.getElementById('refresh-fx').onclick=async function(){
+ const status=document.getElementById('fx-result');this.disabled=true;status.textContent='Updating reference rates…';
+ try{const response=await fetch('''+repr(BASE_PATH+'/api/transactions/fx-update')+''',{method:'POST',headers:{'X-Ledger-Action':'fx-update'}});
+ const result=await response.json();if(!response.ok)throw new Error(result.detail||'Rate update failed');
+ window.location.reload();}catch(error){status.textContent=error.message;this.disabled=false;}};</script>'''
+    return page('CAD transaction ledger',body,base_path=BASE_PATH,identity=identity)
