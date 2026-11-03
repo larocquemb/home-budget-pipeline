@@ -2,6 +2,12 @@
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+import re
+
+
+def redact_identifiers(value):
+    """Keep only suffixes of long numeric references in persisted descriptions."""
+    return re.sub(r'(?<!\d)\d{8,}(?!\d)',lambda m:'****'+m.group()[-4:],value)
 
 
 @dataclass(frozen=True)

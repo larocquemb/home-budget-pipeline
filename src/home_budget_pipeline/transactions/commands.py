@@ -19,7 +19,7 @@ def add_commands(commands):
     imp.add_argument('--account-last4',help='Required for deposit accounts; exactly four digits.')
     imp.add_argument('--currency',choices=('CAD','USD'),default='CAD')
     imp.set_defaults(handler=run)
-    tree=sub.add_parser('import-tree',help='Preview/import CIBC and ACU institution/product/xLAST4/[year/]CSV archives.')
+    tree=sub.add_parser('import-tree',help='Preview/import CIBC, CIBC US and ACU institution/product/xLAST4/[year/]CSV archives.')
     tree.add_argument('root',type=Path)
     tree.add_argument('--apply',action='store_true')
     tree.add_argument('--account-currency',action='append',default=[],metavar='[BANK/]PRODUCT/xLAST4=USD',

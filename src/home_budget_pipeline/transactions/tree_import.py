@@ -3,12 +3,14 @@ from pathlib import Path
 import re
 from .cibc import parse_cibc
 from .acu import parse_acu
+from .cibcus import parse_cibcus
 from .workflows import import_bank_csv
 
 PRODUCTS={'mastercard':('credit_card','MasterCard'),'visa':('credit_card','Visa'),
-          'smart':('chequing','Smart'),'eadvantage':('savings','eAdvantage')}
+          'smart':('chequing','Smart'),'eadvantage':('savings','eAdvantage'),'us':('chequing','US')}
 PROFILES={'cibc':('CIBC',PRODUCTS,parse_cibc),
-          'acu':('ACU',{'chequing':('chequing','Chequing'),'savings':('savings','Savings')},parse_acu)}
+          'acu':('ACU',{'chequing':('chequing','Chequing'),'savings':('savings','Savings')},parse_acu),
+          'cibcus':('CIBC US',{'smart':('chequing','Smart'),'savings':('savings','Savings')},parse_cibcus)}
 
 
 def plans(conn, root, currencies=None):
@@ -25,7 +27,7 @@ def plans(conn, root, currencies=None):
         elif parts[0].casefold() in PROFILES:
             bank=parts[0].casefold();prefix=bank+'/';parts=parts[1:]
         else:
-            raise ValueError('Use institution/product/xLAST4/[year/]download.csv (CIBC or ACU)')
+            raise ValueError('Use institution/product/xLAST4/[year/]download.csv (CIBC, CIBC US or ACU)')
         institution,products,parser=PROFILES[bank]
         if len(parts) not in (3,4) or parts[0].casefold() not in products or not re.fullmatch(r'x\d{4}',parts[1]):
             raise ValueError('Use a supported product/xLAST4/[year/]download.csv below the institution root')
@@ -45,7 +47,8 @@ def plans(conn, root, currencies=None):
         key=(prefix+'/'.join(parts[:2])).casefold()
         if key in currencies:
             used.add(key)
-        currency=currencies.get(key,matches[0]['currency'] if matches else 'CAD')
+        default_currency='USD' if bank=='cibcus' or (bank=='cibc' and parts[0].casefold()=='us') else 'CAD'
+        currency=currencies.get(key,matches[0]['currency'] if matches else default_currency)
         if currency not in {'CAD','USD'}:
             raise ValueError('Supported export currencies are CAD and USD')
         if matches and matches[0]['currency']!=currency:

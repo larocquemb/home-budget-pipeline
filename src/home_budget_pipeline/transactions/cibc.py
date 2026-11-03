@@ -8,6 +8,7 @@ import io
 import json
 import re
 from .bank_rows import BankRow as CibcRow
+from .bank_rows import redact_identifiers
 
 
 def parse_cibc(data: bytes, account_reference: str, *, account_type='credit_card', account_last4=None) -> list[CibcRow]:
@@ -52,7 +53,8 @@ def parse_cibc(data: bytes, account_reference: str, *, account_type='credit_card
         # repeated purchases within an export. No filename or row-order identity.
         format_name='cibc-deposit-v1' if deposit else 'cibc-card-v1'
         fingerprint = hashlib.sha256(json.dumps([format_name, *identity, occurrences[key]], separators=(',', ':')).encode()).hexdigest()
-        result.append(CibcRow(number, parsed_date, description, amount, card[-4:] if card else None, kind, raw, fingerprint))
+        safe=list(raw);safe[1]=redact_identifiers(raw[1])
+        result.append(CibcRow(number, parsed_date, redact_identifiers(description), amount, card[-4:] if card else None, kind, safe, fingerprint))
     if not result:
         raise ValueError('The CSV is empty')
     return result

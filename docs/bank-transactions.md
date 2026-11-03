@@ -181,6 +181,21 @@ Currency overrides are relative to the selected root. An institution root uses
 currencies are reused on later imports. Add `--apply --actor 'Paul La Rocque'`
 after reviewing the preview.
 
+The same shared root supports CIBC Canadian USD accounts under `cibc/us/x1234/`
+and US-bank exports under `cibcus/smart/x5678/`. These products default to USD;
+registered account currency remains authoritative. US-bank CSVs have headers
+`Transaction Date`, `Short Description`, `Long Description`, `Amount`, and native
+signed account changes. Positive native changes become ledger inflows (negative),
+and negative changes become ledger outflows (positive). The long description is
+used when present, otherwise the short description.
+
+Long numeric references of eight or more digits in CIBC and CIBC US descriptions
+are masked to their last four digits in database fields and row snapshots. The
+original private exports stay unchanged; original text contributes only to the
+one-way deduplication fingerprint. Source checksums, row numbers and archive paths
+retain provenance. Account endings appear alongside transaction nicknames so
+similar or duplicate labels remain distinguishable.
+
 ACU supports `chequing` and `savings` folders. Its headered export has `Unique ID`,
 `Date`, `Description`, `Amount` and `Balance` columns. Native positive changes
 become ledger inflows (negative); native negative changes become outflows

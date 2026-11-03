@@ -5,7 +5,7 @@ import re
 def register_account(conn,reference,institution,account_type,last4,nickname,actor,*,currency='CAD',
                      reason='User-confirmed account profile'):
     """Register metadata without importing transactions or assigning owners."""
-    if institution not in {'CIBC','ACU'} or account_type not in {'credit_card','chequing','savings'}:
+    if institution not in {'CIBC','ACU','CIBC US'} or account_type not in {'credit_card','chequing','savings'}:
         raise ValueError('Unsupported institution or account type')
     if not re.fullmatch(r'\d{4}',last4) or currency not in {'CAD','USD'}:
         raise ValueError('Use exactly four identifier digits and CAD or USD')

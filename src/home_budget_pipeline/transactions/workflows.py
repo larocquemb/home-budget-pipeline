@@ -24,11 +24,12 @@ def import_bank_csv(conn,path,account_reference,actor,*,apply=False,account_type
     from psycopg.types.json import Jsonb
     data = Path(path).read_bytes()
     from .acu import parse_acu
-    parsers={'CIBC':parse_cibc,'ACU':parse_acu}
+    from .cibcus import parse_cibcus
+    parsers={'CIBC':parse_cibc,'ACU':parse_acu,'CIBC US':parse_cibcus}
     if institution not in parsers:
         raise ValueError('Unsupported institution')
     rows = parsers[institution](data,account_reference,account_type=account_type,account_last4=account_last4)
-    format_name=('cibc-card-v1' if account_type=='credit_card' else 'cibc-deposit-v1') if institution=='CIBC' else 'acu-deposit-v1'
+    format_name=('cibc-card-v1' if account_type=='credit_card' else 'cibc-deposit-v1') if institution=='CIBC' else ('acu-deposit-v1' if institution=='ACU' else 'cibcus-deposit-v1')
     if currency not in {'CAD','USD'}:
         raise ValueError('Supported export currencies are CAD and USD')
     if currency!='CAD':
@@ -91,6 +92,10 @@ def import_bank_csv(conn,path,account_reference,actor,*,apply=False,account_type
                        'source_sha256': digest, 'source_row': row.number}
                 if institution=='ACU':
                     raw['redacted_columns']=['Unique ID']
+                elif institution=='CIBC US':
+                    raw['redacted_columns']=['numeric identifiers of eight or more digits in descriptions']
+                elif institution=='CIBC':
+                    raw['redacted_columns']=['numeric identifiers of eight or more digits in Description']
                 cur.execute('''INSERT INTO accounting.financial_transactions
                     (institution,account_id,source_account_reference,transaction_date,amount,currency,
                      description,merchant_text,card_last4,import_fingerprint,raw_source)

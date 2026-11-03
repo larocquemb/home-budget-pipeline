@@ -68,6 +68,13 @@ def test_deposit_export_uses_account_identifier_without_inventing_a_payment_card
         parse_cibc(data,'Example chequing',account_type='chequing')
 
 
+def test_long_bank_references_are_redacted_in_parsed_fields():
+    data=b'2026-03-12,TRANSFER TO 123456789012,25.00,\n'
+    row=parse_cibc(data,'Example chequing x1234',account_type='chequing',account_last4='1234')[0]
+    assert row.description=='TRANSFER TO ****9012'
+    assert '123456789012' not in str(row)
+
+
 def test_balanced_split_and_refund_use_decimal_cents():
     rows = normalize_allocations([{'amount':'0.10','category':'Food'}, {'amount':'0.20','category':'Home','expense_pk':5}], Decimal('.30'))
     assert sum(r['amount'] for r in rows) == Decimal('.30')

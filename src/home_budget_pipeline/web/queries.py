@@ -925,6 +925,8 @@ class LedgerQueryService:
                    ft.amount, ft.currency, ft.description, ft.payer, ft.payer_source,
                    ft.card_last4, ft.raw_source->>'kind' AS kind,
                    a.nickname AS account_nickname,
+                   COALESCE(a.primary_card_last4,(SELECT n.last4 FROM accounting.account_numbers n
+                     WHERE n.account_id=a.id AND n.number_kind='bank_account' ORDER BY n.id LIMIT 1)) AS account_last4,
                    (SELECT count(*) FROM accounting.transaction_allocations a WHERE a.transaction_id=ft.id) AS allocation_count,
                    NULL::bigint AS expense_pk,
                    CASE WHEN EXISTS(SELECT 1 FROM accounting.transaction_allocations a WHERE a.transaction_id=ft.id)

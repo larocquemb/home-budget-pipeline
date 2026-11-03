@@ -280,3 +280,21 @@ def test_account_nickname_changes_preserve_identity_currency_ownership_and_finge
         with pytest.raises(ValueError,match='currency'):
             register_account(conn,'Stable account reference','CIBC','credit_card','5678','Wrong currency','Test',currency='USD')
         assert conn.execute('SELECT nickname FROM accounting.accounts').fetchone()['nickname']=='Renamed label'
+
+
+def test_us_institution_and_canadian_us_account_folder_import_as_usd(bank_db,tmp_path):
+    from home_budget_pipeline.transactions.tree_import import import_tree
+    connect,_=bank_db
+    root=tmp_path/'raw'
+    ca=root/'cibc/us/x1234/2026/ca.csv';ca.parent.mkdir(parents=True);ca.write_text('2026-05-11,TRANSFER,25.00,\n')
+    us=root/'cibcus/smart/x5678/2026/us.csv';us.parent.mkdir(parents=True)
+    us.write_text('Transaction Date,Short Description,Long Description,Amount\n2026-05-11,TRANSFER,TO 123456789012,-25.00\n')
+    with connect() as conn:
+        report=import_tree(conn,root,'Test',apply=True)
+        assert report['new']==2
+        assert all(r['currency']=='USD' for r in report['files'])
+        assert import_tree(conn,root,'Test')['new']==0
+        rows=conn.execute('SELECT institution,currency,raw_source FROM accounting.financial_transactions ORDER BY id').fetchall()
+        assert {r['institution'] for r in rows}=={'CIBC','CIBC US'}
+        assert all(r['currency']=='USD' for r in rows)
+        assert '123456789012' not in str(rows)
