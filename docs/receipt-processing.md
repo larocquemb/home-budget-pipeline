@@ -142,6 +142,17 @@ content with overlap, or discard the inferior copy using Delete after checking
 the retained complete source. Fresh OCR can improve recognition and retain new
 geometry; it cannot recover pixels absent from the scan.
 
+Loki records `cache_lock_waiting`, `cache_lock_acquired` and
+`cache_lock_released` events with source/request identity. Acquisition includes
+`lock_wait_seconds`; waiting has `processing_phase=waiting_for_cache_lock`.
+Acquiring the lock means cache access can begin, not that an OCR pass has run.
+Use the existing OCR-start/pass-completed events to verify actual OCR progress.
+In Grafana Explore, filter a source or request and then use
+`| json | event=~"cache_lock_.*"` to inspect lock transitions. Batch running
+counts still include active deliveries waiting for the lock; these events give
+the more detailed lifecycle. Reload workers to emit the new events; historical
+waits cannot be reconstructed as explicit events.
+
 To re-extract all existing caches in one command:
 
 ```bash

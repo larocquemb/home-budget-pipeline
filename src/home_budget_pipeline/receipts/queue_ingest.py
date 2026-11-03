@@ -70,17 +70,38 @@ def _cache_rebuild_marker(cache_dir: Path, message: ReceiptMessage) -> Path:
 
 
 @contextmanager
-def cache_rebuild_lock(cache_dir: Path, source_sha256: str):
+def cache_rebuild_lock(cache_dir: Path, source_sha256: str, *, message=None):
     """Serialize cache writes for one receipt across worker processes and pods."""
     lock_dir = cache_dir / ".rebuild-locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / f"{source_sha256}.lock"
     descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    started = time.monotonic()
+
+    def report(event, **fields):
+        LOG.info('%s source_sha256=%s request_id=%s source_reference=%s',
+                 event, source_sha256, getattr(message, 'request_id', None),
+                 getattr(message, 'source_reference', None),
+                 extra={'event':event, 'source_sha256':source_sha256,
+                        'request_id':getattr(message, 'request_id', None),
+                        'source_reference':getattr(message, 'source_reference', None),
+                        'worker_id':f'{socket.gethostname()}:{os.getpid()}', **fields})
+
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            report('cache_lock_waiting', processing_phase='waiting_for_cache_lock')
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        acquired = True
+        report('cache_lock_acquired', processing_phase='cache_access',
+               lock_wait_seconds=round(time.monotonic()-started, 6))
         yield
     finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        if acquired:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            report('cache_lock_released')
         os.close(descriptor)
 
 
@@ -420,7 +441,7 @@ def cached_reprocess_events(message: ReceiptMessage, args):
     # Retain the original run/pass identities: this is a new extraction request,
     # not a claim that OCR was executed again. Legacy cache paths lack complete
     # current run provenance and must first be refreshed by the normal worker.
-    with cache_rebuild_lock(cache_dir, message.source_sha256):
+    with cache_rebuild_lock(cache_dir, message.source_sha256, message=message):
         if not cache_path.is_file():
             raise ValueError("A current path-based OCR cache is required; run a full reprocess instead")
         cache_hash = backlog.scan.sha256_file(cache_path)
@@ -628,7 +649,7 @@ def produce_result_messages(message: ReceiptMessage, args):
         raise InvalidReceiptMessage("receipt source does not exist")
     if backlog.scan.sha256_file(path) != message.source_sha256:
         raise InvalidReceiptMessage("source contents changed since publication")
-    lock = cache_rebuild_lock(cache_dir, message.source_sha256)
+    lock = cache_rebuild_lock(cache_dir, message.source_sha256, message=message)
     with lock:
         cache_reused = message.version in (2, 3) and _completed_cache_rebuild(
             cache_dir, cache_path, message,

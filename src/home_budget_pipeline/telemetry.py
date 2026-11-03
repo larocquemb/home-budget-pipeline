@@ -638,6 +638,7 @@ class JsonLogFormatter(logging.Formatter):
         "selected_base", "consensus_coverage_ratio", "receipt", "cache_hit",
         "event", "processing_state", "receipt_name", "worker_id", "worker_host", "attempt_id",
         "batch_id", "batch_total", "queue",
+        "source_sha256", "source_reference", "request_id", "processing_phase", "lock_wait_seconds",
     )
 
     def format(self, record: logging.LogRecord) -> str:
