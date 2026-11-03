@@ -14,6 +14,7 @@ def client(monkeypatch):
         def _connect(self):
             return nullcontext(object())
     app.dependency_overrides[query_service] = Service
+    monkeypatch.setattr(web,"accounting_service",Service)
     try:
         with TestClient(app) as client:
             yield client
@@ -31,7 +32,8 @@ def test_save_requires_auth_action_and_records_identity(client, monkeypatch):
     response=client.post(url,json=payload,headers={'X-Forwarded-User':'reviewer','X-Ledger-Action':'transaction-allocation'})
     assert response.status_code == 200
     assert calls[0][0][4] == 'reviewer'
-    assert calls[0][1] == {'apply':True}
+    assert calls[0][1]['apply'] is True
+    assert 'receipt_service' in calls[0][1]
 
 
 @pytest.mark.parametrize('error,status',[(ValueError('Allocations changed; reload'),409),(ValueError('Invalid split'),422),(LookupError('Missing'),404)])
@@ -50,6 +52,7 @@ def test_detail_escapes_bank_and_split_fields_and_payment_has_no_expense_form(mo
     monkeypatch.setattr(web,'receipt_candidates',lambda *args:())
     class Service:
         def _fetch(self,*args):return ()
+    monkeypatch.setattr(web,'accounting_service',Service)
     text=web.transaction_page(8,service=Service(),identity={'user':'reviewer'})
     assert '&lt;script&gt;unsafe&lt;/script&gt;' in text
     assert 'Add split' in text

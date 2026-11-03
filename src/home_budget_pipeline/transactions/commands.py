@@ -24,33 +24,54 @@ def add_commands(commands):
     split.add_argument('--plan', type=Path, required=True, help='JSON: expected_version, reason, allocations.')
     split.add_argument('--apply', action='store_true')
     split.set_defaults(handler=run)
-    for p in (setup, imp, split):
+    migration=sub.add_parser('migrate-receipt-store',help='Preview/copy legacy bank rows into the configured separate accounting database; preserve originals.')
+    migration.add_argument('--apply',action='store_true')
+    migration.set_defaults(handler=run)
+    ownership=sub.add_parser('ownership',help='Record account ownership and linked cardholders using only last-four identifiers.')
+    ownership.add_argument('--plan',type=Path,required=True)
+    ownership.add_argument('--apply',action='store_true')
+    ownership.set_defaults(handler=run)
+    for p in (setup, imp, split, migration, ownership):
         p.add_argument('--actor', default=None, help='Required for writes; person responsible for the operation.')
 
 
 def run(args):
     from ..web.queries import LedgerQueryService
     service = LedgerQueryService()
+    from .database import service as accounting_service
+    bank=accounting_service()
     action = args.transaction_command
     if action == 'suggest':
         where = ' WHERE id=%s' if args.transaction_id is not None else ''
-        rows = service._fetch('SELECT * FROM budget.financial_transactions' + where + ' ORDER BY transaction_date DESC,id',
+        rows = bank._fetch('SELECT * FROM accounting.financial_transactions' + where + ' ORDER BY transaction_date DESC,id',
                               (args.transaction_id,) if where else ())
         report = [{'transaction_id': t['id'], 'date': t['transaction_date'], 'amount': t['amount'],
                    'description': t['description'], 'candidates': receipt_candidates(service, t)} for t in rows]
     else:
         if args.apply and not (args.actor or '').strip():
             raise ValueError('--actor is required for writes')
-        with service._connect() as conn:
+        with bank._connect() as conn:
             if action == 'setup':
                 if args.apply:
                     ensure_schema(conn)
                 report = {'applied': args.apply, 'operation': 'add transaction import/allocation tables'}
             elif action == 'import-cibc':
                 report = import_cibc(conn, args.path, args.account_reference, args.actor or 'preview', apply=args.apply)
+            elif action=='migrate-receipt-store':
+                from .migrate import migrate
+                with service._connect() as source:
+                    report=migrate(source,conn,apply=args.apply)
+            elif action=='ownership':
+                from .accounts import record_ownership
+                plan=json.loads(args.plan.read_text())
+                if args.apply:
+                    report=record_ownership(conn,actor=args.actor,**plan)
+                else:
+                    report={'applied':False,'operation':'record account/card ownership','account_reference':plan['reference']}
             else:
                 plan = json.loads(args.plan.read_text())
                 report = save_allocations(conn, args.transaction_id, plan['allocations'],
-                                          plan['expected_version'], args.actor or 'preview', plan['reason'], apply=args.apply)
+                                          plan['expected_version'], args.actor or 'preview', plan['reason'], apply=args.apply,
+                                          receipt_service=service)
     print(json.dumps(report, default=str, indent=2))
     return 0

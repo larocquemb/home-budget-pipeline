@@ -4,6 +4,63 @@ Ledger keeps bank transactions separate from receipt extraction. A bank date or
 merchant description is corroborating evidence; confirming an allocation does
 not rewrite OCR, receipt fields, or receipt line items.
 
+## Durable storage and account ownership
+
+Development accounting uses **home_budget_accounting_dev** on Arsene port 15432,
+in the **accounting** schema. Receipt processing uses **home_budget_dev**. Set
+`ACCOUNTING_DATABASE_URL` separately from `DATABASE_URL`; transaction operations
+refuse to fall back to receipt storage. Provision the dedicated database/role
+with `make dev-accounting-setup`. This preserves the receipt database.
+
+The **Accounts** page shows these records:
+
+| Table | Purpose |
+| --- | --- |
+| `accounting.accounts` | Institution, stable account reference and primary card ending |
+| `accounting.account_numbers` | Linked identifiers containing only the last four digits |
+| `accounting.account_ownerships` | Account owners and cardholders, roles, assertion date and optional effective dates |
+| `accounting.financial_transactions` | Normalized bank rows |
+| `accounting.transaction_imports`, `accounting.transaction_import_rows` | Import and original-row provenance |
+| `accounting.source_artifacts` | Verified source archive paths and hashes |
+| `accounting.transaction_allocations`, `accounting.transaction_allocation_audit` | Splits, receipt source links and correction history |
+
+No full account/card number is accepted as an account identifier. Card input in
+the CSV must already be masked. A shared account's primary holder is separate
+from each linked cardholder. Current ownership assertions do not assign a payer
+to historical transactions; missing historical effective dates remain unknown.
+
+Record confirmed ownership with a private JSON plan:
+
+```json
+{
+  "reference": "Example card account",
+  "primary_last4": "1234",
+  "primary_owner": "Primary holder",
+  "cardholders": {"1234": "Primary holder", "5678": "Additional holder"},
+  "archive_root": "/private/transactions/raw/institution/card/x1234"
+}
+```
+
+```sh
+ledger --env-file .env.dev transactions ownership --plan /private/ownership.json
+ledger --env-file .env.dev transactions ownership --plan /private/ownership.json \
+  --apply --actor 'Paul La Rocque'
+```
+
+For the legacy bank tables originally stored with receipts, first provision the
+accounting database, then preview and apply `ledger --env-file .env.dev transactions
+migrate-receipt-store --apply --actor 'Paul La Rocque'` (omit `--apply` to preview).
+Migration verifies every copied row and leaves the legacy originals intact.
+After switching, new reads/writes use only the accounting database. Retired bank
+tables in receipt bootstrap are compatibility scaffolding, not active storage.
+
+Receipt database rebuilds leave accounting records intact. Confirmed receipt
+links use immutable source hashes; regenerated expense integers are display hints
+and cannot silently relink an allocation to a different receipt. A source not yet
+reimported remains a saved link rather than becoming a different expense.
+Destroying the shared PostgreSQL volume would still affect both databases;
+separate databases do not replace independent accounting backups.
+
 ## Import CIBC MasterCard CSV
 
 Use the original five-column export without adding a header:

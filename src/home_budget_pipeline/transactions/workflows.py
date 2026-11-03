@@ -3,6 +3,7 @@ from collections import Counter
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from .cibc import parse_cibc
@@ -10,7 +11,7 @@ from .cibc import parse_cibc
 
 def ensure_schema(conn):
     from ..db_setup import SQL_DIR
-    conn.execute((SQL_DIR / 'transaction_workflows.sql').read_text())
+    conn.execute((SQL_DIR / 'accounting.sql').read_text())
 
 
 def import_cibc(conn, path, account_reference, actor, *, apply=False):
@@ -26,7 +27,7 @@ def import_cibc(conn, path, account_reference, actor, *, apply=False):
             ensure_schema(conn)
             conn.execute('SELECT pg_advisory_xact_lock(hashtext(%s))', ('cibc-import:' + account_reference.casefold(),))
         with conn.cursor() as cur:
-            cur.execute('SELECT import_fingerprint FROM budget.financial_transactions WHERE import_fingerprint=ANY(%s)',
+            cur.execute('SELECT import_fingerprint FROM accounting.financial_transactions WHERE import_fingerprint=ANY(%s)',
                         ([r.fingerprint for r in rows],))
             existing = {r['import_fingerprint'] for r in cur.fetchall()}
             report = {'rows': len(rows), 'new': sum(r.fingerprint not in existing for r in rows),
@@ -38,27 +39,37 @@ def import_cibc(conn, path, account_reference, actor, *, apply=False):
                       'kinds': dict(Counter(r.kind for r in rows)), 'source_sha256': digest, 'applied': apply}
             if not apply:
                 return report
-            cur.execute('''INSERT INTO budget.transaction_imports
+            cur.execute('''INSERT INTO accounting.accounts (account_reference,institution)
+                VALUES (%s,'CIBC') ON CONFLICT (account_reference) DO NOTHING''', (account_reference,))
+            cur.execute('SELECT id FROM accounting.accounts WHERE account_reference=%s',(account_reference,))
+            account_id=cur.fetchone()['id']
+            cur.execute('''INSERT INTO accounting.transaction_imports
                 (source_sha256,source_name,account_reference,format,row_count,actor)
                 VALUES (%s,%s,%s,'cibc-card-v1',%s,%s)
                 ON CONFLICT (source_sha256,account_reference) DO UPDATE
                     SET source_sha256=EXCLUDED.source_sha256 RETURNING id''',
                         (digest, Path(path).name, account_reference, len(rows), actor))
             import_id = cur.fetchone()['id']
+            cur.execute('''INSERT INTO accounting.source_artifacts(import_id,source_uri,source_sha256)
+                VALUES (%s,%s,%s) ON CONFLICT(import_id,source_uri) DO NOTHING''',
+                        (import_id,str(Path(path).resolve()),digest))
             for row in rows:
                 raw = {'format': 'cibc-card-v1', 'row': row.raw, 'kind': row.kind,
                        'export_date_semantics': 'bank_export_date; posting_vs_purchase_unspecified',
                        'source_sha256': digest, 'source_row': row.number}
-                cur.execute('''INSERT INTO budget.financial_transactions
-                    (institution,source_account_reference,transaction_date,amount,currency,
+                cur.execute('''INSERT INTO accounting.financial_transactions
+                    (institution,account_id,source_account_reference,transaction_date,amount,currency,
                      description,merchant_text,card_last4,import_fingerprint,raw_source)
-                    VALUES ('CIBC',%s,%s,%s,'CAD',%s,%s,%s,%s,%s)
+                    VALUES ('CIBC',%s,%s,%s,%s,'CAD',%s,%s,%s,%s,%s)
                     ON CONFLICT (import_fingerprint) DO NOTHING''',
-                            (account_reference, row.date, row.amount, row.description, row.description,
+                            (account_id, account_reference, row.date, row.amount, row.description, row.description,
                              row.card_last4, row.fingerprint, Jsonb(raw)))
-                cur.execute('''INSERT INTO budget.transaction_import_rows
+                cur.execute('''INSERT INTO accounting.account_numbers (account_id,number_kind,last4)
+                    VALUES (%s,'card',%s) ON CONFLICT (account_id,number_kind,last4) DO NOTHING''',
+                            (account_id,row.card_last4))
+                cur.execute('''INSERT INTO accounting.transaction_import_rows
                     (import_id,row_number,transaction_id,raw_row)
-                    SELECT %s,%s,id,%s FROM budget.financial_transactions WHERE import_fingerprint=%s
+                    SELECT %s,%s,id,%s FROM accounting.financial_transactions WHERE import_fingerprint=%s
                     ON CONFLICT (import_id,row_number) DO NOTHING''',
                             (import_id, row.number, Jsonb(row.raw), row.fingerprint))
             report['import_id'] = import_id
@@ -66,10 +77,10 @@ def import_cibc(conn, path, account_reference, actor, *, apply=False):
 
 
 def allocation_rows(cur, transaction_id):
-    cur.execute('''SELECT allocation_number,amount,category,person,expense_pk,note
-        FROM budget.transaction_allocations WHERE transaction_id=%s ORDER BY allocation_number''', (transaction_id,))
+    cur.execute('''SELECT allocation_number,amount,category,person,expense_pk,note,receipt_source_sha256
+        FROM accounting.transaction_allocations WHERE transaction_id=%s ORDER BY allocation_number''', (transaction_id,))
     rows = cur.fetchall()
-    cur.execute('SELECT COALESCE(MAX(version),0) AS version FROM budget.transaction_allocation_audit WHERE transaction_id=%s', (transaction_id,))
+    cur.execute('SELECT COALESCE(MAX(version),0) AS version FROM accounting.transaction_allocation_audit WHERE transaction_id=%s', (transaction_id,))
     return rows, cur.fetchone()['version']
 
 
@@ -78,7 +89,7 @@ def normalize_allocations(rows, total):
         raise ValueError('Supply between 1 and 100 allocations')
     result = []
     for number, row in enumerate(rows, 1):
-        if not isinstance(row, dict) or set(row) - {'amount','category','person','expense_pk','note'}:
+        if not isinstance(row, dict) or set(row) - {'amount','category','person','expense_pk','note','receipt_source_sha256'}:
             raise ValueError('Unsupported allocation fields')
         try:
             amount = Decimal(str(row.get('amount', '')))
@@ -97,15 +108,18 @@ def normalize_allocations(rows, total):
         for key in ('person', 'note'):
             if row.get(key) is not None and (not isinstance(row[key], str) or len(row[key]) > 2000):
                 raise ValueError(f'Invalid {key}')
+        sha=row.get('receipt_source_sha256')
+        if sha is not None and (not isinstance(sha,str) or not re.fullmatch('[0-9a-f]{64}',sha)):
+            raise ValueError('Invalid receipt source identity')
         result.append({'allocation_number': number, 'amount': amount, 'category': category.strip(),
                        'person': (row.get('person') or '').strip() or None,
-                       'expense_pk': expense_pk, 'note': (row.get('note') or '').strip()})
+                       'expense_pk': expense_pk, 'note': (row.get('note') or '').strip(), 'receipt_source_sha256':sha})
     if sum(r['amount'] for r in result) != total:
         raise ValueError('Allocations must sum exactly to the bank transaction amount')
     return result
 
 
-def save_allocations(conn, transaction_id, rows, expected_version, actor, reason, *, apply=False):
+def save_allocations(conn, transaction_id, rows, expected_version, actor, reason, *, apply=False, receipt_service=None):
     from psycopg.types.json import Jsonb
     if type(expected_version) is not int or expected_version < 0:
         raise ValueError('An expected allocation version is required')
@@ -113,7 +127,7 @@ def save_allocations(conn, transaction_id, rows, expected_version, actor, reason
         raise ValueError('An actor and reason (at most 2000 characters) are required')
     with conn.transaction():
         with conn.cursor() as cur:
-            cur.execute('SELECT id,amount,currency,raw_source FROM budget.financial_transactions WHERE id=%s FOR UPDATE', (transaction_id,))
+            cur.execute('SELECT id,amount,currency,raw_source FROM accounting.financial_transactions WHERE id=%s FOR UPDATE', (transaction_id,))
             tx = cur.fetchone()
             if tx is None:
                 raise LookupError('Transaction not found')
@@ -125,20 +139,28 @@ def save_allocations(conn, transaction_id, rows, expected_version, actor, reason
             after = normalize_allocations(rows, tx['amount'])
             for r in after:
                 if r['expense_pk']:
-                    cur.execute('''SELECT id FROM budget.expenses e WHERE id=%s AND NOT EXISTS (
-                        SELECT 1 FROM budget.receipt_evidence re WHERE re.expense_pk=e.id
-                         AND (re.raw_payload ? 'duplicate_merge' OR re.raw_payload ? 'receipt_deleted'))''', (r['expense_pk'],))
-                    if cur.fetchone() is None:
+                    if receipt_service is None:
+                        raise ValueError('A receipt connection is required to confirm an expense link')
+                    evidence=receipt_service._fetch('''SELECT re.source_sha256 FROM budget.receipt_evidence re
+                        WHERE re.expense_pk=%s AND NOT (COALESCE(re.raw_payload,'{}'::jsonb)
+                            ?| ARRAY['duplicate_merge','receipt_deleted'])
+                        ORDER BY re.is_primary_source DESC,re.id LIMIT 1''',(r['expense_pk'],))
+                    if not evidence:
                         raise ValueError('Expense is missing, deleted or a duplicate')
+                    if r['receipt_source_sha256'] not in (None,evidence[0]['source_sha256']):
+                        raise ValueError('Receipt identity changed; reload before saving')
+                    r['receipt_source_sha256']=evidence[0]['source_sha256']
+                elif r['receipt_source_sha256'] and r['receipt_source_sha256'] not in {b['receipt_source_sha256'] for b in before}:
+                    raise ValueError('A new receipt link needs a current expense selection')
             result = {'transaction_id': transaction_id, 'version': version + int(apply),
                       'allocations': after, 'applied': apply}
             if apply:
-                cur.execute('DELETE FROM budget.transaction_allocations WHERE transaction_id=%s', (transaction_id,))
+                cur.execute('DELETE FROM accounting.transaction_allocations WHERE transaction_id=%s', (transaction_id,))
                 for r in after:
-                    cur.execute('''INSERT INTO budget.transaction_allocations
-                        (transaction_id,allocation_number,amount,category,person,expense_pk,note)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s)''', (transaction_id, *r.values()))
-                cur.execute('''INSERT INTO budget.transaction_allocation_audit
+                    cur.execute('''INSERT INTO accounting.transaction_allocations
+                        (transaction_id,allocation_number,amount,category,person,expense_pk,note,receipt_source_sha256)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)''', (transaction_id, *r.values()))
+                cur.execute('''INSERT INTO accounting.transaction_allocation_audit
                     (transaction_id,version,actor,reason,before_allocations,after_allocations)
                     VALUES (%s,%s,%s,%s,%s,%s)''',
                             (transaction_id, version+1, actor, reason,

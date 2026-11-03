@@ -83,8 +83,9 @@ class Page:
 class LedgerQueryService:
     """Server-side queries over canonical analytics views and review tables."""
 
-    def __init__(self, connect: Optional[Callable[[], object]] = None):
+    def __init__(self, connect: Optional[Callable[[], object]] = None, accounting_connect=None):
         self._connect = connect or self._default_connect
+        self._accounting_connect = accounting_connect
 
     def receipt_allocation(self, source_sha256):
         from .allocation_corrections import read
@@ -917,20 +918,21 @@ class LedgerQueryService:
         return Page(self._fetch(sql, (limit, offset)), limit, offset)
 
     def transaction_reconciliation(self, *, limit: int = 50, offset: int = 0) -> Page:
+        from ..transactions.database import connect
+        bank=LedgerQueryService(self._accounting_connect or connect)
         sql = """
             SELECT ft.id AS transaction_id, ft.transaction_date, ft.posting_date,
                    ft.amount, ft.description, ft.payer, ft.payer_source,
                    ft.card_last4, ft.raw_source->>'kind' AS kind,
-                   (SELECT count(*) FROM budget.transaction_allocations a WHERE a.transaction_id=ft.id) AS allocation_count,
-                   r.expense_pk, r.outcome, r.score, r.candidate_count,
-                   r.candidate_details
-              FROM budget.financial_transactions ft
-              LEFT JOIN budget.transaction_expense_reconciliation r
-                ON r.transaction_id = ft.id
+                   (SELECT count(*) FROM accounting.transaction_allocations a WHERE a.transaction_id=ft.id) AS allocation_count,
+                   NULL::bigint AS expense_pk,
+                   CASE WHEN EXISTS(SELECT 1 FROM accounting.transaction_allocations a WHERE a.transaction_id=ft.id)
+                        THEN 'confirmed allocations' ELSE 'unallocated' END AS outcome
+              FROM accounting.financial_transactions ft
              ORDER BY ft.transaction_date DESC, ft.id DESC
              LIMIT %s OFFSET %s
         """
-        return Page(self._fetch(sql, (limit, offset)), limit, offset)
+        return Page(bank._fetch(sql, (limit, offset)), limit, offset)
 
     def receipt_processing_status(self, *, limit: int = 100, offset: int = 0,
                                   sort: str = "last_attempted_at", direction: str = "desc",

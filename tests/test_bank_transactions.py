@@ -41,6 +41,22 @@ def test_payment_is_separate_from_refund():
     assert row.kind == 'payment'
 
 
+def test_full_account_number_is_not_an_allowed_account_reference():
+    with pytest.raises(ValueError,match='full account number'):
+        parse_cibc(csv_row(),'1234567890123456')
+
+
+def test_accounting_connection_never_falls_back_to_receipt_database(monkeypatch):
+    from home_budget_pipeline.transactions.database import connect
+    monkeypatch.delenv('ACCOUNTING_DATABASE_URL',raising=False)
+    with pytest.raises(ValueError,match='required'):
+        connect()
+    monkeypatch.setenv('DATABASE_URL','postgresql://user:password@example.invalid/receipts')
+    monkeypatch.setenv('ACCOUNTING_DATABASE_URL','postgresql://user:password@example.invalid/receipts')
+    with pytest.raises(ValueError,match='separate databases'):
+        connect()
+
+
 def test_balanced_split_and_refund_use_decimal_cents():
     rows = normalize_allocations([{'amount':'0.10','category':'Food'}, {'amount':'0.20','category':'Home','expense_pk':5}], Decimal('.30'))
     assert sum(r['amount'] for r in rows) == Decimal('.30')

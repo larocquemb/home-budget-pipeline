@@ -8,6 +8,7 @@ from .app import app, BASE_PATH, query_service, authenticated_identity
 from .queries import LedgerQueryService
 from .render import page, esc, money, table
 from ..transactions.workflows import allocation_rows, receipt_candidates, save_allocations
+from ..transactions.database import service as accounting_service
 
 
 class AllocationRequest(BaseModel):
@@ -17,12 +18,20 @@ class AllocationRequest(BaseModel):
 
 
 def detail(service, transaction_id):
-    rows = service._fetch('SELECT * FROM budget.financial_transactions WHERE id=%s', (transaction_id,))
+    bank=accounting_service()
+    rows = bank._fetch('SELECT * FROM accounting.financial_transactions WHERE id=%s', (transaction_id,))
     if not rows:
         raise HTTPException(404, 'Transaction not found')
-    with service._connect() as conn:
+    with bank._connect() as conn:
         with conn.cursor() as cur:
             allocations, version = allocation_rows(cur, transaction_id)
+    # Expense integers can be reused after a receipt rebuild. Resolve saved links
+    # by immutable source hash; never send a recycled integer back as identity.
+    for allocation in allocations:
+        if allocation['receipt_source_sha256']:
+            current=service._fetch('SELECT expense_pk FROM budget.receipt_evidence WHERE source_sha256=%s',
+                                   (allocation['receipt_source_sha256'],))
+            allocation['expense_pk']=current[0]['expense_pk'] if current else None
     return rows[0], allocations, version
 
 
@@ -42,9 +51,9 @@ def allocate_transaction(transaction_id: int, body: AllocationRequest,
     if x_ledger_action != 'transaction-allocation':
         raise HTTPException(403, 'Transaction allocation action header required')
     try:
-        with service._connect() as conn:
+        with accounting_service()._connect() as conn:
             return save_allocations(conn, transaction_id, body.allocations, body.expected_version,
-                                    identity.get('email') or identity['user'], body.reason, apply=True)
+                                    identity.get('email') or identity['user'], body.reason, apply=True,receipt_service=service)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
@@ -80,7 +89,7 @@ Purchases are positive; credits and payments are negative.</p></div>'''
 <p id="allocation-balance" role="status"></p>
 <label>Reason for this allocation or correction <input name="reason" required maxlength="2000"></label>
 <button type="submit">Save confirmed allocations</button><p id="allocation-status" role="status"></p></form>'''
-    history = service._fetch('''SELECT version,actor,reason,recorded_at FROM budget.transaction_allocation_audit
+    history = accounting_service()._fetch('''SELECT version,actor,reason,recorded_at FROM accounting.transaction_allocation_audit
         WHERE transaction_id=%s ORDER BY version DESC''', (transaction_id,))
     body += '<h2>Allocation history</h2>' + table(history, (('version','Version'),('actor','Recorded by'),('reason','Reason'),('recorded_at','Recorded at')))
     import json
@@ -92,7 +101,9 @@ Purchases are positive; credits and payments are negative.</p></div>'''
 def allocation_html(row):
     fields = [('amount','number','step="0.01" required'),('category','text','required maxlength="200"'),
               ('person','text','maxlength="2000"'),('expense_pk','number','min="1" step="1"'),('note','text','maxlength="2000"')]
-    return '<tr>' + ''.join(f'<td><input aria-label="{esc(k)}" data-field="{k}" type="{t}" {attrs} value="{esc(row.get(k))}"></td>' for k,t,attrs in fields) + '<td><button type="button" data-remove>Remove</button></td></tr>'
+    sha=row.get('receipt_source_sha256') or ''
+    link=(f'<small><a href="{BASE_PATH}/receipts/{esc(sha)}">Saved receipt source</a></small>' if sha else '')
+    return '<tr>' + ''.join(f'<td><input aria-label="{esc(k)}" data-field="{k}" type="{t}" {attrs} value="{esc(row.get(k))}"></td>' for k,t,attrs in fields) + f'<td><input type="hidden" data-field="receipt_source_sha256" value="{esc(sha)}">{link}<button type="button" data-remove>Remove</button></td></tr>'
 
 
 SCRIPT = r'''
@@ -107,10 +118,28 @@ rows.oninput=balance;balance();
 form.onsubmit=async e=>{
   e.preventDefault();const status=document.getElementById('allocation-status'),button=form.querySelector('[type="submit"]');button.disabled=true;
   try{
-    const allocations=[...rows.querySelectorAll('tr')].map(row=>Object.fromEntries([...row.querySelectorAll('[data-field]')].map(el=>[el.dataset.field,el.dataset.field==='expense_pk'?(el.value?Number(el.value):null):el.value])));
+    const allocations=[...rows.querySelectorAll('tr')].map(row=>Object.fromEntries([...row.querySelectorAll('[data-field]')].map(el=>[el.dataset.field,el.dataset.field==='expense_pk'?(el.value?Number(el.value):null):el.dataset.field==='receipt_source_sha256'?(el.value||null):el.value])));
     const response=await fetch(allocationUrl,{method:'POST',headers:{'Content-Type':'application/json','X-Ledger-Action':'transaction-allocation'},body:JSON.stringify({expected_version:allocationVersion,reason:form.reason.value,allocations})});
     const result=await response.json();if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'Check the allocation fields.');
     window.location.reload();
   }catch(error){status.textContent=error.message;button.disabled=false;}
 };
 '''
+
+
+@app.get(f'{BASE_PATH}/accounts',response_class=HTMLResponse)
+def accounts_page(identity:dict=Depends(authenticated_identity)):
+    from ..transactions.accounts import account_rows
+    rows=account_rows(accounting_service())
+    body='<p>Accounts are identified by the primary card’s last four digits. Full account and card numbers are not stored. Ownership assertions are separate from historical payer attribution.</p>'
+    body+=table(rows,(('account_reference','Account'),('institution','Institution'),('primary_card_last4','Primary ending'),
+                     ('last4','Linked card ending'),('owner_name','Owner / cardholder'),('ownership_role','Role'),
+                     ('effective_from','Effective from'),('effective_to','Effective to'),('asserted_at','Recorded at')))
+    body+='<p>Blank effective dates mean historical ownership dates have not been supplied.</p>'
+    return page('Accounts and ownership',body,base_path=BASE_PATH,identity=identity)
+
+
+@app.get(f'{BASE_PATH}/api/accounts')
+def accounts_api(_:dict=Depends(authenticated_identity)):
+    from ..transactions.accounts import account_rows
+    return account_rows(accounting_service())

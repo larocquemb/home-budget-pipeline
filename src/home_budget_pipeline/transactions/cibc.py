@@ -25,6 +25,8 @@ class CibcRow:
 def parse_cibc(data: bytes, account_reference: str) -> list[CibcRow]:
     if not account_reference.strip():
         raise ValueError('An account reference is required')
+    if re.search(r'\d{16}',account_reference):
+        raise ValueError('Use an account label and last four digits, never a full account number')
     occurrences = Counter()
     result = []
     for number, raw in enumerate(csv.reader(io.StringIO(data.decode('utf-8-sig')), strict=True), 1):
