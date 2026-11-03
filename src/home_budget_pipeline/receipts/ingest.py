@@ -277,9 +277,11 @@ def _run_paddle_candidate(image, *, dpi: int) -> OCRCandidate:
             result = list(_PADDLE_OCR.predict(str(tmp_path)))[0].json["res"]
         finally:
             tmp_path.unlink(missing_ok=True)
+        from .paddle_geometry import bounds
         lines = tuple(
-            OCRLine(normalize_line(str(text)), float(score) * 100.0)
-            for text, score in zip(result.get("rec_texts", ()), result.get("rec_scores", ()))
+            OCRLine(normalize_line(str(text)), float(score) * 100.0,
+                    *bounds(result.get("rec_polys", ()), index))
+            for index, (text, score) in enumerate(zip(result.get("rec_texts", ()), result.get("rec_scores", ())))
             if normalize_line(str(text))
         )
         return OCRCandidate("\n".join(line.text for line in lines), lines, dpi, "paddle", "paddle")
@@ -1399,11 +1401,47 @@ def _summary_lines(text: str) -> List[str]:
     return result
 
 
+def _fragmented_total_amount(line: str) -> bool:
+    """Do not accept the decimal tail of a broken amount as a complete total."""
+    label = TOTAL_LIKE_RE.search(line)
+    if not label:
+        return False
+    tail = line[label.end():]
+    matches = list(MONEY_RE.finditer(tail))
+    if not matches:
+        return False
+    amount = matches[-1]
+    return bool(re.search(r"\d", tail[:amount.start()] + tail[amount.end():]))
+
+
+def _corroborated_payment_total(text: str) -> Optional[float]:
+    """A tender and terminal purchase must agree; never sum split payments."""
+    lines = text.splitlines()
+    tenders, purchases = set(), set()
+    for index, line in enumerate(lines):
+        amount = parse_money(line)
+        if amount is None:
+            continue
+        if re.search(r"\b(?:change|cash\s*back|tip|gratuity)\b", line, re.I):
+            if amount != 0:
+                return None
+            continue
+        if re.search(r"\b(?:auth|reference|card\s+number)\b", line, re.I):
+            continue
+        if re.search(r"\btender\b", line, re.I):
+            tenders.add(amount)
+        if re.search(r"\bpurchase\b", line, re.I) and not TOTAL_LIKE_RE.search(line):
+            nearby = "\n".join(lines[max(0,index-3):index+4])
+            if re.search(r"\bCARD\s+(?:MC|VISA|MASTERCARD|AMEX|DEBIT|INTERAC)\b", nearby, re.I):
+                purchases.add(amount)
+    return next(iter(tenders)) if len(tenders) == 1 and tenders == purchases else None
+
+
 def extract_totals(text: str, *, infer_tax: bool = True) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     subtotal = tax = total = None
     taxes = {}
     included_tax = False
-    total_candidates: List[Tuple[float, bool]] = []
+    total_candidates: List[Tuple[float, bool, bool]] = []
     tender_candidates: List[Tuple[float, bool]] = []
     for raw in _summary_lines(text):
         line = normalize_line(raw)
@@ -1435,14 +1473,19 @@ def extract_totals(text: str, *, infer_tax: bool = True) -> Tuple[Optional[float
             continue
         if total_like:
             if not re.search(r"\b(?:tax|items?|savings?|discount|points?|purchased)\b", line, re.I):
-                total_candidates.append((amount, tolerant))
+                total_candidates.append((amount, tolerant, _fragmented_total_amount(line)))
                 continue
         if tender_like:
             tender_candidates.append((amount, tolerant))
 
     if total_candidates:
-        total, total_tolerant = total_candidates[-1]
-        if tender_candidates:
+        total, total_tolerant, fragmented = total_candidates[-1]
+        if fragmented:
+            total = _corroborated_payment_total(text)
+            if total is not None and any(value != total and not damaged
+                                         for value, _, damaged in total_candidates):
+                total = None
+        elif tender_candidates:
             tender, tender_tolerant = tender_candidates[-1]
             if total_tolerant and tender != 0 and abs(total) > abs(tender) * 2:
                 total = tender
@@ -1477,8 +1520,10 @@ def extract_tax_components(text: str) -> dict[str, float]:
     return components
 
 
-def extract_items(text: str) -> List[ScannedItem]:
+def extract_items(text: str, *, issues: Optional[List[str]] = None) -> List[ScannedItem]:
+    issues = issues if issues is not None else []
     items: List[ScannedItem] = []
+    adjustment_target = None
     raw_lines = text.splitlines()
     for index, raw in enumerate(raw_lines):
         line = normalize_leading_decimal_money(normalize_line(raw))
@@ -1491,13 +1536,21 @@ def extract_items(text: str) -> List[ScannedItem]:
         if (re.search(r'\b\d{1,2}:\d{2}', line)
                 and re.search(r'\b(?:reg(?:ister)?|trans(?:action)?)\b', line, re.I)):
             continue
-        adjustment = re.match(r'^(?:INSTANT\s+SAVINGS|\+?EHC)\b', line, re.I)
+        adjustment = re.match(r'^(?:[I1lT]NSTANT\s+SAVINGS|\+?EHC)\b', line, re.I)
         if adjustment:
             amount = parse_money(line)
-            if items and amount is not None:
-                direction = -1 if items[-1].line_total < 0 else 1
-                delta = -abs(amount) if 'savings' in line.lower() else abs(amount)
-                items[-1].line_total = round(items[-1].line_total + direction * delta, 2)
+            if amount is None and index + 1 < len(raw_lines):
+                following = normalize_line(raw_lines[index + 1])
+                if re.fullmatch(r'-?\$?\s*\d[\d ,.]*-?\s*[A-Z]{0,2}', following, re.I):
+                    amount = parse_money(following)
+            is_discount = 'savings' in line.lower()
+            if (adjustment_target is None or amount is None
+                    or (is_discount and abs(amount) > abs(adjustment_target.line_total))):
+                issues.append('unresolved_item_adjustment')
+            else:
+                direction = -1 if adjustment_target.line_total < 0 else 1
+                delta = -abs(amount) if is_discount else abs(amount)
+                adjustment_target.line_total = round(adjustment_target.line_total + direction * delta, 2)
             continue
         if re.match(r'^(?:price\s*/|lit(?:er|re)s?\s*:|pump\s*[:\d]|fiscal\s+\d{4}\s+loyalty)', line, re.I) or re.search(r'loyalty\s+appeasement', line, re.I):
             continue
@@ -1507,8 +1560,13 @@ def extract_items(text: str) -> List[ScannedItem]:
             continue
         if re.search(r"^\s*(?:\d+(?:\.\d+)?\s*(?:kg|lb)\s*@|\d+\s*@\s*\d+\s*/)", line, re.I):
             continue
+        # A weight/unit-price detail is not another purchase or an adjustment target.
+        if re.match(r'^\d+(?:\.\d+)?\s*(?:kg|lb)\b', line, re.I) and re.search(r'/\s*(?:kg|lb)\b', line, re.I):
+            continue
         matches = list(MONEY_RE.finditer(line))
         if not matches:
+            # Never charge the previous product for an unreadable new product.
+            adjustment_target = None
             if re.match(r'^\s*(?:\d+\s+)?(?:regular|premium|diesel|unleaded)\s+(?:gasoline|fuel)\b', line, re.I):
                 for candidate in raw_lines[index+1:index+9]:
                     candidate = normalize_line(candidate)
@@ -1518,6 +1576,7 @@ def extract_items(text: str) -> List[ScannedItem]:
                         amount = parse_money(candidate)
                         if amount is not None:
                             items.append(ScannedItem(re.sub(r'^\d+\s+', '', line), amount))
+                            adjustment_target = items[-1]
                             break
             # Some OCR splits a barcode/item line from its amount column.
             # Only join strong product rows so arbitrary receipt prose is not
@@ -1529,6 +1588,19 @@ def extract_items(text: str) -> List[ScannedItem]:
                     amount = parse_money(next_line)
                     if amount is not None:
                         items.append(ScannedItem(line, amount))
+                        adjustment_target = items[-1]
+            # Named product rows can also have an amount wrapped onto the next
+            # row. Do not join savings summaries, section headings or prose.
+            if adjustment_target is None and index + 1 < len(raw_lines):
+                from .departments import HEADING
+                following = normalize_line(raw_lines[index + 1])
+                if (len(re.findall(r'[A-Za-z]{2,}', line)) >= 2
+                        and not HEADING.fullmatch(line)
+                        and re.fullmatch(r'-?\$?\s*\d[\d ,.]*-?\s*[A-Z]{0,2}', following, re.I)):
+                    amount = parse_money(following)
+                    if amount is not None:
+                        items.append(ScannedItem(line, amount))
+                        adjustment_target = items[-1]
             continue
         last = matches[-1]
         name = clean_extracted_item_name(line[: last.start()].strip(" :-"))
@@ -1543,6 +1615,7 @@ def extract_items(text: str) -> List[ScannedItem]:
         amount = parse_money(line)
         if amount is not None:
             items.append(ScannedItem(name, amount))
+            adjustment_target = items[-1]
     return items
 
 
@@ -1610,6 +1683,9 @@ def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
     from .allocation import assess
     reasons.extend(assess([asdict(i) for i in receipt.items], receipt.subtotal,
                          receipt.tax, receipt.total)['reasons'])
+    adjustment_issues = []
+    extract_items(receipt.text, issues=adjustment_issues)
+    reasons.extend(sorted(set(adjustment_issues)))
     components = extract_tax_components(receipt.text)
     if (len(components) > 1 and receipt.tax is not None
             and abs(round(sum(components.values()) - receipt.tax, 2)) > .01):
@@ -1683,6 +1759,8 @@ def parse_scan(path: Path, source_root: Optional[Path] = None) -> ScannedReceipt
         receipt.total = filename_total
     from .summary_evidence import apply
     apply(receipt, observations)
+    from .item_evidence import apply as apply_item_evidence
+    apply_item_evidence(receipt, pages, observations)
     receipt.extraction_confidence = confidence_for(receipt)
     receipt.review_reasons = review_reasons_for(receipt)
     receipt.extraction_status = status_for(receipt)

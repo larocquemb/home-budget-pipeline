@@ -217,11 +217,16 @@ class OcrResultMessage:
         if not isinstance(receipt.get('field_decisions', {}), dict):
             raise InvalidOcrResultMessage('receipt field_decisions must be an object')
         for name, decision in receipt.get('field_decisions', {}).items():
-            if (name not in {'card_last4', 'transaction_datetime'} or not isinstance(decision, dict)
+            if (name not in {'card_last4', 'transaction_datetime', 'items'} or not isinstance(decision, dict)
                     or decision.get('status') not in {'selected', 'conflict'}
                     or not isinstance(decision.get('candidates'), list)):
                 raise InvalidOcrResultMessage('receipt field decision is invalid')
             _optional_text(decision.get('value'), 'receipt field decision value')
+            if name == 'items' and (not isinstance(decision.get('rows'), list)
+                    or not all(isinstance(row,dict) and isinstance(row.get('candidates'),list)
+                               and row.get('status') in {'selected','observed','unverified','conflict'}
+                               and isinstance(row.get('included'),bool) for row in decision['rows'])):
+                raise InvalidOcrResultMessage('receipt item decisions are invalid')
         _optional_text(receipt.get('store'), 'receipt store')
         _optional_text(receipt.get('store_address'), 'receipt store_address')
         for name in ('store_phone', 'tax_registration_number'):

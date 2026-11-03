@@ -1145,3 +1145,75 @@ and audit history remain intact. Reprocessing preserves the deletion. Restoring
 reactivates the retained purchase; a receipt deleted before extraction still needs
 normal processing after restoration. The former duplicate-review page redirects
 to the receipt list. Historical duplicate decisions remain available as evidence.
+
+
+### Receipt progress dashboard scopes
+
+The Receipt progress dashboard separates **Latest batch — persistence and
+outcomes** from **All batches — inventory and retained errors**. Failed requests
+and unknown outcomes describe the recorded latest batch. Retained dead-letter
+messages include older batches and individual OCR passes; they are neither a
+latest-batch failure count nor a count of failed receipts. The selected Grafana
+time range does not restrict broker queue contents to a batch.
+
+Update this dashboard alone using the configured monitoring credentials:
+
+```sh
+make monitoring-receipt-progress-check
+make monitoring-receipt-progress-apply
+```
+
+The commands prompt for required credentials and preserve the current Grafana
+folder and resource version. They change no queues or other dashboards.
+
+
+### Printed item savings
+
+Explicit **INSTANT SAVINGS** deductions apply once to their associated item,
+including a discount amount on the immediately following amount-only row and
+common OCR initial-letter confusion. Named products with wrapped price rows
+retain their own adjustments. Weight/unit-price details are not extra purchases.
+**YOU SAVED** rows describe savings already reflected in the price and are not
+another deduction.
+
+A missing discount amount, an unpriced intervening product or a discount larger
+than its product amount remains `unresolved_item_adjustment` and requires review.
+The parser does not borrow amounts from neighbouring purchases or other receipts.
+A discount fix does not prove the remaining items reconcile to the subtotal.
+
+
+### Item price evidence and reconciliation
+
+Fresh OCR and cached re-extraction use the same ordered item-price selector.
+It associates product descriptions across original passes independently of
+price agreement, preserving repeated purchases and refusing ambiguous missing
+rows. Split price columns use retained geometry when available; legacy passes
+use only unique ordered row associations. Unpriced products can be recovered
+from corroborated original observations between matching neighbouring products.
+
+An amount can replace a selected price when different OCR engines agree within
+the same run/page. Explicit currency and diverse render evidence can resolve a
+spurious leading digit. A recognition-confidence fallback requires a score of
+at least 90 and a margin of 15 over competing readings; these are heuristic
+quality thresholds, not correctness probabilities. Strong conflicting readings
+stay in review. Printed weight times unit price can corroborate an amount
+already observed as a literal price, never invent a new price.
+
+Across adjacent pages, at least two consecutive boundary products must match
+(including a strong description anchor) and agree on observed gross prices
+before overlap is collapsed. The later page retains its complete adjustment
+rows; both pages remain linked in evidence. Repeated products within a page
+remain separate. No expected subtotal or total is passed into price selection.
+Item sums and subtotal/tax/total arithmetic validate its output afterward.
+
+On the receipt's **Provenance** graph, item-amount decision nodes link to the
+original OCR pass, line, candidate prices, confidence and retained geometry.
+Unchanged base readings are distinguished from corroborated selections and
+unresolved conflicts. Raw OCR/cache text remains unchanged. Paddle recognition
+polygons are retained for future runs, following the [PaddleOCR output
+format](https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/quick_start.en.md).
+Older caches cannot acquire missing coordinates without fresh OCR.
+
+Reload the collector before publishing item-evidence results: its result-message
+validator must understand the new provenance field. Reload workers to use the
+same selector and retain recognition geometry for new OCR work.

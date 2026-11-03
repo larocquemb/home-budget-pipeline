@@ -91,3 +91,27 @@ def test_private_dashboards_distinguish_execution_hosts():
             for p in dashboard['elements'].values():
                 for q in p['spec']['data']['spec']['queries']:
                     assert 'node=~"${worker_host:regex}"' in q['spec']['query']['spec']['expr']
+
+
+def test_receipt_progress_separates_latest_batch_from_retained_queue_errors():
+    template = Path('ops/monitoring/roles/monitoring/templates/grafana-receipt-progress-dashboard.json.j2')
+    dashboard = json.loads(template.read_text())['spec']
+    panels = dashboard['elements']
+    rows = dashboard['layout']['spec']['rows']
+    def fields(row):
+        result = []
+        for item in row['spec']['layout']['spec']['items']:
+            panel = panels[item['spec']['element']['name']]['spec']
+            result.extend(query['spec']['query']['spec']['expr']
+                          for query in panel['data']['spec']['queries'])
+        return '\n'.join(result)
+    batch = next(row for row in rows if row['spec']['title'] == 'Latest batch — persistence and outcomes')
+    retained = next(row for row in rows if row['spec']['title'] == 'All batches — inventory and retained errors')
+    assert 'unwrap failed ' in fields(batch)
+    assert 'unwrap unknown ' in fields(batch)
+    assert 'unwrap batch_persisted ' in fields(batch)
+    for field in ('collector_failed','queue_failed','database_failed','database_receipts'):
+        assert f'unwrap {field} ' not in fields(batch)
+        assert f'unwrap {field} ' in fields(retained)
+    assert 'All retained rejected collector messages' in json.dumps(panels)
+    assert 'not receipts' in panels['panel-33']['spec']['description']

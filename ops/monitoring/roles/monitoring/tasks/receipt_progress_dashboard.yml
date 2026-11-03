@@ -1,0 +1,53 @@
+---
+- name: Read current receipt progress dashboard
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/apis/dashboard.grafana.app/v2/namespaces/{{ monitoring_grafana_api_namespace }}/dashboards/home-budget-dev-progress"
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    return_content: true
+    status_code: 200
+  register: monitoring_progress_dashboard_current
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Render receipt progress dashboard with its existing folder
+  ansible.builtin.set_fact:
+    monitoring_progress_dashboard_desired: "{{ lookup('ansible.builtin.template', 'grafana-receipt-progress-dashboard.json.j2') | from_json }}"
+  vars:
+    monitoring_grafana_home_budget_folder_uid_effective: "{{ monitoring_progress_dashboard_current.json.metadata.annotations['grafana.app/folder'] }}"
+  no_log: true
+
+- name: Report receipt progress dashboard update
+  ansible.builtin.debug:
+    msg: Receipt progress dashboard would be updated; no queues, services or other dashboards are changed.
+  when:
+    - ansible_check_mode
+    - monitoring_progress_dashboard_current.json.spec != monitoring_progress_dashboard_desired.spec
+
+- name: Update only receipt progress dashboard
+  ansible.builtin.uri:
+    url: "{{ monitoring_grafana_url }}/apis/dashboard.grafana.app/v2/namespaces/{{ monitoring_grafana_api_namespace }}/dashboards/home-budget-dev-progress"
+    method: PUT
+    url_username: "{{ monitoring_grafana_admin_user }}"
+    url_password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ monitoring_system_root_ca_path }}"
+    validate_certs: true
+    body_format: json
+    body:
+      apiVersion: dashboard.grafana.app/v2
+      kind: Dashboard
+      metadata:
+        name: home-budget-dev-progress
+        resourceVersion: "{{ monitoring_progress_dashboard_current.json.metadata.resourceVersion }}"
+        annotations: "{{ monitoring_progress_dashboard_current.json.metadata.annotations }}"
+      spec: "{{ monitoring_progress_dashboard_desired.spec }}"
+    status_code: 200
+  when:
+    - not ansible_check_mode
+    - monitoring_progress_dashboard_current.json.spec != monitoring_progress_dashboard_desired.spec
+  no_log: true

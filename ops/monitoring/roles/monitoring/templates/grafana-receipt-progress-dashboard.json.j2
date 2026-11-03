@@ -33,7 +33,7 @@
       }
     ],
     "cursorSync": "Crosshair",
-    "description": "Select Environment to use the same panels and queries for development or production. Latest recorded cache-rebuild batch: confirmed receipts, waiting, running, cache completed, failed and unknown. Stale workers and historical queue observations that cannot be reconciled are unknown. Database receipt presence and actual queue ready-message counts are separate. Collector messages include OCR passes, not only receipts. Snapshots refresh every 10 seconds and expire after 45 seconds.",
+    "description": "Select Environment to use the same panels and queries for development or production. Latest recorded cache-rebuild batch: confirmed receipts, waiting, running, cache completed, failed and unknown. Stale workers and historical queue observations that cannot be reconciled are unknown. Database receipt presence and actual queue ready-message counts are separate. Collector messages include OCR passes, not only receipts. Snapshots refresh every 10 seconds and expire after 45 seconds. Latest-batch outcomes are separate from all-batch inventory and retained errors. Whole-queue depth never represents latest-batch failures.",
     "editable": false,
     "elements": {
       "panel-1": {
@@ -364,7 +364,7 @@
         "kind": "Panel",
         "spec": {
           "id": 30,
-          "title": "Database persistence",
+          "title": "Latest batch \u2014 results saved",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -388,27 +388,6 @@
                       }
                     },
                     "refId": "A",
-                    "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "loki",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "{{ monitoring_grafana_datasource_uid }}"
-                      },
-                      "spec": {
-                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", database_receipts=\"database_receipts\" | event=\"receipt_progress_snapshot\" | unwrap database_receipts | __error__=\"\" [45s])",
-                        "queryType": "instant",
-                        "editorMode": "code",
-                        "legendFormat": "All database receipts"
-                      }
-                    },
-                    "refId": "B",
                     "hidden": false
                   }
                 }
@@ -459,18 +438,6 @@
                         "value": "Results saved"
                       }
                     ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byFrameRefID",
-                      "options": "B"
-                    },
-                    "properties": [
-                      {
-                        "id": "displayName",
-                        "value": "All database receipts"
-                      }
-                    ]
                   }
                 ]
               }
@@ -483,7 +450,7 @@
         "kind": "Panel",
         "spec": {
           "id": 31,
-          "title": "Needs attention",
+          "title": "Latest batch \u2014 outcomes",
           "links": [],
           "data": {
             "kind": "QueryGroup",
@@ -500,55 +467,13 @@
                         "name": "{{ monitoring_grafana_datasource_uid }}"
                       },
                       "spec": {
-                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", database_failed=\"database_failed\" | event=\"receipt_progress_snapshot\" | unwrap database_failed | __error__=\"\" [45s])",
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", failed=\"failed\" | event=\"receipt_progress_snapshot\" | unwrap failed | __error__=\"\" [45s])",
                         "queryType": "instant",
                         "editorMode": "code",
-                        "legendFormat": "Receipt import failures"
+                        "legendFormat": "Failed requests \u2014 latest batch"
                       }
                     },
                     "refId": "A",
-                    "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "loki",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "{{ monitoring_grafana_datasource_uid }}"
-                      },
-                      "spec": {
-                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", queue_failed=\"queue_failed\" | event=\"receipt_progress_snapshot\" | unwrap queue_failed | __error__=\"\" [45s])",
-                        "queryType": "instant",
-                        "editorMode": "code",
-                        "legendFormat": "OCR dead-letter messages"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "loki",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "{{ monitoring_grafana_datasource_uid }}"
-                      },
-                      "spec": {
-                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", collector_failed=\"collector_failed\" | event=\"receipt_progress_snapshot\" | unwrap collector_failed | __error__=\"\" [45s])",
-                        "queryType": "instant",
-                        "editorMode": "code",
-                        "legendFormat": "Rejected collector messages"
-                      }
-                    },
-                    "refId": "C",
                     "hidden": false
                   }
                 },
@@ -629,31 +554,7 @@
                     "properties": [
                       {
                         "id": "displayName",
-                        "value": "Receipt import failures"
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byFrameRefID",
-                      "options": "B"
-                    },
-                    "properties": [
-                      {
-                        "id": "displayName",
-                        "value": "OCR dead-letter messages"
-                      }
-                    ]
-                  },
-                  {
-                    "matcher": {
-                      "id": "byFrameRefID",
-                      "options": "C"
-                    },
-                    "properties": [
-                      {
-                        "id": "displayName",
-                        "value": "Rejected collector messages"
+                        "value": "Failed requests \u2014 latest batch"
                       }
                     ]
                   },
@@ -673,7 +574,7 @@
               }
             }
           },
-          "description": "Receipt import failures and broker dead letters are whole-environment counts. Unknown batch outcomes indicate missing historical/worker observations, not proven failures."
+          "description": "Failed requests and unknown outcomes for the recorded batch ID only. A published result is not proof it was saved. Broker dead letters cannot be attributed to this batch from queue depth and are shown separately below."
         }
       },
       "panel-32": {
@@ -880,6 +781,243 @@
             }
           }
         }
+      },
+      "panel-33": {
+        "kind": "Panel",
+        "spec": {
+          "id": 33,
+          "title": "All batches \u2014 retained errors",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", database_failed=\"database_failed\" | event=\"receipt_progress_snapshot\" | unwrap database_failed | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "All receipt import failures"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", queue_failed=\"queue_failed\" | event=\"receipt_progress_snapshot\" | unwrap queue_failed | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "All retained OCR dead-letter messages"
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                },
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", collector_failed=\"collector_failed\" | event=\"receipt_progress_snapshot\" | unwrap collector_failed | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "All retained rejected collector messages"
+                      }
+                    },
+                    "refId": "C",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name",
+                "orientation": "horizontal",
+                "wideLayout": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "Unavailable",
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": null
+                      },
+                      {
+                        "color": "red",
+                        "value": 1
+                      }
+                    ]
+                  }
+                },
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "A"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "All receipt import failures"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "B"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "All retained OCR dead-letter messages"
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byFrameRefID",
+                      "options": "C"
+                    },
+                    "properties": [
+                      {
+                        "id": "displayName",
+                        "value": "All retained rejected collector messages"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Current whole-environment counts. Includes failures from earlier batches; these are not failures of the latest batch. Dead-letter counts are messages, including individual OCR passes, not receipts. Changing the dashboard time range does not scope the queue to a batch."
+        }
+      },
+      "panel-34": {
+        "kind": "Panel",
+        "spec": {
+          "id": 34,
+          "title": "All batches \u2014 database receipts",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "loki",
+                      "version": "v0",
+                      "datasource": {
+                        "name": "{{ monitoring_grafana_datasource_uid }}"
+                      },
+                      "spec": {
+                        "expr": "last_over_time({environment=~\"${environment:regex}\", app=\"receipt-progress\"} | json event=\"event\", database_receipts=\"database_receipts\" | event=\"receipt_progress_snapshot\" | unwrap database_receipts | __error__=\"\" [45s])",
+                        "queryType": "instant",
+                        "editorMode": "code",
+                        "legendFormat": "All database receipts"
+                      }
+                    },
+                    "refId": "B",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "stat",
+            "version": "13.2.1",
+            "spec": {
+              "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "fields": "",
+                  "values": false
+                },
+                "textMode": "value_and_name",
+                "orientation": "horizontal",
+                "wideLayout": true
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "decimals": 0,
+                  "min": 0,
+                  "noValue": "Unavailable",
+                  "color": {
+                    "mode": "fixed",
+                    "fixedColor": "blue"
+                  }
+                },
+                "overrides": []
+              }
+            }
+          },
+          "description": "All recorded database receipt identities, across every batch. This is inventory, not latest-batch progress."
+        }
       }
     },
     "layout": {
@@ -968,7 +1106,7 @@
           {
             "kind": "RowsLayoutRow",
             "spec": {
-              "title": "Database and attention",
+              "title": "Latest batch \u2014 persistence and outcomes",
               "collapse": false,
               "layout": {
                 "kind": "GridLayout",
@@ -997,6 +1135,46 @@
                         "element": {
                           "kind": "ElementReference",
                           "name": "panel-31"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "kind": "RowsLayoutRow",
+            "spec": {
+              "title": "All batches \u2014 inventory and retained errors",
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 8,
+                        "height": 6,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-34"
+                        }
+                      }
+                    },
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "x": 8,
+                        "y": 0,
+                        "width": 16,
+                        "height": 6,
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "panel-33"
                         }
                       }
                     }
