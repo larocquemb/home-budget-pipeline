@@ -367,3 +367,6 @@ have a manually assigned category. The receipt totals cover all its items and
 are not prorated across split payments. Tax, fees and differences from the bank
 amount are not automatically assigned to item categories; uncategorized items
 and missing amounts stay visible for review.
+
+Confirmed receipt links also display the receipt's current individual line items,
+descriptions, categories and amounts directly on the transaction detail page.

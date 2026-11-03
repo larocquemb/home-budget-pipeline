@@ -140,7 +140,11 @@ def test_receipt_categories_are_read_from_items_and_linked_category_is_not_edita
             assert params==([17],)
             return [{'expense_pk':17,'category':'Groceries','item_amount':Decimal('7.34'),'missing_amounts':0},
                     {'expense_pk':17,'category':'Uncategorized','item_amount':Decimal('4.00'),'missing_amounts':1}]
+        def expense_detail(self, pk):
+            return {'expense_total':Decimal('12.34'),'items':[
+                {'item_name':'<source item>','product_description':'Accepted label','budget_category':'Groceries','line_total':Decimal('7.34')}]}
     text=render(Service(), [{'expense_pk':17}], [{'expense_pk':17}])
-    assert text.count('$7.34')==1 and 'Uncategorized' in text
+    assert text.count('$7.34')==2 and 'Uncategorized' in text
+    assert 'Receipt 17</a> — line items' in text and '&lt;source item&gt;' in text and 'Accepted label' in text
     assert 'whole receipt' in text and 'not distributed' in text
     assert f'href="{BASE_PATH}/expenses/17"' in text
