@@ -1367,10 +1367,16 @@ def _store_header_lines(text):
 
 
 def _store_street_line(line):
-    return not MONEY_RE.search(line) and bool(re.fullmatch(
-        r"(?:\d{1,5}\s*[-/]\s*)?\d{1,6}[A-Za-z]?\s+[^@\n]{2,100}\b"
+    if MONEY_RE.search(line):
+        return False
+    unit = r"(?:(?:unit|suite|apt)\s*#?\s*[A-Za-z0-9]+\s*[-/,]\s*)?"
+    number = r"(?:\d{1,5}\s*[-/]\s*)?\d{1,6}[A-Za-z]?\s+"
+    street = (r"[^@\n]{2,100}\b"
         r"(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|way|court|ct|parkway|pkwy|highway|hwy|crescent|cres|place|pl|trail)"
-        r"\.?\s*(?:[NSEW]{1,2}|(?:unit|suite)\s*#?\s*[A-Za-z0-9-]+)?", line, re.I))
+        r"\.?\s*(?:[NSEW]{1,2}|(?:unit|suite)\s*#?\s*[A-Za-z0-9-]+)?")
+    route = (r"(?:PTH|PR|highway|hwy|route)\s*#?\s*\d{1,4}[A-Za-z]?"
+             r"(?:\s+(?:north|south|east|west|northeast|northwest|southeast|southwest|[NSEW]{1,2}))?")
+    return bool(re.fullmatch(unit + number + '(?:' + street + '|' + route + ')', line, re.I))
 
 
 def _store_header_readings(text, observations):

@@ -41,16 +41,26 @@ def _page_text_lines(page: str) -> list[str]:
 
 
 def _line_texts(lines: list) -> list[str]:
-    """Flatten hierarchical cache lines back into receipt reading order."""
-    result: list[str] = []
-    for line in lines:
-        if isinstance(line, str):
-            result.append(line)
-            continue
-        if isinstance(line, dict) and isinstance(line.get("text"), str):
-            result.append(line["text"])
-            result.extend(_line_texts(line.get("children", [])))
-    return result
+    """Restore page reading order from original line numbers, not parent order.
+
+    Layout-less rows can be stored beside a section whose children include
+    later rows. Depth-first traversal would move those rows past the section.
+    Legacy unnumbered caches retain their original traversal order.
+    """
+    flattened = []
+    def visit(children):
+        for line in children:
+            if isinstance(line, str):
+                flattened.append({'text': line})
+            elif isinstance(line, dict) and isinstance(line.get('text'), str):
+                flattened.append(line)
+                visit(line.get('children', []))
+    visit(lines)
+    numbers = [line.get('line_number') for line in flattened]
+    if (all(type(number) is int and number > 0 for number in numbers)
+            and len(set(numbers)) == len(numbers)):
+        flattened.sort(key=lambda line: line['line_number'])
+    return [line['text'] for line in flattened]
 
 
 def _cache_metadata(data: dict) -> dict:
@@ -335,15 +345,27 @@ def _read_or_create_pages(
             for candidate in dict.fromkeys(candidates):
                 try:
                     data = json.loads(candidate.read_text(encoding="utf-8"))
+                    if not isinstance(data,dict):
+                        continue
                     pages = _cached_pages(data)
                     metadata = _cache_metadata(data)
-                    if metadata.get("source_sha256") == source_sha256 and pages is not None:
+                    if metadata.get("source_sha256") == source_sha256 and pages and any(page.strip() for page in pages):
+                        if candidate != cache_path:
+                            # Retain legacy evidence and materialize the current
+                            # location expected by result provenance/markers.
+                            cache_path.parent.mkdir(parents=True, exist_ok=True)
+                            temporary=cache_path.with_name('.'+cache_path.name+'.'+uuid.uuid4().hex+'.tmp')
+                            try:
+                                temporary.write_bytes(candidate.read_bytes())
+                                temporary.replace(cache_path)
+                            finally:
+                                temporary.unlink(missing_ok=True)
                         cache_span.set_attribute("receipt.cache.hit", True)
                         telemetry.adopt_run_uuid(metadata.get("run_uuid"))
                         if metadata.get("run_uuid"):
                             cache_span.set_attribute("run_uuid", metadata["run_uuid"])
                         return pages, True
-                except (FileNotFoundError, json.JSONDecodeError, OSError):
+                except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError):
                     continue
         cache_span.set_attribute("receipt.cache.hit", False)
 

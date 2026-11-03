@@ -27,7 +27,10 @@ def test_reprocess_requires_identity_action_and_receipt_and_queues_same_retry(mo
                 assert response.status_code==202
                 assert response.json()['request_id']==body['request_id']
             assert calls[0].to_bytes()==calls[1].to_bytes()
-            assert calls[0].version==2
+            assert calls[0].version==2 and calls[0].ocr_mode=='auto'
+            fresh=client.post(url,json={**body,'mode':'fresh'},headers=headers)
+            assert fresh.status_code==202 and calls[-1].ocr_mode=='fresh'
+            assert client.post(url,json={**body,'mode':'unsupported'},headers=headers).status_code==422
             assert client.post(url.replace('a'*64,'invalid'),json=body,headers=headers).status_code==422
             service.records=[]
             assert client.post(url,json=body,headers=headers).status_code==404
@@ -36,7 +39,7 @@ def test_reprocess_requires_identity_action_and_receipt_and_queues_same_retry(mo
     finally:app.dependency_overrides.clear()
 
 
-@pytest.mark.parametrize('extraction,deleted,expected',[('review',False,True),('complete',False,False),('review',True,False)])
+@pytest.mark.parametrize('extraction,deleted,expected',[('review',False,True),('complete',False,True),('review',True,False)])
 def test_review_status_has_reprocess_control(monkeypatch,extraction,deleted,expected):
     data={'source_reference':'synthetic/receipt.pdf','evidence_id':1,'expense_pk':None,
           'processing_status':'review_required','extraction_status':extraction,'deleted':deleted,'evidence':{},'expense':{}}

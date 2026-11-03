@@ -300,3 +300,16 @@ def test_weight_detail_never_overrides_explicit_different_package_size():
     clear='Apples 3kg $5.50\n1.250 kg @ $4.40 / kg'
     _,decisions=resolve([base],[observation(clear,'paddle',1),observation(clear,'tesseract',2)])
     assert not decisions[0]['candidates']
+
+
+def test_original_layout_confidence_supplies_a_real_opponent_for_single_clear_reading():
+    base='Noodle Pack 80G $1.87'
+    clear='Noodle Pack 80G $1.57'
+    layout=[{'page_number':1,'lines':[{'line_number':1,'text':base,'confidence':63}]}]
+    items,ds=resolve([base],[observation(clear,'paddle',1,confidence=99)],layout_pages=layout)
+    assert items[0].line_total==1.57
+    assert ds[0]['base_confidence']==63
+    assert ds[0]['reason']=='clear_currency_reading_with_confidence_margin'
+    layout[0]['lines'][0]['text']='unrelated row'
+    items,ds=resolve([base],[observation(clear,'paddle',1,confidence=99)],layout_pages=layout)
+    assert items[0].line_total==1.87 and ds[0]['status']=='conflict'

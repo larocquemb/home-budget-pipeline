@@ -14,7 +14,7 @@ DISPLAY_TIMEZONE = ZoneInfo("America/Winnipeg")
 
 def esc(value: Any) -> str:
     if isinstance(value, datetime) and value.utcoffset() is not None:
-        value = value.astimezone(DISPLAY_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S %Z")
+        value = value.astimezone(DISPLAY_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
     return html.escape("" if value is None else str(value))
 
 

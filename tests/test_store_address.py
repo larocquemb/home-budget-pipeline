@@ -75,3 +75,11 @@ def test_fresh_and_cached_parsers_extract_same_location(tmp_path, monkeypatch):
     cached, _ = parallel_ingest._parse_scan_cached(source, tmp_path, tmp_path / 'cache', False)
     assert direct.store == cached.store == 'ExampleMart Riverside'
     assert direct.store_address == cached.store_address == '120 Riverbank Boulevard'
+
+
+def test_numbered_highway_address_with_unit_is_a_store_address():
+    for address in ('Unit 4-250 PTH14 North','250 Highway 14','Suite 7-350 PR 209 S','250 Hwy 14 West','Unit 4-250 Main Street'):
+        assert ingest.extract_store_address('Example Market\n'+address+'\nServed by: Clerk')==address
+    assert ingest.extract_store_address('Example Market\nShip to\nUnit 4-250 PTH14 North') is None
+    for metadata in ('Unit 4-250 PTH14 North $8.20','PTH14 North','Route reference 12345','204.555.1234'):
+        assert ingest.extract_store_address('Example Market\n'+metadata) is None
