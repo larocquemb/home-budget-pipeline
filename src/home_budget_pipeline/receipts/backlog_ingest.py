@@ -385,7 +385,8 @@ def process_candidate(
 ) -> str:
     """Trace one atomic receipt attempt without changing its DB semantics."""
     reference = _source_reference(candidate, root)
-    with telemetry.receipt_process(reference, candidate.source_sha256) as receipt_trace:
+    with telemetry.receipt_process(reference, candidate.source_sha256,
+                                   request_id=reprocess_request_id) as receipt_trace:
         status = _process_candidate(
             conn,
             candidate,

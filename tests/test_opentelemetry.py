@@ -104,6 +104,37 @@ def test_receipt_trace_exports_ocr_before_root_finishes(in_memory_telemetry):
     )
 
 
+def test_receipt_is_searchable_from_progress_before_parent_or_page_finishes(in_memory_telemetry):
+    exporter=in_memory_telemetry
+    request='22222222-2222-4222-8222-222222222222'
+    with telemetry.receipt_process('synthetic/example.pdf','d'*64,request_id=request) as receipt:
+        marker=exporter.get_finished_spans()[0]
+        assert marker.name=='receipt.progress'
+        assert marker.attributes['receipt.phase']=='claimed'
+        assert marker.attributes['receipt.source_reference']=='synthetic/example.pdf'
+        assert marker.attributes['receipt.request_id']==request
+        page=telemetry.start_operation('receipt.page.processing')
+        ocr=telemetry.start_ocr_pass({'pass_id':1})
+        telemetry.record_ocr_pass_completion(ocr,{'pass_id':1,'engine':'paddle','seconds':2.5,'status':'success'})
+        finished=exporter.get_finished_spans()
+        assert all(s.name not in {'receipt.process','receipt.page.processing','receipt.ocr.pass'} for s in finished)
+        progress=finished[-1]
+        assert progress.attributes['receipt.phase']=='ocr_pass_completed'
+        assert progress.attributes['ocr.engine']=='paddle'
+        assert progress.attributes['ocr.pass.duration']==2.5
+        assert progress.context.trace_id==marker.context.trace_id
+        record=logging.LogRecord('test',logging.INFO,__file__,1,'OCR progress',(),None)
+        payload=json.loads(telemetry.JsonLogFormatter().format(record))
+        assert payload['source_reference']=='synthetic/example.pdf' and payload['request_id']==request
+        telemetry.finish_operation(ocr)
+        telemetry.finish_operation(page)
+        receipt.finish('succeeded')
+    with telemetry.span('unrelated'):
+        pass
+    assert 'receipt.source_reference' not in exporter.get_finished_spans()[-1].attributes
+    assert 'source_reference' not in json.loads(telemetry.JsonLogFormatter().format(record))
+
+
 def test_structured_ocr_log_has_trace_and_database_correlation(in_memory_telemetry):
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)

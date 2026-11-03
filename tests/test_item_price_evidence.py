@@ -238,3 +238,65 @@ def test_price_correction_preserves_an_unambiguous_printed_section():
         items=[ingest.ScannedItem('Greek Yogurt',68.40,'DAIRY')])
     apply(r,[text],[observation('Greek Yogurt $8.40','paddle',1),observation('Greek Yogurt $8.40','tesseract',2)])
     assert r.items[0].line_total==8.40 and r.items[0].department=='DAIRY'
+
+
+def test_phone_header_and_punctuated_weight_details_are_not_products():
+    text='Unit 9-456 North Avenue\n306.555.1234\nGROCERY\nRice $7.20\n\\ 0.250 kg @ $8.40 / kg\nBeans $3.10'
+    assert [(r['name'],float(r['amount'])) for r in rows(text)] == [('Rice',7.20),('Beans',3.10)]
+
+
+def test_complete_split_block_keeps_tax_markers_and_adjustments_in_order():
+    text='GROCERY\n$12.40\nC\n$6.70\nC\nFirst Sauce\nBerry Drink\n$0.15\nR\n+EHC\n$3.10\nC\nBread Rolls'
+    assert [(r['name'],float(r['amount'])) for r in rows(text)] == [('First Sauce',12.40),('Berry Drink',6.85),('Bread Rolls',3.10)]
+
+
+def test_mixed_split_order_is_local_to_complete_blocks():
+    text='$4.20 C\nApples\n0.500 kg @ $8.40 / kg\nFresh Herbs\n$3.10 C\nGreen Onions\n$2.20 C'
+    assert [(r['name'],float(r['amount'])) for r in rows(text)] == [('Apples',4.20),('Fresh Herbs',3.10),('Green Onions',2.20)]
+
+
+def test_overlap_uses_later_corroboration_only_when_earlier_row_observed_price():
+    first='Bread Rolls $3.20\nBerry Pie $8.40'
+    later='Bread Rolls $3.20\nBerry Pie $9.40'
+    obs=[observation(first,'tesseract',1,page=1),observation(later,'paddle',2,page=1),
+         observation(later,'paddle',3,page=2),observation(later,'tesseract',4,page=2)]
+    items,decisions=resolve([first,later],obs)
+    assert [i.line_total for i in items]==[3.20,9.40]
+    assert len(decisions[-1]['overlap_sources'])==1
+    # Two conflicting uncorroborated prices cannot establish a collapsed overlap.
+    items,_=resolve([first,later],obs[:2])
+    assert len(items)==4
+
+
+def test_missing_discount_requires_two_engine_net_and_gross_evidence():
+    from home_budget_pipeline.receipts.item_evidence import apply,corroborated_missing_adjustments
+    from home_budget_pipeline.receipts.ingest import ScannedReceipt
+    text='Berry Pie $9.40\nINSTANT SAVINGS\nYOU SAVED $1.00'
+    clear='Berry Pie $9.40\nINSTANT SAVINGS -$0.70\nYOU SAVED $1.00'
+    receipt=ScannedReceipt(path='synthetic.pdf',source_reference='synthetic.pdf',source_sha256='a'*64,
+                          merchant=None,transaction_date=None,receipt_id=None,subtotal=8.70,tax=0,total=8.70,
+                          page_text=[text],text=text)
+    apply(receipt,[text],[observation(clear,'paddle',1),observation(clear,'tesseract',2)])
+    assert corroborated_missing_adjustments(receipt,1)
+    assert receipt.field_decisions['items']['recovered_adjustments'][0]['discount']=='0.70'
+    assert not corroborated_missing_adjustments(receipt,2)
+    receipt.field_decisions['items']['rows'][0]['candidates']=receipt.field_decisions['items']['rows'][0]['candidates'][:1]
+    assert not corroborated_missing_adjustments(receipt,1)
+
+
+def test_identical_printed_weight_detail_can_match_damaged_description_digits():
+    base='Apples Crisp 1 sp $9.33\n1.250 kg @ $4.40 / kg'
+    clear='Apples Crisp $5.50\n1.250 kg @ $4.40 / kg'
+    items,decisions=resolve([base],[observation(clear,'paddle',1),observation(clear,'tesseract',2)])
+    assert items[0].line_total==5.50
+    assert decisions[0]['status']=='selected'
+    changed=clear.replace('1.250','1.350')
+    _,decisions=resolve([base],[observation(changed,'paddle',1),observation(changed,'tesseract',2)])
+    assert not decisions[0]['candidates']
+
+
+def test_weight_detail_never_overrides_explicit_different_package_size():
+    base='Apples 2kg $9.33\n1.250 kg @ $4.40 / kg'
+    clear='Apples 3kg $5.50\n1.250 kg @ $4.40 / kg'
+    _,decisions=resolve([base],[observation(clear,'paddle',1),observation(clear,'tesseract',2)])
+    assert not decisions[0]['candidates']

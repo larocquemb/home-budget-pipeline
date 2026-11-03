@@ -33,6 +33,21 @@ def read(query, **params):
         raise HTTPException(503, 'Receipt graph is unavailable; receipt processing continues') from None
 
 
+def latest_receipt_trace_url(source_reference):
+    """Search current receipt progress, without requiring a completed run ID."""
+    base=os.getenv('GRAPH_GRAFANA_URL','https://grafana.idc.brownrook.net').rstrip('/')
+    if not source_reference or urlparse(base).scheme not in {'http','https'}:
+        return None
+    environment=os.getenv('OTEL_DEPLOYMENT_ENVIRONMENT',os.getenv('DEPLOYMENT_ENVIRONMENT','development'))
+    query=('{ span.receipt.source_reference = '+json.dumps(source_reference)+
+           ' && resource.deployment.environment.name = '+json.dumps(environment)+' } with (most_recent=true)')
+    uid=os.getenv('GRAPH_TEMPO_UID','home-budget-tempo')
+    panes={'A':{'datasource':uid,'queries':[{'refId':'A','datasource':{'uid':uid,'type':'tempo'},
+                'queryType':'traceql','query':query,'limit':20,'spanPruning':False}],
+                'range':{'from':'now-1h','to':'now'}}}
+    return base+'/explore?'+urlencode({'schemaVersion':1,'panes':json.dumps(panes)})
+
+
 def links(node):
     props = node['properties']
     result = []

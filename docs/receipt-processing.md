@@ -188,6 +188,20 @@ counts still include active deliveries waiting for the lock; these events give
 the more detailed lifecycle. Reload workers to emit the new events; historical
 waits cannot be reconstructed as explicit events.
 
+Use **Latest traces** on a receipt detail page to search Tempo by receipt source
+and environment, newest first, without copying a run ID. New receipt traces
+export a short `receipt.progress` marker as soon as processing is claimed,
+including before a cache-lock wait. Child spans and structured logs retain the
+same receipt/request identity. Each completed OCR pass exports another progress
+marker immediately; its full engine span still receives consensus metadata.
+This lets filename searches find an active trace before the parent/page closes.
+Progress markers are instantaneous observations, not OCR duration measurements.
+Allow for exporter/Collector ingestion and sampling delay; refresh the search
+to see new markers. An active trace may initially show a missing parent until
+the parent is exported. Reload workers for new runs; old trace attributes are
+not rewritten. Completion of computation still differs from collector commit
+and from whether an extraction needs review.
+
 To re-extract all existing caches in one command:
 
 ```bash
@@ -575,3 +589,30 @@ environment's cache, use `--ocr-cache PATH --artifact-uri-prefix PREFIX` with
 that environment's explicit settings. Preview and expected-version checks
 remain required; OCR-pass evidence contributes to the plan version/audit hash.
 Dates, amounts, item rows and category decisions are preserved.
+
+
+Receipts in review offer **Reprocess** beside their status on the detail page.
+This authenticated action queues fresh OCR through the same confirmed publisher
+used by `ledger receipts reprocess`. It reports queued separately from finished;
+refresh the detail page or use Latest traces to follow the result. A failed
+publication can be retried with the same request identity. Deleted, merged and
+archived sources must be restored before processing.
+
+Item evidence retains split-column order, tax markers and adjustments. Complete
+ordered name/amount blocks can be joined without borrowing a neighbouring price;
+ambiguous or incomplete blocks remain conservative. Overlapping scan sections
+retain the later corroborated reading when its price was also observed on the
+earlier conflicting row. A missing selected-text discount can be resolved only
+when two engines corroborate that row's gross and net amounts. Printed weight
+and unit-price details can establish a damaged description's row identity;
+explicit product sizes remain distinct. Subtotal agreement is a validation check,
+never a source for inventing an item price.
+
+Receipt list/detail status follows the newest submitted reprocess request across
+page refreshes. It displays Queued for reprocessing, Reprocessing (a recent
+worker heartbeat), then Saving results until that exact request is committed.
+The previous extraction remains visible separately while processing. An expired
+heartbeat shows status unavailable instead of claiming ongoing processing or
+completion. Reprocess is disabled while the request is queued, running or saving;
+the endpoint also rejects a new request during that period. Retrying the same
+request identity returns its existing queued acknowledgement.

@@ -9,6 +9,7 @@ import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 from urllib.parse import quote, urlencode, urlparse
 
 from fastapi import Depends, Header, HTTPException, Query, Request
@@ -30,7 +31,7 @@ from ..receipts.catalogue import RECEIPT_CATALOGUE
 from .render import esc, money, page, pager
 from . import receipt_graph as _receipt_graph_routes
 from .receipt_delete_html import control as deletion_control, script as deletion_script
-from .receipt_fields import RECEIPT_DATETIME_SQL, receipt_datetime, receipt_date_note, duplicate_expense, receipt_status
+from .receipt_fields import RECEIPT_DATETIME_SQL, receipt_datetime, receipt_date_note, duplicate_expense, receipt_status, request_processing_status, LATEST_REQUEST_JOIN, LATEST_REQUEST_COLUMNS
 
 _RECEIPT_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _EXPENSE_DETAIL_RE = re.compile(rf"^{re.escape(BASE_PATH)}/expenses/(\d+)$")
@@ -62,7 +63,9 @@ def _receipt_status_html(receipt):
     if canonical:
         return f'<a href="{BASE_PATH}/expenses/{canonical}">Duplicate of {canonical}</a>'
     status = receipt_status(receipt)
-    return 'Incomplete scan' if status == 'incomplete_scan' else esc(status)
+    return {'incomplete_scan':'Incomplete scan','queued':'Queued for reprocessing',
+            'processing':'Reprocessing','saving_results':'Saving results',
+            'progress_unknown':'Processing status unavailable'}.get(status,esc(status))
 
 
 def receipt_label(expense_pk, merchant, receipt_date, total) -> str:
@@ -102,6 +105,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
     joins = f"""
           FROM {RECEIPT_CATALOGUE} r
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
+          {LATEST_REQUEST_JOIN}
           LEFT JOIN LATERAL (
               SELECT id, expense_pk, evidence_type, merchant, transaction_datetime, total,
                      extraction_status, extraction_confidence, raw_payload
@@ -154,7 +158,7 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
                COALESCE(re.extraction_status, e.extraction_status) AS extraction_status,
                (COALESCE(re.raw_payload->'review_reasons' ? 'possible_missing_page_content',FALSE)
                 OR COALESCE(re.raw_payload->'field_decisions'->'scan_completeness'->>'value' = 'possible_page_gap',FALSE)) AS incomplete_scan,
-               re.extraction_confidence
+               re.extraction_confidence, {LATEST_REQUEST_COLUMNS}
          {joins} {where}
          ORDER BY {sort_column} {sort_direction} NULLS LAST,
                   r.source_reference DESC
@@ -174,9 +178,10 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
                r.first_discovered_at, r.updated_at,
                COALESCE(s.status, CASE WHEN re.evidence_type='electronic' THEN 'imported' END) AS processing_status, s.attempts, s.last_error,
                s.first_attempted_at, s.last_attempted_at, s.completed_at,
-               re.id AS evidence_id, re.expense_pk
+               re.id AS evidence_id, re.expense_pk, {LATEST_REQUEST_COLUMNS}
           FROM {RECEIPT_CATALOGUE} r
           LEFT JOIN ingest.receipt_processing_status s USING (source_sha256)
+          {LATEST_REQUEST_JOIN}
           LEFT JOIN LATERAL (
               SELECT id, expense_pk, evidence_type
                 FROM budget.receipt_evidence
@@ -422,6 +427,48 @@ def accept_recommendation(source_sha256: str, request: AcceptRecommendationReque
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+class ReprocessRequest(BaseModel):
+    request_id: UUID
+
+
+@app.post(f"{BASE_PATH}/api/receipts/{{source_sha256}}/reprocess", status_code=202)
+def reprocess_receipt(source_sha256: str, body: ReprocessRequest,
+                      x_ledger_action: str | None = Header(default=None),
+                      service: LedgerQueryService = Depends(query_service),
+                      identity: dict[str, str] = Depends(authenticated_identity)):
+    if x_ledger_action != 'reprocess-receipt':
+        raise HTTPException(403, 'Receipt processing action header missing')
+    if not _RECEIPT_KEY_RE.fullmatch(source_sha256):
+        raise HTTPException(422, 'Invalid receipt identity')
+    records=service._fetch(f"""SELECT r.source_reference, r.source_archived, {LATEST_REQUEST_COLUMNS},
+        EXISTS(SELECT 1 FROM budget.receipt_evidence e WHERE e.source_sha256=r.source_sha256
+               AND (e.raw_payload ? 'receipt_deleted' OR e.raw_payload ? 'duplicate_merge')) AS discarded
+        FROM {RECEIPT_CATALOGUE} r {LATEST_REQUEST_JOIN} WHERE r.source_sha256=%s""", (source_sha256,))
+    if not records:
+        raise HTTPException(404, 'Receipt not found')
+    record=records[0]
+    if record.get('source_archived') or record.get('discarded'):
+        raise HTTPException(409, 'Restore the receipt and its source before processing')
+    if request_processing_status(record) in {'queued','processing','saving_results'}:
+        if record.get('latest_request_id')==str(body.request_id):
+            return {'status':'queued','request_id':str(body.request_id),
+                    'source_reference':record['source_reference']}
+        raise HTTPException(409, 'This receipt is already reprocessing; refresh for its current status')
+    broker=os.getenv('RABBITMQ_URL')
+    if not broker:
+        raise HTTPException(503, 'Receipt processing queue is unavailable')
+    from ..receipts.message import ReceiptMessage
+    from ..receipts.queue_ingest import publish_reprocess_message
+    message=ReceiptMessage(source_sha256, record['source_reference'], version=2,
+                           request_id=str(body.request_id))
+    try:
+        publish_reprocess_message(message, broker, os.getenv('HOME_BUDGET_QUEUE_PREFIX','receipts.v1'))
+    except Exception:
+        raise HTTPException(503, 'Publication was not confirmed; retry to reuse this request') from None
+    return {'status':'queued', 'request_id':message.request_id,
+            'source_reference':message.source_reference}
 
 
 @app.post(f"{BASE_PATH}/api/receipts/{{source_sha256}}/refresh-items")
@@ -684,6 +731,17 @@ def receipt_page(
     if deleted:
         canonical_expense = '<span class="muted">Retained in history</span>'
     extraction_html = '' if duplicate or deleted else f"<div><strong>Extraction</strong><br>{esc(receipt.get('extraction_status'))}</div>"
+    process_control = ''
+    if not (deleted or duplicate) and request_processing_status(receipt) not in {'queued','processing','saving_results'} and receipt.get('extraction_status') == 'review':
+        process_control = (f'<form id="reprocess-receipt" data-receipt="{esc(source_sha256)}">'
+                           '<button type="submit">Reprocess</button>'
+                           '<span id="reprocess-status" role="status"></span></form>')
+    progress_note = ''
+    if request_processing_status(receipt):
+        progress_note = ('<small>Latest request submitted '+esc(receipt.get('request_submitted_at'))+
+                         '. Previous extraction remains below until new results are saved.</small>')
+    elif receipt.get('request_completed_at'):
+        progress_note = '<small>Latest request saved '+esc(receipt['request_completed_at'])+'</small>'
     header = f"""<div class="card"><div class="grid">
 <div><strong>Receipt</strong><br>{esc(filename)}</div>
 <div><strong>Merchant</strong><br>{esc(merchant)}</div>
@@ -693,7 +751,7 @@ def receipt_page(
 <div><strong>Tax registration (RT)</strong><br>{esc(evidence.get('tax_registration_number') or expense.get('tax_registration_number'))}</div>
 <div><strong>Date/time</strong><br>{esc(receipt_date)}<small>{esc(receipt_date_note(evidence)) if not (duplicate or deleted) else ""}</small></div>
 <div><strong>Total</strong><br>{money(total)}</div>
-<div><strong>Status</strong><br>{_receipt_status_html(receipt)}</div>
+<div><strong>Status</strong><br>{_receipt_status_html(receipt)}{process_control}{progress_note}</div>
 {extraction_html}
 <div><strong>Source</strong><br>{esc(source_reference)}</div>
 <div><strong>Accounting record</strong><br>{canonical_expense}</div>
@@ -770,7 +828,10 @@ def receipt_page(
     body = (
         f'<p><a href="{BASE_PATH}/receipts">← All receipts</a> · '
         f'<a href="{BASE_PATH}/dashboard">Accounting &amp; review dashboard</a> · '
-        f'<a href="{receipt_graph_url(source_sha256)}">Provenance</a></p>'
+        f'<a href="{receipt_graph_url(source_sha256)}">Provenance</a>'
+        + (f' · <a href="{esc(trace_url)}">Latest traces</a>'
+           if (trace_url := _receipt_graph_routes.latest_receipt_trace_url(receipt.get('source_reference'))) else '')
+        + '</p>'
         + header
         + review_html
         + '<style>.receipt-recommendation{min-width:18rem;max-width:26rem;overflow-wrap:anywhere}.receipt-recommendation pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>'
@@ -810,6 +871,19 @@ for(const form of document.querySelectorAll('.accept-recommendation')) {
     } catch(error) {status.textContent=error.message;button.disabled=false;}
   });
 }
+const processForm=document.getElementById('reprocess-receipt');
+if(processForm) processForm.addEventListener('submit',async event=>{
+  event.preventDefault();const button=processForm.querySelector('button'),status=document.getElementById('reprocess-status');
+  button.disabled=true;status.textContent='Queuing receipt…';
+  processForm.dataset.request ||= crypto.randomUUID();
+  try{
+    const response=await fetch(""" + json.dumps(BASE_PATH) + """+'/api/receipts/'+encodeURIComponent(processForm.dataset.receipt)+'/reprocess',{
+      method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Ledger-Action':'reprocess-receipt'},
+      body:JSON.stringify({request_id:processForm.dataset.request})});
+    const result=await response.json();if(!response.ok)throw Error(result.detail||'Unable to queue receipt');
+    status.textContent='Queued. Processing includes fresh OCR; refresh this page for the result.';
+  }catch(error){status.textContent=error.message;button.disabled=false;}
+});
 const refresh=document.getElementById('refresh-items');
 if(refresh) refresh.addEventListener('submit',async event=>{
   event.preventDefault();const button=refresh.querySelector('button'),status=document.getElementById('refresh-status');
