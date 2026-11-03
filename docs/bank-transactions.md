@@ -47,12 +47,12 @@ Record confirmed ownership with a private JSON plan:
 ```sh
 ledger --env-file .env.dev transactions ownership --plan /private/ownership.json
 ledger --env-file .env.dev transactions ownership --plan /private/ownership.json \
-  --apply --actor 'Paul La Rocque'
+  --apply
 ```
 
 For the legacy bank tables originally stored with receipts, first provision the
 accounting database, then preview and apply `ledger --env-file .env.dev transactions
-migrate-receipt-store --apply --actor 'Paul La Rocque'` (omit `--apply` to preview).
+migrate-receipt-store --apply` (omit `--apply` to preview).
 Migration verifies every copied row and leaves the legacy originals intact.
 After switching, new reads/writes use only the accounting database. Retired bank
 tables in receipt bootstrap are compatibility scaffolding, not active storage.
@@ -63,6 +63,11 @@ and cannot silently relink an allocation to a different receipt. A source not ye
 reimported remains a saved link rather than becoming a different expense.
 Destroying the shared PostgreSQL volume would still affect both databases;
 separate databases do not replace independent accounting backups.
+
+CLI audit identity defaults to `LEDGER_ACTOR` in the selected environment file,
+or the local OS username. No name is required on import commands. `--actor` is an
+optional override; it records who ran an operation and does not assign ownership
+or a payer to transactions.
 
 ## Import CIBC MasterCard CSV
 
@@ -78,11 +83,11 @@ posting date unknown; it does not claim the date is the original purchase date.
 Card ownership and payer are not inferred from a masked card number.
 
 ```sh
-ledger --env-file .env.dev transactions setup --apply --actor 'Paul La Rocque'
+ledger --env-file .env.dev transactions setup --apply
 ledger --env-file .env.dev transactions import-cibc /private/path/export.csv \
   --account-reference 'CIBC MasterCard'
 ledger --env-file .env.dev transactions import-cibc /private/path/export.csv \
-  --account-reference 'CIBC MasterCard' --apply --actor 'Paul La Rocque'
+  --account-reference 'CIBC MasterCard' --apply
 ```
 
 Preview is the default. Setup adds tables without rebuilding existing data.
@@ -120,7 +125,7 @@ Then import them:
 
 ```sh
 ledger --env-file .env.dev transactions import-tree /private/transactions/raw/cibc \
-  --apply --actor 'Paul La Rocque'
+  --apply
 ```
 
 The command validates all files before writing and applies the folder in one
@@ -138,7 +143,7 @@ ledger --env-file .env.dev transactions import-tree /private/transactions/raw/ci
   --account-currency visa/x1234=USD
 ```
 
-Review the per-file currency in the preview, then add `--apply --actor 'Paul La Rocque'`.
+Review the per-file currency in the preview, then add `--apply`.
 The account retains its registered currency for subsequent folder imports; a
 conflicting override is rejected. For a single file, use `--currency USD` with
 `import-cibc`. Original USD amounts are retained without conversion. Folder totals
@@ -163,7 +168,7 @@ ledger --env-file .env.dev transactions import-cibc /private/export.csv \
   --account-reference 'CIBC Smart x1234' --account-type chequing --account-last4 1234
 ```
 
-Add `--apply --actor 'Paul La Rocque'` after reviewing its preview. Use `savings`
+Add `--apply` after reviewing its preview. Use `savings`
 for a savings account. Do not pass the full bank account number.
 
 
@@ -178,7 +183,7 @@ ledger --env-file .env.dev transactions import-tree /private/transactions/raw \
 
 Currency overrides are relative to the selected root. An institution root uses
 `visa/x1234=USD`; the shared root uses `cibc/visa/x1234=USD`. Registered account
-currencies are reused on later imports. Add `--apply --actor 'Paul La Rocque'`
+currencies are reused on later imports. Add `--apply`
 after reviewing the preview.
 
 The same shared root supports CIBC Canadian USD accounts under `cibc/us/x1234/`
@@ -220,7 +225,7 @@ private JSON list:
 ```sh
 ledger --env-file .env.dev transactions account-profile --plan /private/accounts.json
 ledger --env-file .env.dev transactions account-profile --plan /private/accounts.json \
-  --apply --actor 'Paul La Rocque'
+  --apply
 ```
 
 Profile registration creates metadata only, without importing transactions or
@@ -278,7 +283,7 @@ The same operation is available with a private JSON plan:
 ```sh
 ledger --env-file .env.dev transactions allocate 123 --plan /private/path/split.json
 ledger --env-file .env.dev transactions allocate 123 --plan /private/path/split.json \
-  --apply --actor 'Paul La Rocque'
+  --apply
 ```
 
 Version zero means no allocation has been saved yet. Existing allocations and

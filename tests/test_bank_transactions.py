@@ -75,6 +75,20 @@ def test_long_bank_references_are_redacted_in_parsed_fields():
     assert '123456789012' not in str(row)
 
 
+def test_import_audit_identity_defaults_from_configuration_or_os_user(monkeypatch):
+    from home_budget_pipeline.cli import build_parser
+    from home_budget_pipeline.transactions import commands
+    monkeypatch.setenv('LEDGER_ACTOR','Configured reviewer')
+    args=build_parser().parse_args(['transactions','import-tree','/private/raw','--apply'])
+    assert args.actor=='Configured reviewer'
+    monkeypatch.delenv('LEDGER_ACTOR')
+    monkeypatch.setattr(commands.getpass,'getuser',lambda:'local-operator')
+    args=build_parser().parse_args(['transactions','import-tree','/private/raw','--apply'])
+    assert args.actor=='local-operator'
+    args=build_parser().parse_args(['transactions','import-tree','/private/raw','--apply','--actor','Explicit reviewer'])
+    assert args.actor=='Explicit reviewer'
+
+
 def test_balanced_split_and_refund_use_decimal_cents():
     rows = normalize_allocations([{'amount':'0.10','category':'Food'}, {'amount':'0.20','category':'Home','expense_pk':5}], Decimal('.30'))
     assert sum(r['amount'] for r in rows) == Decimal('.30')

@@ -1,5 +1,7 @@
 """Ledger transaction operations; previews are the default."""
 import json
+import os
+import getpass
 from pathlib import Path
 
 from .workflows import ensure_schema, import_cibc, save_allocations, receipt_candidates
@@ -45,7 +47,8 @@ def add_commands(commands):
     profile.add_argument('--apply',action='store_true')
     profile.set_defaults(handler=run)
     for p in (setup, imp, tree, split, migration, ownership,profile):
-        p.add_argument('--actor', default=None, help='Required for writes; person responsible for the operation.')
+        p.add_argument('--actor', default=os.getenv('LEDGER_ACTOR') or getpass.getuser(),
+                       help='Optional audit identity override; defaults to LEDGER_ACTOR or the local OS user.')
 
 
 def run(args):
@@ -62,7 +65,7 @@ def run(args):
                    'description': t['description'], 'candidates': receipt_candidates(service, t)} for t in rows]
     else:
         if args.apply and not (args.actor or '').strip():
-            raise ValueError('--actor is required for writes')
+            raise ValueError('Audit identity is empty; configure LEDGER_ACTOR or use --actor')
         with bank._connect() as conn:
             if action == 'setup':
                 if args.apply:
