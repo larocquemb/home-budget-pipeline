@@ -114,7 +114,7 @@ Purchases are positive; credits and payments are negative.</p></div>'''
     body += '<form id="allocation-form"><table><thead><tr><th>Amount</th><th>Category</th><th>Person</th><th>Expense ID (optional)</th><th>Note</th><th></th></tr></thead><tbody id="allocations">'
     rows = allocations or [{'amount': tx['amount'], 'category': '', 'person': '', 'expense_pk': None, 'note': ''}]
     for row in rows:
-        body += allocation_html(row)
+        body += allocation_html(row, suggestions)
     body += '''</tbody></table><button type="button" id="add-allocation">Add split</button>
 <p id="allocation-balance" role="status"></p>
 <label>Reason for this allocation or correction <input name="reason" required maxlength="2000"></label>
@@ -123,17 +123,19 @@ Purchases are positive; credits and payments are negative.</p></div>'''
         WHERE transaction_id=%s ORDER BY version DESC''', (transaction_id,))
     body += '<h2>Allocation history</h2>' + table(history, (('version','Version'),('actor','Recorded by'),('reason','Reason'),('recorded_at','Recorded at')))
     import json
-    body += '<template id="allocation-template">' + allocation_html({}) + '</template>'
+    body += '<template id="allocation-template">' + allocation_html({}, suggestions) + '</template>'
     body += '<script>\nconst allocationVersion=' + str(version) + ';\nconst bankCents=' + str(int(tx['amount']*100)) + ';\nconst allocationUrl=' + json.dumps(f'{BASE_PATH}/api/transactions/{transaction_id}/allocations') + ';\n' + SCRIPT + '</script>'
     return page('Bank transaction '+str(transaction_id), body, base_path=BASE_PATH, identity=identity)
 
 
-def allocation_html(row):
+def allocation_html(row, suggestions):
     fields = [('amount','number','step="0.01" required'),('category','text','required maxlength="200"'),
               ('person','text','maxlength="2000"'),('expense_pk','number','min="1" step="1"'),('note','text','maxlength="2000"')]
     sha=row.get('receipt_source_sha256') or ''
     link=(f'<small><a href="{BASE_PATH}/receipts/{esc(sha)}">Saved receipt source</a></small>' if sha else '')
-    return '<tr>' + ''.join(f'<td><input aria-label="{esc(k)}" data-field="{k}" type="{t}" {attrs} value="{esc(row.get(k))}"></td>' for k,t,attrs in fields) + f'<td><input type="hidden" data-field="receipt_source_sha256" value="{esc(sha)}">{link}<button type="button" data-remove>Remove</button></td></tr>'
+    options = ''.join(f'<option value="{esc(r["expense_pk"])}" data-receipt-source="{esc(r.get("receipt_source_sha256"))}">{esc(r["merchant"])} · {esc(r["transaction_datetime"])} · {money(r["total"])} · Expense {esc(r["expense_pk"])}</option>' for r in suggestions)
+    selection = ('<label>Choose receipt <select data-receipt-choice><option value="">Select a candidate…</option>' + options + '</select></label>') if suggestions else ''
+    return '<tr>' + ''.join(f'<td><input aria-label="{esc(k)}" data-field="{k}" type="{t}" {attrs} value="{esc(row.get(k))}"></td>' for k,t,attrs in fields) + f'<td><input type="hidden" data-field="receipt_source_sha256" value="{esc(sha)}">{link}{selection}<button type="button" data-remove>Remove</button></td></tr>'
 
 
 SCRIPT = r'''
@@ -144,7 +146,17 @@ function balance(){
 }
 document.getElementById('add-allocation').onclick=()=>{rows.append(document.getElementById('allocation-template').content.cloneNode(true));balance();};
 rows.onclick=e=>{if(e.target.hasAttribute('data-remove')){e.target.closest('tr').remove();balance();}};
-rows.oninput=balance;balance();
+rows.onchange=e=>{
+  if(e.target.hasAttribute('data-receipt-choice') && e.target.value){
+    const row=e.target.closest('tr');
+    row.querySelector('[data-field="expense_pk"]').value=e.target.value;
+    row.querySelector('[data-field="receipt_source_sha256"]').value=e.target.selectedOptions[0].dataset.receiptSource || '';
+  }
+};
+rows.oninput=e=>{
+  if(e.target.dataset.field==='expense_pk')e.target.closest('tr').querySelector('[data-field="receipt_source_sha256"]').value='';
+  balance();
+};balance();
 form.onsubmit=async e=>{
   e.preventDefault();const status=document.getElementById('allocation-status'),button=form.querySelector('[type="submit"]');button.disabled=true;
   try{
@@ -227,10 +239,10 @@ These are reporting equivalents, not bank settlement costs. Transfers and card p
     for row in result['rows']:
         rows.append({**row,'conversion':row['conversion_status'].replace('_',' '),
                      'fx_rate':f"{row['fx_rate']:.4f}" if row['fx_rate'] is not None else ''})
-    body+=table(rows,(('bank_date','Bank date'),('account','Account'),('account_last4','Ending'),('description','Description'),
+    body+=table(rows,(('transaction_id','Transaction'),('bank_date','Bank date'),('account','Account'),('account_last4','Ending'),('description','Description'),
         ('original_amount','Original amount'),('currency','Currency'),('amount_cad','CAD equivalent'),
         ('fx_rate','CAD per unit'),('rate_date','Rate date'),('conversion','Conversion')),
-        money_columns={'original_amount','amount_cad'})
+        links={'transaction_id':f'{BASE_PATH}/transactions/{{value}}'},money_columns={'original_amount','amount_cad'})
     body+=pager(BASE_PATH+'/cad-ledger',limit=limit,offset=offset,row_count=len(rows),total_count=result['total'],
                 query={'account':account,'from_date':from_date,'to_date':to_date,'direction':direction})
     body+='''<script>document.getElementById('refresh-fx').onclick=async function(){

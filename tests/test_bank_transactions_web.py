@@ -76,7 +76,7 @@ def test_refresh_button_requires_identity_action_and_runs_immediate_manual_scan(
 
 def test_cad_ledger_renders_missing_rates_without_zero_conversion(client,monkeypatch):
     from home_budget_pipeline.transactions import ledger
-    row={'bank_date':date(2026,3,12),'account':'Example','account_last4':'1234','description':'<script>unsafe</script>',
+    row={'transaction_id':8,'bank_date':date(2026,3,12),'account':'Example','account_last4':'1234','description':'<script>unsafe</script>',
          'original_amount':Decimal('10.25'),'currency':'USD','amount_cad':None,'fx_rate':None,'rate_date':None,'conversion_status':'missing_rate'}
     monkeypatch.setattr(ledger,'ledger_rows',lambda *args,**kw:{'rows':[row],'total':1,'missing_rates':1})
     response=client.get(f'{BASE_PATH}/cad-ledger',headers={'X-Forwarded-User':'reviewer'})
@@ -84,3 +84,28 @@ def test_cad_ledger_renders_missing_rates_without_zero_conversion(client,monkeyp
     assert '&lt;script&gt;unsafe&lt;/script&gt;' in response.text
     assert '$0.00' not in response.text
     assert 'Update CAD rates' in response.text and 'Import / refresh transactions' in response.text
+    assert f'href="{BASE_PATH}/transactions/8"' in response.text
+
+
+def test_receipt_links_render_confirmed_transactions_and_survive_accounting_outage():
+    from home_budget_pipeline.web.receipt_bank_links import render
+    class Service:
+        def receipt_bank_links(self, sha):
+            assert sha == 'a'*64
+            return [{'transaction_id':8,'description':'<unsafe>','linked_amount':Decimal('4.25'),
+                     'bank_amount':Decimal('12.34'),'currency':'CAD'}]
+    text=render(Service(), 'a'*64)
+    assert f'href="{BASE_PATH}/transactions/8"' in text
+    assert '$4.25' in text and '$12.34' in text and '&lt;unsafe&gt;' in text
+    class Unavailable:
+        def receipt_bank_links(self, sha):
+            raise ValueError('private connection details')
+    text=render(Unavailable(), 'a'*64)
+    assert 'unavailable' in text and 'private connection details' not in text
+
+
+def test_candidate_selection_and_saved_receipt_source_are_available_in_each_split():
+    text=web.allocation_html({'receipt_source_sha256':'b'*64}, [
+        {'expense_pk':17,'merchant':'<market>','transaction_datetime':date(2026,3,12),'total':Decimal('12.34')}])
+    assert 'data-receipt-choice' in text and 'value="17" data-receipt-source="">&lt;market&gt;' in text
+    assert f'href="{BASE_PATH}/receipts/{"b"*64}"' in text

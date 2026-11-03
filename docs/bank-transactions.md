@@ -335,3 +335,17 @@ ledger --env-file .env.dev transactions allocate 123 --plan /private/path/split.
 Version zero means no allocation has been saved yet. Existing allocations and
 their version are visible in the transaction page and allocation history. A bank
 transaction remains one record; splitting it does not create duplicate spending.
+
+
+### Navigate between receipts and bank activity
+
+Open a transaction from either Transactions or the CAD ledger. Review its
+receipt candidates, choose a receipt in an allocation row, supply the category
+and reason, and save the confirmed allocations. Split rows must balance to the
+original bank amount. Candidate suggestions alone do not create a link.
+
+Saved allocation rows link to the receipt source. Each receipt shows **Linked
+bank transactions**, with links back to transaction details and both the full
+bank amount and the amount allocated to that receipt. Links use the original
+receipt source identity, so a reused expense ID after a receipt rebuild cannot
+attach an unrelated receipt. Existing CAD currency validation still applies.

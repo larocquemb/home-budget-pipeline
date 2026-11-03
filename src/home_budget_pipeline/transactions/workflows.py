@@ -218,7 +218,7 @@ def receipt_candidates(service, transaction):
     if transaction['amount'] <= 0 or transaction.get('currency','CAD')!='CAD':
         return ()
     rows = service._fetch(f'''
-        SELECT DISTINCT ON (e.id) e.id AS expense_pk, COALESCE(re.merchant,e.store_name) AS merchant,
+        SELECT DISTINCT ON (e.id) e.id AS expense_pk, re.source_sha256 AS receipt_source_sha256, COALESCE(re.merchant,e.store_name) AS merchant,
                re.raw_payload->>'store' AS store, {RECEIPT_DATETIME_SQL} AS transaction_datetime,
                CASE WHEN re.transaction_datetime IS NOT NULL THEN 'receipt extraction'
                     ELSE 'existing expense date; verify source' END AS date_source,
