@@ -126,6 +126,41 @@ collector. Reload the collector before publishing results from an updated
 worker. Cached re-extraction can restore page boundaries missing from older
 database records without rerunning OCR.
 
+Every rendered PDF page and image/TIFF frame is independently checked for small
+scan tilt before recognition. Consistent angle estimates across printed regions
+permit rotation; level, blank and uncertain pages remain unchanged. One page's
+angle is reused across its DPI variants, never across different pages. Tesseract,
+Paddle, high-detail recognition and layout OCR all receive leveled images.
+Rotation expands the canvas to retain edges and never changes the original file.
+This corrects tilt within 12 degrees, not perspective warping or sideways pages.
+
+Pass provenance retains the deskew policy, regional evidence, applied angle,
+input/output sizes and source-to-deskew-canvas transform. Enhanced passes also
+record subsequent cropping and resizing; their word boxes refer to that final
+recognition image. Layout provenance records each page separately. Loki's OCR
+completion events include `deskew_angle_degrees` and `deskew_status`. Existing
+cache text cannot be deskewed retrospectively: use fresh OCR after reloading
+workers to apply this preprocessing to old receipts.
+
+Repeated product names retain separate physical row identities. An unpriced
+occurrence stays available for corroboration; a later priced occurrence cannot
+take its place. Price-column tax markers remain attached to their item for
+discount handling. Only verified cross-page overlap is removed.
+
+Header selection can corroborate an observed brand spelling printed separately
+in the logo and an address-anchored branch header, with an independent engine
+supporting that branch. Phone selection similarly permits a unique cross-engine
+reading to resolve isolated digit errors. Conflicting supported values stay
+unresolved; optional phone uncertainty does not force financial review. These
+decisions retain original run/pass/line references. Reload collectors before
+publishing the newly supported merchant/store/phone decision fields.
+
+The Tesseract TSV reader treats recognized quotes literally. Older mixed
+text/TSV observations retain their original bytes; header extraction can use a
+valid prefix before the corrupted table section, without treating table rows
+as printed header text. A cached re-extraction can apply these field and item
+rules to existing deskewed OCR results without another recognition run.
+
 A page join with no observed item overlap and failed financial reconciliation
 adds `possible_missing_page_content`. This is a warning: missing overlap alone
 does not prove that paper content was omitted. Electronic documents are not

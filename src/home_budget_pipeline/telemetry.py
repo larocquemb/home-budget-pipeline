@@ -546,6 +546,9 @@ def record_ocr_pass_completion(pass_span: Any, metric: Mapping[str, Any]) -> Non
                             "psm": metric.get("psm"),
                             "variant": metric.get("variant"),
                             "status": metric.get("status"),
+                            **({'deskew_angle_degrees':metric['provenance']['preprocessing']['deskew']['angle_degrees'],
+                                'deskew_status':metric['provenance']['preprocessing']['deskew']['status']}
+                               if (metric.get('provenance') or {}).get('preprocessing',{}).get('deskew') else {}),
                         },
                     )
         finally:
@@ -639,6 +642,7 @@ class JsonLogFormatter(logging.Formatter):
         "event", "processing_state", "receipt_name", "worker_id", "worker_host", "attempt_id",
         "batch_id", "batch_total", "queue",
         "source_sha256", "source_reference", "request_id", "processing_phase", "lock_wait_seconds",
+        "deskew_angle_degrees", "deskew_status",
     )
 
     def format(self, record: logging.LogRecord) -> str:

@@ -22,6 +22,7 @@ class PaymentProvenance:
 
 
 CARD_METHOD_PATTERNS = (
+    (re.compile(r'^\s*CARD\s+(?:TYPE\s*[:;]?\s*)?MC\b',re.I), 'Mastercard'),
     (re.compile(r"\bmaster\s*card\b|\bmastercard\b", re.I), "Mastercard"),
     (re.compile(r"\bvisa\b", re.I), "Visa"),
     (re.compile(r"\bamex\b|american\s+express", re.I), "Amex"),
@@ -93,10 +94,14 @@ def extract_card_last4(text: str) -> Optional[str]:
 
 
 def extract_payment_provenance(text: str) -> PaymentProvenance:
-    priority_lines = [line for line in text.splitlines() if PAYMENT_EVIDENCE_RE.search(line)]
+    priority_lines = [line for line in text.splitlines() if PAYMENT_EVIDENCE_RE.search(line)
+                      and not re.search(r'\b(?:earn|learn|apply|rewards|points)\b',line,re.I)]
+    terminal = {method for line in text.splitlines()
+                if re.match(r'^\s*CARD\s+(?:TYPE\s*[:;]?\s*)?(?:MC|VISA|MASTER\s*CARD|AMEX|DEBIT|INTERAC)\b',line,re.I)
+                and (method:=normalize_payment_method(line))}
 
-    method: Optional[str] = None
-    for line in priority_lines:
+    method: Optional[str] = next(iter(terminal)) if len(terminal)==1 else None
+    for line in priority_lines if not terminal else ():
         candidate = normalize_payment_method(line)
         if candidate:
             method = candidate

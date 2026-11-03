@@ -60,6 +60,10 @@ def rows(text, *, placeholders=False, provenance=None, include_quantity=False):
         i,j=names[ni],prices[pi]
         lines[i] += ' ' + lines[j]
         lines[j] = ''
+        if j+1<len(lines) and re.fullmatch(r'[A-Z]{1,2}',lines[j+1]):
+            # A separate price-column tax marker is part of that priced row,
+            # not a new unreadable product that breaks its discount link.
+            lines[j+1] = ''
         money_lines[i] = j
     paired_prices={prices[pi] for pi in pairs.values()}
     for j in prices:
@@ -70,7 +74,8 @@ def rows(text, *, placeholders=False, provenance=None, include_quantity=False):
     for item in items:
         key = scan._line_key(item.item_name)
         found = next((i for i in range(start,len(lines)) if
-                      scan._line_key(product_name(lines[i]) or '') == key),None)
+                      scan.parse_money(lines[i]) is not None
+                      and scan._line_key(product_name(lines[i]) or '') == key),None)
         if found is None:
             continue
         result.append(dict(name=item.item_name,amount=Decimal(str(item.line_total)),

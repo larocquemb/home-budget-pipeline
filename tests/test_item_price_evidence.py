@@ -35,6 +35,21 @@ def test_ambiguous_missing_price_is_not_borrowed_between_products():
     assert float(rows('First Sauce\n$5.20\nSecond Sauce\n$6.20')[1]['amount'])==6.20
 
 
+def test_later_priced_repeat_is_not_attributed_to_an_earlier_unpriced_product():
+    text='First Sauce $4.20\nBerry Pint\n1 @ 2/$4.60\nYOU SAVED $1.00\nBerry Pint $2.30\nBread Rolls $3.20'
+    result=rows(text,placeholders=True)
+    assert [(r['line_number'],float(r['amount']) if r['amount'] is not None else None) for r in result]==[(1,4.2),(2,None),(5,2.3),(6,3.2)]
+    good='First Sauce $4.20\nBerry Pint $2.30\nBerry Pint $2.30\nBread Rolls $3.20'
+    items,decisions=resolve([text],[observation(good,'paddle',1),observation(good,'tesseract',2)])
+    assert [i.line_total for i in items]==[4.20,2.30,2.30,3.20]
+    assert [d['line_number'] for d in decisions]==[1,2,5,6]
+
+
+def test_separate_price_tax_marker_does_not_break_the_next_discount():
+    text='First Sauce\n$5.20\nC\nINSTANT SAVINGS\n-$0.60\nBread Rolls\n$3.20'
+    assert [(r['name'],float(r['amount'])) for r in rows(text)]==[('First Sauce',4.60),('Bread Rolls',3.20)]
+
+
 def test_missing_duplicate_purchase_is_not_assigned_to_both():
     items,decisions=resolve(['Berry Pint $62.30\nBerry Pint $62.30'],
         [observation('Berry Pint $2.30','paddle',1),observation('Berry Pint $2.30','tesseract',2)])
