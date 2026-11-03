@@ -311,7 +311,8 @@ def test_duplicate_cache_request_reuses_locked_valid_artifact(tmp_path, monkeypa
     assert "completed=1/1" in caplog.text
 
 
-def test_cache_rebuild_lock_serializes_the_same_source(tmp_path):
+def test_cache_rebuild_lock_serializes_the_same_source(tmp_path, caplog):
+    caplog.set_level('INFO', logger=queue.__name__)
     first_acquired = Event()
     release_first = Event()
     second_attempting = Event()
@@ -344,6 +345,29 @@ def test_cache_rebuild_lock_serializes_the_same_source(tmp_path):
     assert not first.is_alive()
     assert not second.is_alive()
     assert second_acquired.is_set()
+    events = [r for r in caplog.records if getattr(r,'event','').startswith('cache_lock_')]
+    assert [r.event for r in events].count('cache_lock_waiting') == 1
+    acquired = [r for r in events if r.event == 'cache_lock_acquired']
+    assert len(acquired) == 2
+    assert all(r.source_sha256 == source_sha256 and r.lock_wait_seconds >= 0 for r in acquired)
+    from home_budget_pipeline.telemetry import JsonLogFormatter
+    waiting = next(r for r in events if r.event == 'cache_lock_waiting')
+    assert json.loads(JsonLogFormatter().format(waiting))['processing_phase'] == 'waiting_for_cache_lock'
+
+
+def test_cache_lock_logs_request_identity_and_releases_after_failure(tmp_path, caplog):
+    caplog.set_level('INFO', logger=queue.__name__)
+    message = ReceiptMessage('b'*64, 'example.pdf', version=2,
+                             request_id='740023b1-a078-4914-b074-81bd7129bb75')
+    with pytest.raises(RuntimeError):
+        with queue.cache_rebuild_lock(tmp_path, message.source_sha256, message=message):
+            raise RuntimeError('synthetic parser failure')
+    with queue.cache_rebuild_lock(tmp_path, message.source_sha256, message=message):
+        pass
+    assert not any(getattr(r,'event',None)=='cache_lock_waiting' for r in caplog.records)
+    acquired = [r for r in caplog.records if getattr(r,'event',None)=='cache_lock_acquired']
+    assert len(acquired)==2
+    assert all(r.request_id==message.request_id and r.source_reference=='example.pdf' for r in acquired)
 
 
 def test_cli_exposes_dedicated_collector(monkeypatch):

@@ -35,6 +35,13 @@ def receipt_status(receipt):
         return 'deleted'
     if duplicate_expense(receipt):
         return 'duplicate'
+    evidence = receipt.get('evidence') or receipt
+    payload = evidence.get('raw_payload') or {}
+    scan = (payload.get('field_decisions') or {}).get('scan_completeness') or {}
+    if (receipt.get('incomplete_scan')
+            or 'possible_missing_page_content' in (payload.get('review_reasons') or [])
+            or scan.get('value') == 'possible_page_gap'):
+        return 'incomplete_scan'
     status = receipt.get('processing_status')
     if status:
         return status

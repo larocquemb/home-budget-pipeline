@@ -33,6 +33,26 @@ def test_canonical_receipt_keeps_review_status_instead_of_becoming_duplicate():
     assert 'Duplicate of' not in receipt_app._receipt_status_html(data)
 
 
+def test_incomplete_scan_detail_explains_status_without_approving_extraction():
+    service = Service(False)
+    service.evidence['raw_payload'] = {'review_reasons':['possible_missing_page_content']}
+    data = receipt_app._receipt_detail(service, 'a'*64)
+    assert data['receipt_status'] == 'incomplete_scan'
+    assert data['processing_status'] == 'review_required'
+    assert data['extraction_status'] == 'review'
+    html = receipt_app.receipt_page('a'*64,service=service,identity={'user':'test'})
+    assert '<strong>Status</strong><br>Incomplete scan' in html
+    assert '<strong>Extraction</strong><br>review' in html
+
+
+def test_incomplete_scan_list_label_preserves_deleted_and_duplicate_precedence():
+    row = {'incomplete_scan':True,'processing_status':'review_required'}
+    assert receipt_app._receipt_status_html(row) == 'Incomplete scan'
+    assert receipt_app._receipt_status_html({**row,'deleted':True}) == 'Deleted'
+    assert 'Duplicate of 22' in receipt_app._receipt_status_html({**row,'duplicate_of':22})
+    assert receipt_app._receipt_status_html({'processing_status':'review_required'}) == 'review_required'
+
+
 def test_retained_list_copy_and_canonical_link_use_correct_source():
     result = receipt_app._receipt_status_html({'duplicate_of':22,'processing_status':'review_required'})
     assert result == '<a href="/ledger/expenses/22">Duplicate of 22</a>'

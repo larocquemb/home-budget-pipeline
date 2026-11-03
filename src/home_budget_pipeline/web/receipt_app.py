@@ -61,7 +61,8 @@ def _receipt_status_html(receipt):
     canonical = duplicate_expense(receipt)
     if canonical:
         return f'<a href="{BASE_PATH}/expenses/{canonical}">Duplicate of {canonical}</a>'
-    return esc(receipt_status(receipt))
+    status = receipt_status(receipt)
+    return 'Incomplete scan' if status == 'incomplete_scan' else esc(status)
 
 
 def receipt_label(expense_pk, merchant, receipt_date, total) -> str:
@@ -151,6 +152,8 @@ def _receipt_list(service: LedgerQueryService, *, limit: int, offset: int,
                {RECEIPT_DATETIME_SQL} AS transaction_datetime,
                COALESCE(re.total, e.expense_total) AS total,
                COALESCE(re.extraction_status, e.extraction_status) AS extraction_status,
+               (COALESCE(re.raw_payload->'review_reasons' ? 'possible_missing_page_content',FALSE)
+                OR COALESCE(re.raw_payload->'field_decisions'->'scan_completeness'->>'value' = 'possible_page_gap',FALSE)) AS incomplete_scan,
                re.extraction_confidence
          {joins} {where}
          ORDER BY {sort_column} {sort_direction} NULLS LAST,
