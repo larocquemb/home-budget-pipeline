@@ -109,7 +109,9 @@ Purchases are positive; credits and payments are negative.</p></div>'''
                                 ('transaction_datetime','Receipt date'),('date_source','Date source'),('date_distance_days','Days apart'),
                                 ('total','Total'),('extraction_status','Extraction')),
                   links={'expense_pk': f'{BASE_PATH}/expenses/{{value}}'}, money_columns={'total'})
-    body += '<h2>Confirmed allocations</h2><p>Use one row for a whole purchase, or add rows for a split. Expense links are optional. Categories and people apply to these bank allocations and leave receipt line items intact.</p>'
+    from .receipt_categories import render as render_receipt_categories
+    body += render_receipt_categories(service, suggestions, allocations)
+    body += '<h2>Confirmed allocations</h2><p>Linked receipts supply categories from their line items. Correct categories on the receipt. For activity without a receipt, enter a category here. Use split rows to assign portions to receipts or people.</p>'
     body += '<style>#allocation-form input{box-sizing:border-box;width:100%;min-width:0}#allocation-form table{table-layout:fixed}#allocation-form th:last-child{width:5rem}</style>'
     body += '<form id="allocation-form"><table><thead><tr><th>Amount</th><th>Category</th><th>Person</th><th>Expense ID (optional)</th><th>Note</th><th></th></tr></thead><tbody id="allocations">'
     rows = allocations or [{'amount': tx['amount'], 'category': '', 'person': '', 'expense_pk': None, 'note': ''}]
@@ -131,10 +133,16 @@ Purchases are positive; credits and payments are negative.</p></div>'''
 def allocation_html(row, suggestions):
     fields = [('amount','number','step="0.01" required'),('category','text','required maxlength="200"'),
               ('person','text','maxlength="2000"'),('expense_pk','number','min="1" step="1"'),('note','text','maxlength="2000"')]
+    row = dict(row)
+    linked = bool(row.get('expense_pk') or row.get('receipt_source_sha256'))
+    if linked:
+        row['category'] = 'Receipt line items'
     sha=row.get('receipt_source_sha256') or ''
     link=(f'<small><a href="{BASE_PATH}/receipts/{esc(sha)}">Saved receipt source</a></small>' if sha else '')
     options = ''.join(f'<option value="{esc(r["expense_pk"])}" data-receipt-source="{esc(r.get("receipt_source_sha256"))}">{esc(r["merchant"])} · {esc(r["transaction_datetime"])} · {money(r["total"])} · Expense {esc(r["expense_pk"])}</option>' for r in suggestions)
     selection = ('<label>Choose receipt <select data-receipt-choice><option value="">Select a candidate…</option>' + options + '</select></label>') if suggestions else ''
+    if linked:
+        fields = [(k,t,attrs + (' readonly' if k=='category' else '')) for k,t,attrs in fields]
     return '<tr>' + ''.join(f'<td><input aria-label="{esc(k)}" data-field="{k}" type="{t}" {attrs} value="{esc(row.get(k))}"></td>' for k,t,attrs in fields) + f'<td><input type="hidden" data-field="receipt_source_sha256" value="{esc(sha)}">{link}{selection}<button type="button" data-remove>Remove</button></td></tr>'
 
 
@@ -146,15 +154,24 @@ function balance(){
 }
 document.getElementById('add-allocation').onclick=()=>{rows.append(document.getElementById('allocation-template').content.cloneNode(true));balance();};
 rows.onclick=e=>{if(e.target.hasAttribute('data-remove')){e.target.closest('tr').remove();balance();}};
+function receiptCategory(row){
+  const linked=Boolean(row.querySelector('[data-field="expense_pk"]').value || row.querySelector('[data-field="receipt_source_sha256"]').value);
+  const category=row.querySelector('[data-field="category"]');
+  if(linked)category.value='Receipt line items';
+  else if(category.readOnly)category.value='';
+  category.readOnly=linked;
+}
 rows.onchange=e=>{
   if(e.target.hasAttribute('data-receipt-choice') && e.target.value){
     const row=e.target.closest('tr');
     row.querySelector('[data-field="expense_pk"]').value=e.target.value;
     row.querySelector('[data-field="receipt_source_sha256"]').value=e.target.selectedOptions[0].dataset.receiptSource || '';
+    receiptCategory(row);
   }
 };
 rows.oninput=e=>{
   if(e.target.dataset.field==='expense_pk')e.target.closest('tr').querySelector('[data-field="receipt_source_sha256"]').value='';
+  if(e.target.dataset.field==='expense_pk')receiptCategory(e.target.closest('tr'));
   balance();
 };balance();
 form.onsubmit=async e=>{

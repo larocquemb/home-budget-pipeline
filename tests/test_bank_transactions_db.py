@@ -162,6 +162,7 @@ def test_bank_allocations_survive_receipt_schema_drop_and_recycled_expense_id(ba
         assert conn.execute('SELECT count(*) AS n FROM accounting.financial_transactions').fetchone()['n']==3
         saved=conn.execute('SELECT * FROM accounting.transaction_allocations').fetchone()
         assert saved['receipt_source_sha256']=='a'*64
+        assert saved['category']=='Receipt line items'
     bank_service=LedgerQueryService(connect,accounting_connect=connect)
     assert bank_service.receipt_bank_links('a'*64)[0]['transaction_id']==txid
     assert bank_service.receipt_bank_links('b'*64)==()

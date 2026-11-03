@@ -140,7 +140,7 @@ def normalize_allocations(rows, total):
             raise ValueError('Allocation amounts must be nonzero amounts in cents') from None
         if (amount > 0) != (total > 0):
             raise ValueError('Allocation signs must agree with the bank amount')
-        category = row.get('category')
+        category = 'Receipt line items' if row.get('expense_pk') or row.get('receipt_source_sha256') else row.get('category')
         if not isinstance(category, str) or not category.strip() or len(category) > 200:
             raise ValueError('Each allocation needs a category (at most 200 characters)')
         expense_pk = row.get('expense_pk')

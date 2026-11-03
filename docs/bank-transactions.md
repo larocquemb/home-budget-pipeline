@@ -356,3 +356,14 @@ that account's activity, sorted by bank date. The account selection stays in
 place when changing date/order filters or paging. Use **All accounts** to
 return to the combined CAD ledger. Linked cards on a shared account open the
 same account ledger.
+
+
+Linked transaction categories come from the receipt's current line-item
+categories. Transaction details show category totals for linked and candidate
+receipts, distinguishing unconfirmed candidates. Correct categories on the
+receipt; linked allocation rows record “Receipt line items” as their category
+source rather than an independent category. Unlinked bank activity can still
+have a manually assigned category. The receipt totals cover all its items and
+are not prorated across split payments. Tax, fees and differences from the bank
+amount are not automatically assigned to item categories; uncategorized items
+and missing amounts stay visible for review.

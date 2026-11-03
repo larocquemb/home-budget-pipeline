@@ -126,3 +126,21 @@ def test_accounts_link_to_exact_account_and_keep_selection_when_paging(client, m
     assert '<input type="hidden" name="account_id" value="7">' in response.text
     assert 'offset=100' in response.text and 'account_id=7' in response.text
     assert 'All accounts</a>' in response.text
+
+
+def test_receipt_categories_are_read_from_items_and_linked_category_is_not_editable():
+    from home_budget_pipeline.web.receipt_categories import render
+    from home_budget_pipeline.transactions.workflows import normalize_allocations
+    row={'amount':'12.34','expense_pk':17,'category':'Unrelated category'}
+    assert normalize_allocations([row],Decimal('12.34'))[0]['category']=='Receipt line items'
+    text=web.allocation_html(row,())
+    assert 'value="Receipt line items"' in text and 'maxlength="200" readonly' in text
+    class Service:
+        def _fetch(self,sql,params):
+            assert params==([17],)
+            return [{'expense_pk':17,'category':'Groceries','item_amount':Decimal('7.34'),'missing_amounts':0},
+                    {'expense_pk':17,'category':'Uncategorized','item_amount':Decimal('4.00'),'missing_amounts':1}]
+    text=render(Service(), [{'expense_pk':17}], [{'expense_pk':17}])
+    assert text.count('$7.34')==1 and 'Uncategorized' in text
+    assert 'whole receipt' in text and 'not distributed' in text
+    assert f'href="{BASE_PATH}/expenses/17"' in text
