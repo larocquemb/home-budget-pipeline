@@ -229,10 +229,10 @@ CRCT IO PUFF 12x1 93573447143 1 @ .01-"""
         self.assertEqual((payment.payment_method, payment.card_last4), ("Visa", "9809"))
         self.assertEqual(scan.extract_totals(combined)[2], -42.54)
 
-    def test_total_and_subtotal_recover_missing_combined_tax(self):
+    def test_printed_tax_is_preserved_when_another_tax_component_is_missing(self):
         self.assertEqual(
             scan.extract_totals("SUBTOTAL 37.98-\nGST 1,90-\nVisa *9809 42.54-"),
-            (-37.98, -4.56, -42.54),
+            (-37.98, -1.90, -42.54),
         )
 
     def test_refund_total_restores_item_minus_signs_lost_by_ocr(self):

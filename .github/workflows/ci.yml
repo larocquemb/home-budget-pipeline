@@ -108,6 +108,9 @@ jobs:
             -f sql/schema_phase1.sql
           psql -h localhost -U test -d home_budget \
             -v ON_ERROR_STOP=1 \
+            -f sql/financial_transactions.sql
+          psql -h localhost -U test -d home_budget \
+            -v ON_ERROR_STOP=1 \
             -f sql/receipt_processing.sql
           psql -h localhost -U test -d home_budget \
             -v ON_ERROR_STOP=1 \
@@ -134,7 +137,7 @@ jobs:
           TEST_DATABASE_URL: postgresql://test:test@localhost:5432/home_budget
           TEST_RABBITMQ_URL: amqp://test:test@localhost:5672/%2F
           TEST_NEO4J_URI: bolt://localhost:7687
-        run: python -m pytest -v -m integration
+        run: make test-integration PYTHON=python
 
   build-and-push:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

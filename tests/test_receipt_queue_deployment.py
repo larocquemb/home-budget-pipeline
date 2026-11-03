@@ -180,4 +180,7 @@ def test_default_deployment_remains_local_and_ci_exercises_live_broker():
     integration = workflow["jobs"]["postgres-integration"]
     assert "rabbitmq" in integration["services"]
     step = next(step for step in integration["steps"] if "TEST_RABBITMQ_URL" in step.get("env", {}))
-    assert "-m integration" in step["run"]
+    assert "make test-integration" in step["run"]
+    makefile = (ROOT / "Makefile").read_text()
+    integration_target = makefile.split("test-integration:\n", 1)[1].split("\n\n", 1)[0]
+    assert "-m integration" in integration_target

@@ -273,6 +273,8 @@ def apply(receipt, pages, observations):
     from .departments import assign_items
     items,decisions=resolve(pages,observations)
     if not decisions:
+        from .scan_completeness import apply as apply_scan_completeness
+        apply_scan_completeness(receipt,pages,observations)
         return
     prior_sections=defaultdict(set)
     for old in receipt.items:
@@ -295,3 +297,5 @@ def apply(receipt, pages, observations):
         'candidates':[{**candidate,'item_name':d['item_name'],
                        'item_page':d['page_number'],'item_line':d['line_number']}
                       for d in decisions for candidate in d['candidates']]}
+    from .scan_completeness import apply as apply_scan_completeness
+    apply_scan_completeness(receipt,pages,observations)

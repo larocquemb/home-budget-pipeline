@@ -25,7 +25,7 @@ def test_existing_purchase_merge_is_audited_and_excluded_from_spend():
                 pk = conn.execute("INSERT INTO budget.expenses(source,order_id,receipt_item_subtotal,expense_total) VALUES ('scanned',%s,%s,%s) RETURNING id",
                     ('scan:'+sha,24.60,total)).fetchone()['id']
                 expenses.append(pk)
-                conn.execute("INSERT INTO budget.expense_items(expense_pk,item_name,line_total,budget_category) VALUES (%s,'Synthetic product',%s,'Groceries')",(pk,total))
+                conn.execute("INSERT INTO budget.expense_items(expense_pk,item_name,line_total) VALUES (%s,'Synthetic product',%s)",(pk,total))
                 conn.execute("INSERT INTO budget.receipt_evidence(expense_pk,evidence_type,source_reference,source_sha256,merchant,total,raw_text) VALUES (%s,'scanned',%s,%s,'Synthetic Shop',%s,'Original OCR')",(pk,sha+'.pdf',sha,total))
             original_items = conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=ANY(%s) ORDER BY id',(expenses,)).fetchall()
         args = {'reason':'Verified synthetic duplicate','actor':'Test reviewer','auto_select':True}
@@ -104,7 +104,7 @@ def test_receipt_delete_restore_preserves_items_and_active_totals(shared):
     try:
         with connect() as conn:
             expense = conn.execute("INSERT INTO budget.expenses(source,order_id,expense_total) VALUES ('scanned',%s,12.34) RETURNING id",(str(uuid.uuid4()),)).fetchone()['id']
-            conn.execute("INSERT INTO budget.expense_items(expense_pk,item_name,line_total,budget_category) VALUES (%s,'Synthetic product',12.34,'Groceries')",(expense,))
+            conn.execute("INSERT INTO budget.expense_items(expense_pk,item_name,line_total) VALUES (%s,'Synthetic product',12.34)",(expense,))
             for sha in shas:
                 conn.execute("INSERT INTO budget.receipt_evidence(expense_pk,evidence_type,source_reference,source_sha256,raw_text) VALUES (%s,'scanned',%s,%s,'Original OCR')",(expense,sha+'.pdf',sha))
             before = conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=%s',(expense,)).fetchall()

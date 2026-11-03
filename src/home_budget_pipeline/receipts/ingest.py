@@ -1375,7 +1375,7 @@ def _summary_lines(text: str) -> List[str]:
     lines = text.splitlines()
     result = []
     index = 0
-    label = re.compile(r'^(?:sub\s*total|total(?:\s+tax)?|tax|(?:[A-Z]\s+)?(?:gst|pst|rst|hst|qst)(?:\s*/\s*(?:gst|pst|rst|hst|qst))?(?:\s*\([A-Z]{2,3}\))?)\s*[:=-]?$', re.I)
+    label = re.compile(r'^(?:\d+(?:\.\d+)?\s*%\s+CST|sub\s*total|total(?:\s+tax)?|tax|(?:[A-Z]\s+)?(?:gst|pst|rst|hst|qst)(?:\s*/\s*(?:gst|pst|rst|hst|qst))?(?:\s*\([A-Z]{2,3}\))?)\s*[:=-]?$', re.I)
     amount = re.compile(r"^[-(]?\$?\s*\d[\d ,.'’]*[.)-]?\s*[A-Z]{0,2}$", re.I)
     while index < len(lines):
         line = normalize_line(lines[index])
@@ -1447,7 +1447,8 @@ def extract_totals(text: str, *, infer_tax: bool = True) -> Tuple[Optional[float
         line = normalize_line(raw)
         total_like = bool(TOTAL_LIKE_RE.search(line))
         subtotal_like = bool(re.search(r"\b(?:sub\s*tota[l1]?|suptotal)\b", line, re.I))
-        tax_like = bool(re.search(r"\b(?:total\s+tax|tax|gst|pst|rst|hst|qst)\b", line, re.I))
+        tax_like = bool(re.search(r"\b(?:total\s+tax|tax|gst|pst|rst|hst|qst)\b", line, re.I)) or (
+            subtotal is not None and bool(re.match(r"^\s*\d+(?:\.\d+)?\s*%\s+CST\b",line,re.I)))
         tender_like = bool(TENDER_LINE_RE.search(line)) and not re.search(
             r"\b(?:change|auth|reference|card\s+number)\b", line, re.I
         )
@@ -1499,7 +1500,7 @@ def extract_totals(text: str, *, infer_tax: bool = True) -> Tuple[Optional[float
         subtotal = round(total - (tax or 0), 2)
     if infer_tax and subtotal is not None and total is not None and subtotal * total > 0:
         derived_tax = round(abs(total) - abs(subtotal), 2)
-        if 0 <= derived_tax <= max(0.01, abs(subtotal) * 0.30) and (tax is None or abs(tax) < derived_tax):
+        if 0 <= derived_tax <= max(0.01, abs(subtotal) * 0.30) and tax is None:
             tax = derived_tax if total > 0 else -derived_tax
     return subtotal, tax, total
 
@@ -1658,7 +1659,7 @@ def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
     if not receipt.text.strip() or (not receipt.items and receipt.total is None and receipt.extraction_confidence <= 0.15):
         return ["unreadable_ocr"]
     reasons: List[str] = []
-    reasons.extend('conflicting_ocr_' + name for name, decision in receipt.field_decisions.items()
+    reasons.extend(('possible_missing_page_content' if name=='scan_completeness' else 'conflicting_ocr_' + name) for name, decision in receipt.field_decisions.items()
                    if decision.get('status') == 'conflict')
     if not receipt.merchant:
         reasons.append("missing_merchant")

@@ -121,6 +121,27 @@ path, preserving manual allocation protections and validation warnings. Missing
 or mismatched caches fail instead of silently running OCR. Publication is
 asynchronous; check the saved Ledger result after collection.
 
+Multi-page scanned receipts retain separate page texts through the worker and
+collector. Reload the collector before publishing results from an updated
+worker. Cached re-extraction can restore page boundaries missing from older
+database records without rerunning OCR.
+
+A page join with no observed item overlap and failed financial reconciliation
+adds `possible_missing_page_content`. This is a warning: missing overlap alone
+does not prove that paper content was omitted. Electronic documents are not
+assumed to require scanner overlap. Never adjust prices to force reconciliation.
+
+The receipt detail page compares related sources when the merchant and full
+purchase timestamp agree, known card suffixes do not conflict, and another
+retained source has complete, reconciled items. It shows a link to that source,
+additional item blocks between matched anchors and differing extracted prices.
+Legacy flattened text can identify missing readings, but cannot locate a page
+boundary. OCR loss and cropped source content still require image inspection.
+Reference items are never inserted into the incomplete source. Re-scan missing
+content with overlap, or discard the inferior copy using Delete after checking
+the retained complete source. Fresh OCR can improve recognition and retain new
+geometry; it cannot recover pixels absent from the scan.
+
 To re-extract all existing caches in one command:
 
 ```bash

@@ -6,6 +6,18 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolate_receipt_and_proxy_settings(monkeypatch):
+    """Tests opt into extra input roots and proxy secrets explicitly.
+
+    A developer's sourced environment must not add real electronic receipts to
+    a synthetic batch or change the authentication contract of a web fixture.
+    Secret-enforcement tests set their own value after this fixture runs.
+    """
+    monkeypatch.delenv('LEDGER_PROXY_SECRET', raising=False)
+    monkeypatch.delenv('ELECTRONIC_RECEIPT_SOURCE_ROOT', raising=False)
+
+
 @pytest.fixture
 def arsene_development_environment():
     """Generate synthetic dev credentials in memory; never embed credential URLs."""
