@@ -404,7 +404,7 @@ def _read_or_create_pages(
         },
         "engine_options": {"psm": "6"},
         "usage": {},
-        "provenance": {},
+        "provenance": {"page_preprocessing":getattr(layout_pages,'preprocessing',[])},
     }
     ocr_passes.append(geometry_metric)
     telemetry.record_ocr_pass_completion(geometry_span, geometry_metric)

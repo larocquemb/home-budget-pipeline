@@ -205,7 +205,9 @@ def _run_tesseract_candidate(path: Path, *, dpi: int, psm: str) -> OCRCandidate:
     if proc.returncode != 0:
         return OCRCandidate("", (), dpi, psm, status="failed", error_type="nonzero_exit")
     grouped: dict[Tuple[str, str, str, str], list[Tuple[str, float, int, int, int, int]]] = {}
-    for row in csv.DictReader(io.StringIO(proc.stdout), delimiter="\t"):
+    # Tesseract emits literal recognized quote characters, not CSV quoting.
+    # Otherwise one quote word can swallow later TSV rows into its text field.
+    for row in csv.DictReader(io.StringIO(proc.stdout), delimiter="\t", quoting=csv.QUOTE_NONE):
         word = (row.get("text") or "").strip()
         if row.get("level") != "5" or not word:
             continue
@@ -289,12 +291,13 @@ def _run_paddle_candidate(image, *, dpi: int) -> OCRCandidate:
         return OCRCandidate("", (), dpi, "paddle", "paddle", "failed", type(exc).__name__)
 
 
-def _prepare_ocr_image(image):
+def _prepare_ocr_image(image, *, preprocessing=None):
     """Crop scanner whitespace and enhance faint thermal-receipt printing."""
     from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
     gray = image.convert("L")
     width, height = gray.size
+    crop_box = (0, 0, width, height)
     # Requiring several dark pixels per row/column ignores isolated scanner
     # marks while retaining the receipt edges and printed content.
     min_column_ink = max(12, height // 200)
@@ -312,16 +315,21 @@ def _prepare_ocr_image(image):
     ys = [y for y, value in enumerate(rows) if value >= row_threshold]
     if xs and ys:
         margin = max(12, min(width, height) // 100)
-        gray = gray.crop((
+        crop_box = (
             max(0, min(xs) - margin),
             max(0, min(ys) - margin),
             min(width, max(xs) + margin + 1),
             min(height, max(ys) + margin + 1),
-        ))
+        )
+        gray = gray.crop(crop_box)
     gray = ImageOps.autocontrast(gray, cutoff=1)
     gray = ImageEnhance.Contrast(gray).enhance(3.0)
     if gray.width < 1800:
         gray = gray.resize((gray.width * 2, gray.height * 2))
+    if preprocessing is not None:
+        preprocessing['enhancement'] = {'input_size':[width,height],
+            'crop_box':list(crop_box),'output_size':list(gray.size),
+            'operations':['grayscale','crop','autocontrast','contrast','resize','unsharp_mask']}
     return gray.filter(ImageFilter.UnsharpMask(radius=1, percent=180, threshold=2))
 
 
@@ -595,6 +603,7 @@ def _run_traced_ocr_pass(
     dpi: int,
     psm: str,
     variant: str,
+    preprocessing: dict | None = None,
 ) -> tuple[OCRCandidate, tuple[Any, dict, int] | None]:
     """Run one engine pass and keep its span open for consensus attributes."""
     if pass_metrics is None:
@@ -623,6 +632,8 @@ def _run_traced_ocr_pass(
             "run_uuid": run_uuid,
             "pass_id": pass_id,
         }
+        if preprocessing is not None:
+            metric['provenance']['preprocessing'] = preprocessing
         pass_metrics.append(metric)
         telemetry.record_ocr_pass_completion(pass_span, metric)
         telemetry.finish_ocr_pass(pass_span, metric)
@@ -638,6 +649,8 @@ def _run_traced_ocr_pass(
         "run_uuid": run_uuid,
         "pass_id": pass_id,
     }
+    if preprocessing is not None:
+        metric['provenance']['preprocessing'] = preprocessing
     pass_metrics.append(metric)
     telemetry.record_ocr_pass_completion(pass_span, metric)
     return candidate, (pass_span, metric, completed_at)
@@ -657,6 +670,8 @@ def _ocr_rendered_pages(
     page_span = None
     try:
         for idx in range(page_count):
+            from .deskew import apply as deskew
+            deskew_decision = None
             page_span = telemetry.start_operation(
                 "receipt.page.processing", {"receipt.page.number": idx + 1},
             )
@@ -665,10 +680,13 @@ def _ocr_rendered_pages(
             # so evaluate every DPI/layout combination instead of assuming the
             # highest resolution or first valid timestamp is most accurate.
             for dpi in OCR_RENDER_DPIS:
-                raw_image = render_page(idx, dpi)
+                raw_image, rotation = deskew(render_page(idx, dpi), deskew_decision)
+                deskew_decision = rotation
+                enhanced_metadata = {'deskew':rotation}
+                enhanced_image = _prepare_ocr_image(raw_image, preprocessing=enhanced_metadata)
                 # Raw rendering preserves separation in heavy/bold glyphs;
                 # enhancement recovers faint thermal printing.
-                for variant, image in (("raw", raw_image), ("enhanced", _prepare_ocr_image(raw_image))):
+                for variant, image in (("raw", raw_image), ("enhanced", enhanced_image)):
                     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                         tmp_path = Path(tmp.name)
                     try:
@@ -683,6 +701,7 @@ def _ocr_rendered_pages(
                                 dpi=dpi,
                                 psm=psm,
                                 variant=variant,
+                                preprocessing=({'deskew':rotation} if variant=='raw' else enhanced_metadata),
                             )
                             candidates.append(candidate)
                             if tracked is not None:
@@ -699,6 +718,7 @@ def _ocr_rendered_pages(
                         dpi=dpi,
                         psm="paddle",
                         variant="raw",
+                        preprocessing={'deskew':rotation},
                     )
                     candidates.append(candidate)
                     if tracked is not None:
@@ -706,7 +726,7 @@ def _ocr_rendered_pages(
             # A single high-resolution structured pass recovers small final
             # glyphs (for example, a trailing "c") without multiplying every
             # expensive DPI/layout/preprocessing combination.
-            high_detail_image = render_page(idx, OCR_HIGH_DETAIL_DPI)
+            high_detail_image, rotation = deskew(render_page(idx, OCR_HIGH_DETAIL_DPI), deskew_decision)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 tmp_path = Path(tmp.name)
             try:
@@ -722,6 +742,7 @@ def _ocr_rendered_pages(
                     dpi=OCR_HIGH_DETAIL_DPI,
                     psm=OCR_HIGH_DETAIL_PSM,
                     variant="high_detail",
+                    preprocessing={'deskew':rotation},
                 )
                 candidates.append(candidate)
                 if tracked is not None:
@@ -932,9 +953,17 @@ def _align_page_layout(text: str, detected: Sequence[OCRLine]) -> List[OCRLine]:
     return aligned
 
 
+class OCRPageLayouts(list):
+    """Layout rows with the preprocessing actually used for each source page."""
+    def __init__(self, pages, preprocessing):
+        super().__init__(pages)
+        self.preprocessing = preprocessing
+
+
 def extract_page_layout(path: Path, pages: Sequence[str]) -> List[List[OCRLine]]:
     """Run one geometry pass and align it with already-selected page text."""
     detected_pages: List[Tuple[OCRLine, ...]] = []
+    preprocessing = []
     if path.suffix.lower() == ".pdf":
         try:
             import pypdfium2 as pdfium  # type: ignore
@@ -943,6 +972,9 @@ def extract_page_layout(path: Path, pages: Sequence[str]) -> List[List[OCRLine]]
             try:
                 for index in range(len(doc)):
                     image = doc[index].render(scale=300 / 72).to_pil()
+                    from .deskew import apply as deskew
+                    image, rotation = deskew(image)
+                    preprocessing.append({'page_number':index+1,'deskew':rotation})
                     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                         tmp_path = Path(tmp.name)
                     try:
@@ -956,23 +988,29 @@ def extract_page_layout(path: Path, pages: Sequence[str]) -> List[List[OCRLine]]
             detected_pages = []
     else:
         try:
-            from PIL import Image
+            from PIL import Image, ImageOps
+            from .deskew import apply as deskew
 
             with Image.open(path) as image:
-                prepared = _prepare_ocr_image(image)
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                    tmp_path = Path(tmp.name)
-                try:
-                    prepared.save(tmp_path)
-                    detected_pages.append(_run_tesseract_candidate(tmp_path, dpi=0, psm="6").lines)
-                finally:
-                    tmp_path.unlink(missing_ok=True)
+                for index in range(getattr(image,'n_frames',1)):
+                    image.seek(index)
+                    leveled,rotation = deskew(ImageOps.exif_transpose(image))
+                    metadata = {'page_number':index+1,'deskew':rotation}
+                    prepared = _prepare_ocr_image(leveled, preprocessing=metadata)
+                    preprocessing.append(metadata)
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                        tmp_path = Path(tmp.name)
+                    try:
+                        prepared.save(tmp_path)
+                        detected_pages.append(_run_tesseract_candidate(tmp_path, dpi=0, psm="6").lines)
+                    finally:
+                        tmp_path.unlink(missing_ok=True)
         except Exception:
             detected_pages = []
-    return [
+    return OCRPageLayouts([
         _align_page_layout(page, detected_pages[index] if index < len(detected_pages) else ())
         for index, page in enumerate(pages)
-    ]
+    ], preprocessing)
 
 
 def normalize_line(line: str) -> str:
@@ -1263,6 +1301,10 @@ def extract_merchant_store(text: str, merchant_hint: Optional[str] = None, *, ob
     A merchant hint is existing canonical/source metadata, never a guess from a
     co-branded payment card. Store labels and retailer suffixes remain distinct.
     """
+    from .header_evidence import resolve as resolve_header
+    corroborated=resolve_header(observations)
+    if corroborated:
+        return corroborated['merchant']['value'],corroborated['store']['value']
     merchant = merchant_from_observations(text, observations) or extract_merchant(text)
     header = [normalize_line(line) for line in text.splitlines()[:20]]
     stores = {}
@@ -1311,6 +1353,13 @@ def _store_header_lines(text):
     result = []
     for raw in text.splitlines()[:12]:
         line = normalize_line(raw)
+        if TESSERACT_TSV_ROW_RE.search(line):
+            break
+        # Repair spacing inside a known street suffix, without changing names
+        # or address numbers. Recognition often splits long printed words.
+        for suffix in ('street','avenue','road','boulevard','drive','lane','court','parkway','highway','crescent','place','trail'):
+            line = re.sub(r'\b'+r'\s*'.join(suffix)+r'\b',
+                          lambda m:re.sub(r'\s+','',m[0]),line,flags=re.I)
         if re.match(r'^(?:bill\s*to\b|ship\s*to\b|sold\s*to\b|customer\s+(?:name|address)\b|member\b|loyalty\b|served\s+by\b|subtotal\b|total(?:\s*[:$]|\s+\d|\s*$))', line, re.I):
             break
         result.append(line)
@@ -1660,7 +1709,7 @@ def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
         return ["unreadable_ocr"]
     reasons: List[str] = []
     reasons.extend(('possible_missing_page_content' if name=='scan_completeness' else 'conflicting_ocr_' + name) for name, decision in receipt.field_decisions.items()
-                   if decision.get('status') == 'conflict')
+                   if decision.get('status') == 'conflict' and name!='store_phone')
     if not receipt.merchant:
         reasons.append("missing_merchant")
     observations = [p for p in (getattr(receipt, 'ocr_run', {}) or {}).get('ocr_passes', [])
