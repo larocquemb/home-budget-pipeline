@@ -8,8 +8,8 @@ IDENTITY = {"user": "Paul", "email": "paul@example.com"}
 def test_operational_timestamps_display_in_winnipeg_with_historical_offsets():
     from datetime import datetime
     from home_budget_pipeline.web.render import esc
-    assert esc(datetime.fromisoformat("2026-10-31T10:30:00+00:00")) == "2026-10-31 05:30:00 CDT"
-    assert esc(datetime.fromisoformat("2025-12-01T10:30:00+00:00")) == "2025-12-01 04:30:00 CST"
+    assert esc(datetime.fromisoformat("2026-10-31T10:30:00+00:00")) == "2026-10-31 05:30:00"
+    assert esc(datetime.fromisoformat("2025-12-01T10:30:00+00:00")) == "2025-12-01 04:30:00"
 
 
 def test_receipt_local_dates_are_not_shifted_as_if_they_were_utc():

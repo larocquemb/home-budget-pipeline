@@ -591,9 +591,12 @@ remain required; OCR-pass evidence contributes to the plan version/audit hash.
 Dates, amounts, item rows and category decisions are preserved.
 
 
-Receipts in review offer **Reprocess** beside their status on the detail page.
-This authenticated action queues fresh OCR through the same confirmed publisher
-used by `ledger receipts reprocess`. It reports queued separately from finished;
+Active receipts offer **Reprocess receipt** beside their status on the detail page.
+This authenticated action queues the same worker/result flow used by the CLI.
+The worker automatically re-extracts from a readable cache matching the source
+hash, and runs OCR when that cache is missing, invalid or empty. Under **Advanced**,
+**Reread original document** explicitly runs fresh OCR for recognition problems.
+Refreshing the browser page only reloads saved results and current progress. It reports queued separately from finished;
 refresh the detail page or use Latest traces to follow the result. A failed
 publication can be retried with the same request identity. Deleted, merged and
 archived sources must be restored before processing.

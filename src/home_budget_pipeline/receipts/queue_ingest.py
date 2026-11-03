@@ -637,7 +637,7 @@ def process_message(message: ReceiptMessage, args) -> str:
             budget_schema=args.budget_schema,
             max_attempts=MAX_ATTEMPTS,
             verify_source=True,
-            refresh_ocr_cache=message.request_id is not None,
+            refresh_ocr_cache=message.request_id is not None and message.ocr_mode=='fresh',
             reprocess_request_id=message.request_id,
             progress=lambda text: LOG.info("receipt=%s %s", message.message_id, text),
         )
@@ -666,7 +666,7 @@ def produce_result_messages(message: ReceiptMessage, args):
         cache_reused = message.version in (2, 3) and _completed_cache_rebuild(
             cache_dir, cache_path, message,
         )
-        force_refresh = message.version in (2, 3) and not cache_reused
+        force_refresh = message.version in (2, 3) and not cache_reused and message.ocr_mode=='fresh'
         parsed = backlog.parse_scans_parallel(
             [path],
             root,

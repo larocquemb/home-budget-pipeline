@@ -174,7 +174,7 @@ def contextual_matches(base, readings):
     return matches
 
 
-def resolve(pages, observations):
+def resolve(pages, observations, *, layout_pages=()):
     sources = defaultdict(list)
     for p in observations:
         text = p.get('text') or p.get('extracted_text') or ''
@@ -191,6 +191,21 @@ def resolve(pages, observations):
     selected, decisions = [], []
     for page_number,page in enumerate(pages,1):
         base=rows(page,placeholders=True)
+        base_lines={}
+        def retain(lines):
+            for line in lines:
+                if isinstance(line,dict):
+                    base_lines[line.get('line_number')]=line
+                    retain(line.get('children',[]))
+        for layout_page in layout_pages or ():
+            if layout_page.get('page_number')==page_number:
+                retain(layout_page.get('lines',[]))
+        page_lines=page.splitlines()
+        for row in base:
+            original=base_lines.get(row['money_line_number'],{})
+            number=row['money_line_number']
+            if number and number<=len(page_lines) and original.get('text')==page_lines[number-1]:
+                row['confidence']=original.get('confidence')
         candidates=defaultdict(list)
         for p,readings in sources[page_number]:
             matches=contextual_matches(base,readings)
@@ -259,6 +274,9 @@ def resolve(pages, observations):
                 for v,readings in confident.items():
                     quality=max((c.get('confidence') or 0 for c in readings if c['currency']),default=0)
                     opponents=[c.get('confidence') for c in eligible if c['value']!=v]
+                    if (row['amount'] is not None and Decimal(v)!=row['amount']
+                            and (row.get('confidence') or 0)>0):
+                        opponents.append(row['confidence'])
                     # Confidence is evidence quality, not a correctness probability.
                     if (quality>=MIN_PRICE_CONFIDENCE and opponents and all(q is not None for q in opponents)
                             and quality-max(opponents)>=PRICE_CONFIDENCE_MARGIN):
@@ -277,7 +295,7 @@ def resolve(pages, observations):
             gross=(max(winning,key=lambda c:c.get('confidence') or 0)['gross_value']
                    if winning else str(row['gross']) if row['gross'] is not None else None)
             decisions.append(dict(page_number=page_number,line_number=row['line_number'],
-                gross_value=gross,
+                gross_value=gross, base_confidence=row.get('confidence'),
                 included=value is not None,item_name=row['name'],original_value=str(row['amount']) if row['amount'] is not None else None,
                 value=str(value) if value is not None else None,status=status,
                 reason=reason if len(supported)==1 else 'insufficient_or_conflicting_price_evidence',
@@ -331,7 +349,7 @@ def collapse_page_overlap(decisions):
 
 def apply(receipt, pages, observations):
     from .departments import assign_items
-    items,decisions=resolve(pages,observations)
+    items,decisions=resolve(pages,observations,layout_pages=receipt.ocr_layout)
     if not decisions:
         from .scan_completeness import apply as apply_scan_completeness
         apply_scan_completeness(receipt,pages,observations)

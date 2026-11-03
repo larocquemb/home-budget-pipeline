@@ -8,7 +8,7 @@ import os
 import re
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 from urllib.parse import quote, urlencode, urlparse
 
@@ -431,6 +431,7 @@ def accept_recommendation(source_sha256: str, request: AcceptRecommendationReque
 
 class ReprocessRequest(BaseModel):
     request_id: UUID
+    mode: Literal["auto", "fresh"] = "auto"
 
 
 @app.post(f"{BASE_PATH}/api/receipts/{{source_sha256}}/reprocess", status_code=202)
@@ -462,7 +463,7 @@ def reprocess_receipt(source_sha256: str, body: ReprocessRequest,
     from ..receipts.message import ReceiptMessage
     from ..receipts.queue_ingest import publish_reprocess_message
     message=ReceiptMessage(source_sha256, record['source_reference'], version=2,
-                           request_id=str(body.request_id))
+                           request_id=str(body.request_id), ocr_mode=body.mode)
     try:
         publish_reprocess_message(message, broker, os.getenv('HOME_BUDGET_QUEUE_PREFIX','receipts.v1'))
     except Exception:
@@ -732,9 +733,12 @@ def receipt_page(
         canonical_expense = '<span class="muted">Retained in history</span>'
     extraction_html = '' if duplicate or deleted else f"<div><strong>Extraction</strong><br>{esc(receipt.get('extraction_status'))}</div>"
     process_control = ''
-    if not (deleted or duplicate) and request_processing_status(receipt) not in {'queued','processing','saving_results'} and receipt.get('extraction_status') == 'review':
+    if not (deleted or duplicate) and request_processing_status(receipt) not in {'queued','processing','saving_results'}:
         process_control = (f'<form id="reprocess-receipt" data-receipt="{esc(source_sha256)}">'
-                           '<button type="submit">Reprocess</button>'
+                           '<button type="submit" name="mode" value="auto">Reprocess receipt</button>'
+                           '<details><summary>Advanced</summary>'
+                           '<p>Use when text or items were read incorrectly.</p>'
+                           '<button type="submit" name="mode" value="fresh">Reread original document</button></details>'
                            '<span id="reprocess-status" role="status"></span></form>')
     progress_note = ''
     if request_processing_status(receipt):
@@ -873,16 +877,19 @@ for(const form of document.querySelectorAll('.accept-recommendation')) {
 }
 const processForm=document.getElementById('reprocess-receipt');
 if(processForm) processForm.addEventListener('submit',async event=>{
-  event.preventDefault();const button=processForm.querySelector('button'),status=document.getElementById('reprocess-status');
-  button.disabled=true;status.textContent='Queuing receipt…';
+  event.preventDefault();const buttons=processForm.querySelectorAll('button'),status=document.getElementById('reprocess-status');
+  const mode=event.submitter?.value||'auto';
+  for(const button of buttons)button.disabled=true;
+  status.textContent='Queuing receipt…';
+  if(processForm.dataset.mode!==mode){processForm.dataset.mode=mode;processForm.dataset.request=crypto.randomUUID();}
   processForm.dataset.request ||= crypto.randomUUID();
   try{
     const response=await fetch(""" + json.dumps(BASE_PATH) + """+'/api/receipts/'+encodeURIComponent(processForm.dataset.receipt)+'/reprocess',{
       method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Ledger-Action':'reprocess-receipt'},
-      body:JSON.stringify({request_id:processForm.dataset.request})});
+      body:JSON.stringify({request_id:processForm.dataset.request,mode})});
     const result=await response.json();if(!response.ok)throw Error(result.detail||'Unable to queue receipt');
-    status.textContent='Queued. Processing includes fresh OCR; refresh this page for the result.';
-  }catch(error){status.textContent=error.message;button.disabled=false;}
+    status.textContent=mode==='fresh'?'Queued to reread the original document. Refresh this page for progress.':'Queued for reprocessing. Refresh this page for progress.';
+  }catch(error){status.textContent=error.message;for(const button of buttons)button.disabled=false;}
 });
 const refresh=document.getElementById('refresh-items');
 if(refresh) refresh.addEventListener('submit',async event=>{

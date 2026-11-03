@@ -25,8 +25,11 @@ class ReceiptMessage:
     batch_id: str | None = None
     batch_index: int | None = None
     batch_total: int | None = None
+    ocr_mode: str = "fresh"
 
     def __post_init__(self) -> None:
+        if self.ocr_mode not in ('fresh', 'auto') or (self.ocr_mode=='auto' and self.version!=2):
+            raise InvalidReceiptMessage('OCR mode must be fresh, or auto for reprocessing')
         if type(self.version) is not int or self.version not in (1, 2, 3):
             raise InvalidReceiptMessage("unsupported receipt message version")
         if self.version == 1 and self.request_id is not None:
@@ -77,6 +80,8 @@ class ReceiptMessage:
 
     def to_bytes(self) -> bytes:
         payload = asdict(self)
+        if self.ocr_mode == 'fresh':
+            del payload['ocr_mode']
         if self.version == 1:
             del payload["request_id"]
         if self.batch_id is None:
@@ -93,6 +98,8 @@ class ReceiptMessage:
             fields = {"version", "source_sha256", "source_reference", "attempt"}
             if isinstance(value, dict) and value.get("version") in (2, 3):
                 fields.add("request_id")
+            if isinstance(value, dict) and value.get('version')==2 and 'ocr_mode' in value:
+                fields.add('ocr_mode')
             if isinstance(value, dict) and value.get("version") == 3 and "batch_id" in value:
                 fields.update({"batch_id", "batch_index", "batch_total"})
             if not isinstance(value, dict) or set(value) != fields:

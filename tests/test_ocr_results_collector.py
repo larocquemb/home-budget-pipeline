@@ -448,3 +448,19 @@ def test_separate_page_text_survives_worker_collector_contract_and_legacy_messag
     legacy['payload']['receipt']['page_text']='not an array'
     with pytest.raises(ocr_results.InvalidOcrResultMessage,match='page_text'):
         ocr_results.OcrResultMessage.from_bytes(json.dumps(legacy).encode())
+
+
+@pytest.mark.parametrize('mode,expected_refresh',[('auto',False),('fresh',True)])
+def test_reprocess_mode_is_decided_in_worker_and_stays_on_result_pipeline(tmp_path,monkeypatch,mode,expected_refresh):
+    source=tmp_path/'receipt.pdf';source.write_bytes(b'receipt')
+    receipt=result_receipt(source);cache=tmp_path/'cache';cache.mkdir()
+    (cache/'receipt.pdf.json').write_text('{}')
+    def parse(*args,**kwargs):
+        assert args[4] is expected_refresh
+        return [receipt],int(not expected_refresh)
+    monkeypatch.setattr(queue.backlog,'parse_scans_parallel',parse)
+    message=ReceiptMessage(receipt.source_sha256,source.name,version=2,
+                           request_id='740023b1-a078-4914-b074-81bd7129bb75',ocr_mode=mode)
+    result=queue.produce_result_messages(message,SimpleNamespace(receipt_root=str(tmp_path),ocr_cache=str(cache)))
+    assert result.cache_hit is (not expected_refresh)
+    assert result[1][0].payload['persistence_mode']=='reprocess'
