@@ -34,7 +34,7 @@ document.getElementById('refresh-imports').onclick=async function(){
   const result=await response.json();if(!response.ok)throw new Error(result.detail||'Import failed');
   if(result.busy){status.textContent='An import is already running. Check import status.';return;}
   status.textContent='Imported '+result.new_transactions+' new transactions; '+result.unchanged+' unchanged files; '+result.failed+' failed; '+result.waiting+' still writing.';
-  const link=document.createElement('a');link.href=window.location.pathname;link.textContent=' Refresh view';status.append(link);
+  const link=document.createElement('a');link.href=window.location.href;link.textContent=' Refresh view';status.append(link);
  }catch(error){status.textContent=error.message;}finally{this.disabled=false;}
 };</script>'''
 
@@ -109,12 +109,14 @@ Purchases are positive; credits and payments are negative.</p></div>'''
                                 ('transaction_datetime','Receipt date'),('date_source','Date source'),('date_distance_days','Days apart'),
                                 ('total','Total'),('extraction_status','Extraction')),
                   links={'expense_pk': f'{BASE_PATH}/expenses/{{value}}'}, money_columns={'total'})
-    body += '<h2>Confirmed allocations</h2><p>Use one row for a whole purchase, or add rows for a split. Expense links are optional. Categories and people apply to these bank allocations and leave receipt line items intact.</p>'
+    from .receipt_categories import render as render_receipt_categories
+    body += render_receipt_categories(service, suggestions, allocations)
+    body += '<h2>Confirmed allocations</h2><p>Linked receipts supply categories from their line items. Correct categories on the receipt. For activity without a receipt, enter a category here. Use split rows to assign portions to receipts or people.</p>'
     body += '<style>#allocation-form input{box-sizing:border-box;width:100%;min-width:0}#allocation-form table{table-layout:fixed}#allocation-form th:last-child{width:5rem}</style>'
     body += '<form id="allocation-form"><table><thead><tr><th>Amount</th><th>Category</th><th>Person</th><th>Expense ID (optional)</th><th>Note</th><th></th></tr></thead><tbody id="allocations">'
     rows = allocations or [{'amount': tx['amount'], 'category': '', 'person': '', 'expense_pk': None, 'note': ''}]
     for row in rows:
-        body += allocation_html(row)
+        body += allocation_html(row, suggestions)
     body += '''</tbody></table><button type="button" id="add-allocation">Add split</button>
 <p id="allocation-balance" role="status"></p>
 <label>Reason for this allocation or correction <input name="reason" required maxlength="2000"></label>
@@ -123,17 +125,25 @@ Purchases are positive; credits and payments are negative.</p></div>'''
         WHERE transaction_id=%s ORDER BY version DESC''', (transaction_id,))
     body += '<h2>Allocation history</h2>' + table(history, (('version','Version'),('actor','Recorded by'),('reason','Reason'),('recorded_at','Recorded at')))
     import json
-    body += '<template id="allocation-template">' + allocation_html({}) + '</template>'
+    body += '<template id="allocation-template">' + allocation_html({}, suggestions) + '</template>'
     body += '<script>\nconst allocationVersion=' + str(version) + ';\nconst bankCents=' + str(int(tx['amount']*100)) + ';\nconst allocationUrl=' + json.dumps(f'{BASE_PATH}/api/transactions/{transaction_id}/allocations') + ';\n' + SCRIPT + '</script>'
     return page('Bank transaction '+str(transaction_id), body, base_path=BASE_PATH, identity=identity)
 
 
-def allocation_html(row):
+def allocation_html(row, suggestions):
     fields = [('amount','number','step="0.01" required'),('category','text','required maxlength="200"'),
               ('person','text','maxlength="2000"'),('expense_pk','number','min="1" step="1"'),('note','text','maxlength="2000"')]
+    row = dict(row)
+    linked = bool(row.get('expense_pk') or row.get('receipt_source_sha256'))
+    if linked:
+        row['category'] = 'Receipt line items'
     sha=row.get('receipt_source_sha256') or ''
     link=(f'<small><a href="{BASE_PATH}/receipts/{esc(sha)}">Saved receipt source</a></small>' if sha else '')
-    return '<tr>' + ''.join(f'<td><input aria-label="{esc(k)}" data-field="{k}" type="{t}" {attrs} value="{esc(row.get(k))}"></td>' for k,t,attrs in fields) + f'<td><input type="hidden" data-field="receipt_source_sha256" value="{esc(sha)}">{link}<button type="button" data-remove>Remove</button></td></tr>'
+    options = ''.join(f'<option value="{esc(r["expense_pk"])}" data-receipt-source="{esc(r.get("receipt_source_sha256"))}">{esc(r["merchant"])} · {esc(r["transaction_datetime"])} · {money(r["total"])} · Expense {esc(r["expense_pk"])}</option>' for r in suggestions)
+    selection = ('<label>Choose receipt <select data-receipt-choice><option value="">Select a candidate…</option>' + options + '</select></label>') if suggestions else ''
+    if linked:
+        fields = [(k,t,attrs + (' readonly' if k=='category' else '')) for k,t,attrs in fields]
+    return '<tr>' + ''.join(f'<td><input aria-label="{esc(k)}" data-field="{k}" type="{t}" {attrs} value="{esc(row.get(k))}"></td>' for k,t,attrs in fields) + f'<td><input type="hidden" data-field="receipt_source_sha256" value="{esc(sha)}">{link}{selection}<button type="button" data-remove>Remove</button></td></tr>'
 
 
 SCRIPT = r'''
@@ -144,7 +154,26 @@ function balance(){
 }
 document.getElementById('add-allocation').onclick=()=>{rows.append(document.getElementById('allocation-template').content.cloneNode(true));balance();};
 rows.onclick=e=>{if(e.target.hasAttribute('data-remove')){e.target.closest('tr').remove();balance();}};
-rows.oninput=balance;balance();
+function receiptCategory(row){
+  const linked=Boolean(row.querySelector('[data-field="expense_pk"]').value || row.querySelector('[data-field="receipt_source_sha256"]').value);
+  const category=row.querySelector('[data-field="category"]');
+  if(linked)category.value='Receipt line items';
+  else if(category.readOnly)category.value='';
+  category.readOnly=linked;
+}
+rows.onchange=e=>{
+  if(e.target.hasAttribute('data-receipt-choice') && e.target.value){
+    const row=e.target.closest('tr');
+    row.querySelector('[data-field="expense_pk"]').value=e.target.value;
+    row.querySelector('[data-field="receipt_source_sha256"]').value=e.target.selectedOptions[0].dataset.receiptSource || '';
+    receiptCategory(row);
+  }
+};
+rows.oninput=e=>{
+  if(e.target.dataset.field==='expense_pk')e.target.closest('tr').querySelector('[data-field="receipt_source_sha256"]').value='';
+  if(e.target.dataset.field==='expense_pk')receiptCategory(e.target.closest('tr'));
+  balance();
+};balance();
 form.onsubmit=async e=>{
   e.preventDefault();const status=document.getElementById('allocation-status'),button=form.querySelector('[type="submit"]');button.disabled=true;
   try{
@@ -164,7 +193,8 @@ def accounts_page(identity:dict=Depends(authenticated_identity)):
     body='<p>Accounts use last-four identifiers. Shared card accounts use the primary card ending. Full account and card numbers are not stored. Ownership assertions are separate from historical payer attribution.</p>'
     body+=table(rows,(('nickname','Nickname'),('account_reference','Account'),('institution','Institution'),('account_type','Type'),('currency','Currency'),('primary_card_last4','Primary card ending'),
                      ('last4','Account / card ending'),('owner_name','Owner / cardholder'),('ownership_role','Role'),
-                     ('effective_from','Effective from'),('effective_to','Effective to'),('asserted_at','Recorded at')))
+                     ('effective_from','Effective from'),('effective_to','Effective to'),('asserted_at','Recorded at'),('id','Transactions')),
+                links={'id':f'{BASE_PATH}/cad-ledger?account_id={{value}}'},link_labels={'id':'View transactions'})
     body+='<p>Blank effective dates mean historical ownership dates have not been supplied.</p>'
     return page('Accounts and ownership',body,base_path=BASE_PATH,identity=identity)
 
@@ -202,13 +232,13 @@ def refresh_fx(x_ledger_action:str|None=Header(default=None),identity:dict=Depen
 
 
 @app.get(f'{BASE_PATH}/cad-ledger',response_class=HTMLResponse)
-def cad_ledger_page(limit:int=100,offset:int=0,account:str='',from_date:str='',to_date:str='',direction:str='desc',
+def cad_ledger_page(limit:int=100,offset:int=0,account:str='',from_date:str='',to_date:str='',direction:str='desc',account_id:int|None=None,
                     identity:dict=Depends(authenticated_identity)):
     from datetime import date
     from ..transactions.ledger import ledger_rows
     from .render import pager
     try:
-        result=ledger_rows(accounting_service(),limit=limit,offset=offset,account=account,direction=direction,
+        result=ledger_rows(accounting_service(),limit=limit,offset=offset,account=account,direction=direction,account_id=account_id,
             start=date.fromisoformat(from_date) if from_date else None,end=date.fromisoformat(to_date) if to_date else None)
     except ValueError as exc:
         raise HTTPException(422,str(exc)) from exc
@@ -217,7 +247,10 @@ def cad_ledger_page(limit:int=100,offset:int=0,account:str='',from_date:str='',t
 CAD equivalents use <a href="https://www.bankofcanada.ca/rates/exchange/daily-exchange-rates/">Bank of Canada daily reference rates</a>,
 using the latest available business-day rate on or before the bank date (up to seven days).
 These are reporting equivalents, not bank settlement costs. Transfers and card payments remain visible.</p>'''
-    body+=f'''<form method="get"><label>Account or ending <input name="account" value="{esc(account)}"></label>
+    account_filter = f'<input type="hidden" name="account_id" value="{account_id}">' if account_id is not None else ''
+    if account_id is not None:
+        body += f'<p>Showing this account only. <a href="{BASE_PATH}/accounts">Choose another account</a> · <a href="{BASE_PATH}/cad-ledger">All accounts</a></p>'
+    body+=f'''<form method="get">{account_filter}<label>Account or ending <input name="account" value="{esc(account)}"></label>
 <label>From <input type="date" name="from_date" value="{esc(from_date)}"></label>
 <label>To <input type="date" name="to_date" value="{esc(to_date)}"></label>
 <label>Order <select name="direction"><option value="desc" {'selected' if direction=='desc' else ''}>Newest first</option>
@@ -227,12 +260,12 @@ These are reporting equivalents, not bank settlement costs. Transfers and card p
     for row in result['rows']:
         rows.append({**row,'conversion':row['conversion_status'].replace('_',' '),
                      'fx_rate':f"{row['fx_rate']:.4f}" if row['fx_rate'] is not None else ''})
-    body+=table(rows,(('bank_date','Bank date'),('account','Account'),('account_last4','Ending'),('description','Description'),
+    body+=table(rows,(('transaction_id','Transaction'),('bank_date','Bank date'),('account','Account'),('account_last4','Ending'),('description','Description'),
         ('original_amount','Original amount'),('currency','Currency'),('amount_cad','CAD equivalent'),
         ('fx_rate','CAD per unit'),('rate_date','Rate date'),('conversion','Conversion')),
-        money_columns={'original_amount','amount_cad'})
+        links={'transaction_id':f'{BASE_PATH}/transactions/{{value}}'},money_columns={'original_amount','amount_cad'})
     body+=pager(BASE_PATH+'/cad-ledger',limit=limit,offset=offset,row_count=len(rows),total_count=result['total'],
-                query={'account':account,'from_date':from_date,'to_date':to_date,'direction':direction})
+                query={'account':account,'from_date':from_date,'to_date':to_date,'direction':direction,'account_id':account_id})
     body+='''<script>document.getElementById('refresh-fx').onclick=async function(){
  const status=document.getElementById('fx-result');this.disabled=true;status.textContent='Updating reference rates…';
  try{const response=await fetch('''+repr(BASE_PATH+'/api/transactions/fx-update')+''',{method:'POST',headers:{'X-Ledger-Action':'fx-update'}});

@@ -106,9 +106,10 @@ for (const image of document.querySelectorAll('[data-hover-zoom]')) {{
 </body></html>"""
 
 
-def table(rows: Iterable[Mapping[str, Any]], columns: tuple[tuple[str, str], ...], *, links: Mapping[str, str] | None = None, money_columns: set[str] | None = None, header_links: Mapping[str, str] | None = None) -> str:
+def table(rows: Iterable[Mapping[str, Any]], columns: tuple[tuple[str, str], ...], *, links: Mapping[str, str] | None = None, money_columns: set[str] | None = None, header_links: Mapping[str, str] | None = None, link_labels: Mapping[str, str] | None = None) -> str:
     rows = tuple(rows)
     links = links or {}
+    link_labels = link_labels or {}
     money_columns = money_columns or set()
     header_links = header_links or {}
     head = "".join(
@@ -123,7 +124,7 @@ def table(rows: Iterable[Mapping[str, Any]], columns: tuple[tuple[str, str], ...
             value = row.get(key)
             text = money(value) if key in money_columns else esc(value)
             if key in links and value is not None:
-                text = f'<a href="{links[key].format(value=value)}">{text}</a>'
+                text = f'<a href="{links[key].format(value=value)}">{esc(link_labels[key]) if key in link_labels else text}</a>'
             cls = ' class="num"' if key in money_columns else ""
             cells.append(f"<td{cls}>{text}</td>")
         rendered.append("<tr>" + "".join(cells) + "</tr>")

@@ -766,6 +766,10 @@ def receipt_page(
         from .scan_completeness_html import render as render_scan_completeness
         header += render_scan_completeness(receipt, BASE_PATH)
     header += deletion_control(source_sha256, deleted)
+    if hasattr(service, 'receipt_bank_links'):
+        from .receipt_bank_links import render as render_bank_links
+        header += render_bank_links(service, source_sha256)
+
     if deleted:
         header += '<p class="card">Deleted from the active ledger. The original document and recorded extraction are retained. Restore this receipt to use it again.</p>'
     merged = (evidence.get('raw_payload') or {}).get('duplicate_merge')

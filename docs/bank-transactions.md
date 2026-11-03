@@ -335,3 +335,38 @@ ledger --env-file .env.dev transactions allocate 123 --plan /private/path/split.
 Version zero means no allocation has been saved yet. Existing allocations and
 their version are visible in the transaction page and allocation history. A bank
 transaction remains one record; splitting it does not create duplicate spending.
+
+
+### Navigate between receipts and bank activity
+
+Open a transaction from either Transactions or the CAD ledger. Review its
+receipt candidates, choose a receipt in an allocation row, supply the category
+and reason, and save the confirmed allocations. Split rows must balance to the
+original bank amount. Candidate suggestions alone do not create a link.
+
+Saved allocation rows link to the receipt source. Each receipt shows **Linked
+bank transactions**, with links back to transaction details and both the full
+bank amount and the amount allocated to that receipt. Links use the original
+receipt source identity, so a reused expense ID after a receipt rebuild cannot
+attach an unrelated receipt. Existing CAD currency validation still applies.
+
+
+From **Accounts**, choose **View transactions** on an account row to see only
+that account's activity, sorted by bank date. The account selection stays in
+place when changing date/order filters or paging. Use **All accounts** to
+return to the combined CAD ledger. Linked cards on a shared account open the
+same account ledger.
+
+
+Linked transaction categories come from the receipt's current line-item
+categories. Transaction details show category totals for linked and candidate
+receipts, distinguishing unconfirmed candidates. Correct categories on the
+receipt; linked allocation rows record “Receipt line items” as their category
+source rather than an independent category. Unlinked bank activity can still
+have a manually assigned category. The receipt totals cover all its items and
+are not prorated across split payments. Tax, fees and differences from the bank
+amount are not automatically assigned to item categories; uncategorized items
+and missing amounts stay visible for review.
+
+Confirmed receipt links also display the receipt's current individual line items,
+descriptions, categories and amounts directly on the transaction detail page.

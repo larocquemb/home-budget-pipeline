@@ -140,7 +140,7 @@ def normalize_allocations(rows, total):
             raise ValueError('Allocation amounts must be nonzero amounts in cents') from None
         if (amount > 0) != (total > 0):
             raise ValueError('Allocation signs must agree with the bank amount')
-        category = row.get('category')
+        category = 'Receipt line items' if row.get('expense_pk') or row.get('receipt_source_sha256') else row.get('category')
         if not isinstance(category, str) or not category.strip() or len(category) > 200:
             raise ValueError('Each allocation needs a category (at most 200 characters)')
         expense_pk = row.get('expense_pk')
@@ -218,7 +218,7 @@ def receipt_candidates(service, transaction):
     if transaction['amount'] <= 0 or transaction.get('currency','CAD')!='CAD':
         return ()
     rows = service._fetch(f'''
-        SELECT DISTINCT ON (e.id) e.id AS expense_pk, COALESCE(re.merchant,e.store_name) AS merchant,
+        SELECT DISTINCT ON (e.id) e.id AS expense_pk, re.source_sha256 AS receipt_source_sha256, COALESCE(re.merchant,e.store_name) AS merchant,
                re.raw_payload->>'store' AS store, {RECEIPT_DATETIME_SQL} AS transaction_datetime,
                CASE WHEN re.transaction_datetime IS NOT NULL THEN 'receipt extraction'
                     ELSE 'existing expense date; verify source' END AS date_source,

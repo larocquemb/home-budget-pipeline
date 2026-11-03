@@ -87,6 +87,22 @@ class LedgerQueryService:
         self._connect = connect or self._default_connect
         self._accounting_connect = accounting_connect
 
+    def receipt_bank_links(self, source_sha256):
+        """Resolve confirmed bank allocations by durable receipt identity only."""
+        from ..transactions.database import connect
+        bank = LedgerQueryService(self._accounting_connect or connect)
+        return bank._fetch('''
+            SELECT ft.id AS transaction_id, ft.transaction_date, ft.description,
+                   ft.amount AS bank_amount, ft.currency, a.nickname AS account,
+                   sum(al.amount) AS linked_amount
+              FROM accounting.transaction_allocations al
+              JOIN accounting.financial_transactions ft ON ft.id=al.transaction_id
+              LEFT JOIN accounting.accounts a ON a.id=ft.account_id
+             WHERE al.receipt_source_sha256=%s
+             GROUP BY ft.id,a.nickname
+             ORDER BY ft.transaction_date DESC,ft.id DESC
+        ''', (source_sha256,))
+
     def receipt_allocation(self, source_sha256):
         from .allocation_corrections import read
         return read(self._connect, source_sha256)
