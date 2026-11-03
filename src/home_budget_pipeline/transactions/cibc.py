@@ -1,6 +1,5 @@
 """Read CIBC's five-column, headerless card export without changing its rows."""
 from collections import Counter
-from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 import csv
@@ -8,18 +7,7 @@ import hashlib
 import io
 import json
 import re
-
-
-@dataclass(frozen=True)
-class CibcRow:
-    number: int
-    date: date
-    description: str
-    amount: Decimal  # Purchases positive, credits negative; CAD by default.
-    card_last4: str | None
-    kind: str
-    raw: list[str]
-    fingerprint: str
+from .bank_rows import BankRow as CibcRow
 
 
 def parse_cibc(data: bytes, account_reference: str, *, account_type='credit_card', account_last4=None) -> list[CibcRow]:

@@ -134,7 +134,7 @@ def accounts_page(identity:dict=Depends(authenticated_identity)):
     from ..transactions.accounts import account_rows
     rows=account_rows(accounting_service())
     body='<p>Accounts use last-four identifiers. Shared card accounts use the primary card ending. Full account and card numbers are not stored. Ownership assertions are separate from historical payer attribution.</p>'
-    body+=table(rows,(('account_reference','Account'),('institution','Institution'),('account_type','Type'),('currency','Currency'),('primary_card_last4','Primary card ending'),
+    body+=table(rows,(('nickname','Nickname'),('account_reference','Account'),('institution','Institution'),('account_type','Type'),('currency','Currency'),('primary_card_last4','Primary card ending'),
                      ('last4','Account / card ending'),('owner_name','Owner / cardholder'),('ownership_role','Role'),
                      ('effective_from','Effective from'),('effective_to','Effective to'),('asserted_at','Recorded at')))
     body+='<p>Blank effective dates mean historical ownership dates have not been supplied.</p>'

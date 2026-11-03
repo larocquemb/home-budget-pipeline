@@ -16,7 +16,8 @@ The **Accounts** page shows these records:
 
 | Table | Purpose |
 | --- | --- |
-| `accounting.accounts` | Institution, stable account reference and primary card ending |
+| `accounting.accounts` | Institution, nickname, stable account reference and primary card ending |
+| `accounting.account_profile_audit` | Nickname/profile changes without changing import identity |
 | `accounting.account_numbers` | Linked identifiers containing only the last four digits |
 | `accounting.account_ownerships` | One current ownership record per card ending, with primary/secondary role |
 | `accounting.account_ownership_audit` | Original and corrected ownership snapshots, actor, reason and timestamp |
@@ -165,6 +166,50 @@ ledger --env-file .env.dev transactions import-cibc /private/export.csv \
 Add `--apply --actor 'Paul La Rocque'` after reviewing its preview. Use `savings`
 for a savings account. Do not pass the full bank account number.
 
+
+## Combined institution archives and nicknames
+
+Point `import-tree` at the shared `raw` folder to include both `acu` and `cibc`:
+
+```sh
+ledger --env-file .env.dev transactions import-tree /private/transactions/raw \
+  --account-currency cibc/visa/x1234=USD
+```
+
+Currency overrides are relative to the selected root. An institution root uses
+`visa/x1234=USD`; the shared root uses `cibc/visa/x1234=USD`. Registered account
+currencies are reused on later imports. Add `--apply --actor 'Paul La Rocque'`
+after reviewing the preview.
+
+ACU supports `chequing` and `savings` folders. Its headered export has `Unique ID`,
+`Date`, `Description`, `Amount` and `Balance` columns. Native positive changes
+become ledger inflows (negative); native negative changes become outflows
+(positive). Running balances remain in source-row evidence and do not establish
+an opening/current account balance in the ledger. The repeated `Unique ID` field
+is redacted in database row snapshots and is not used as a transaction ID. The
+original private CSV remains unchanged, with its hash and row numbers retained.
+
+Account nicknames are editable labels. Changing a nickname preserves the stable
+reference, deduplication fingerprints, ownership and transaction links. They
+appear in Accounts and the transaction list. Register or update profiles with a
+private JSON list:
+
+```json
+[
+  {"reference":"ACU Chequing x1234","institution":"ACU",
+   "account_type":"chequing","last4":"1234","nickname":"Daily spending",
+   "currency":"CAD"}
+]
+```
+
+```sh
+ledger --env-file .env.dev transactions account-profile --plan /private/accounts.json
+ledger --env-file .env.dev transactions account-profile --plan /private/accounts.json \
+  --apply --actor 'Paul La Rocque'
+```
+
+Profile registration creates metadata only, without importing transactions or
+assigning owners. Actor/reason and before/after profile snapshots are audited.
 
 ## Review receipt candidates
 

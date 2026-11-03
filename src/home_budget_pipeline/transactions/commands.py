@@ -19,10 +19,10 @@ def add_commands(commands):
     imp.add_argument('--account-last4',help='Required for deposit accounts; exactly four digits.')
     imp.add_argument('--currency',choices=('CAD','USD'),default='CAD')
     imp.set_defaults(handler=run)
-    tree=sub.add_parser('import-tree',help='Preview/import product/xLAST4/[year/]CSV exports below a CIBC archive root.')
+    tree=sub.add_parser('import-tree',help='Preview/import CIBC and ACU institution/product/xLAST4/[year/]CSV archives.')
     tree.add_argument('root',type=Path)
     tree.add_argument('--apply',action='store_true')
-    tree.add_argument('--account-currency',action='append',default=[],metavar='PRODUCT/xLAST4=USD',
+    tree.add_argument('--account-currency',action='append',default=[],metavar='[BANK/]PRODUCT/xLAST4=USD',
                       help='Explicit currency for an account folder; repeat as needed. Existing accounts retain their registered currency.')
     tree.set_defaults(handler=run)
     matches = sub.add_parser('suggest', help='Read-only receipt candidates; never confirm links or enrich receipts.')
@@ -40,7 +40,11 @@ def add_commands(commands):
     ownership.add_argument('--plan',type=Path,required=True)
     ownership.add_argument('--apply',action='store_true')
     ownership.set_defaults(handler=run)
-    for p in (setup, imp, tree, split, migration, ownership):
+    profile=sub.add_parser('account-profile',help='Preview/register account nickname and last-four metadata without importing transactions.')
+    profile.add_argument('--plan',type=Path,required=True,help='Private JSON list of account profile records.')
+    profile.add_argument('--apply',action='store_true')
+    profile.set_defaults(handler=run)
+    for p in (setup, imp, tree, split, migration, ownership,profile):
         p.add_argument('--actor', default=None, help='Required for writes; person responsible for the operation.')
 
 
@@ -72,7 +76,7 @@ def run(args):
                 currencies={}
                 for item in args.account_currency:
                     if '=' not in item:
-                        raise ValueError('Currency overrides use product/xLAST4=USD')
+                        raise ValueError('Currency overrides use [institution/]product/xLAST4=USD')
                     key,value=item.split('=',1)
                     if key.casefold() in currencies and currencies[key.casefold()]!=value.upper():
                         raise ValueError('Conflicting account currency overrides')
@@ -89,6 +93,13 @@ def run(args):
                     report=record_ownership(conn,actor=args.actor,**plan)
                 else:
                     report={'applied':False,'operation':'record account/card ownership','account_reference':plan['reference']}
+            elif action=='account-profile':
+                from .accounts import register_account
+                plan=json.loads(args.plan.read_text())
+                if not isinstance(plan,list):
+                    raise ValueError('Account profile plan must be a list')
+                with conn.transaction():
+                    report=[register_account(conn,actor=args.actor,**entry) for entry in plan] if args.apply else {'applied':False,'accounts':len(plan)}
             else:
                 plan = json.loads(args.plan.read_text())
                 report = save_allocations(conn, args.transaction_id, plan['allocations'],

@@ -924,11 +924,13 @@ class LedgerQueryService:
             SELECT ft.id AS transaction_id, ft.transaction_date, ft.posting_date,
                    ft.amount, ft.currency, ft.description, ft.payer, ft.payer_source,
                    ft.card_last4, ft.raw_source->>'kind' AS kind,
+                   a.nickname AS account_nickname,
                    (SELECT count(*) FROM accounting.transaction_allocations a WHERE a.transaction_id=ft.id) AS allocation_count,
                    NULL::bigint AS expense_pk,
                    CASE WHEN EXISTS(SELECT 1 FROM accounting.transaction_allocations a WHERE a.transaction_id=ft.id)
                         THEN 'confirmed allocations' ELSE 'unallocated' END AS outcome
               FROM accounting.financial_transactions ft
+              LEFT JOIN accounting.accounts a ON a.id=ft.account_id
              ORDER BY ft.transaction_date DESC, ft.id DESC
              LIMIT %s OFFSET %s
         """

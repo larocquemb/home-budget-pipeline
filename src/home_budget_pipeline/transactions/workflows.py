@@ -15,10 +15,20 @@ def ensure_schema(conn):
 
 
 def import_cibc(conn, path, account_reference, actor, *, apply=False,account_type='credit_card',account_last4=None,extra_known=None,currency='CAD'):
+    return import_bank_csv(conn,path,account_reference,actor,apply=apply,account_type=account_type,
+                           account_last4=account_last4,extra_known=extra_known,currency=currency,institution='CIBC')
+
+
+def import_bank_csv(conn,path,account_reference,actor,*,apply=False,account_type='credit_card',
+                    account_last4=None,extra_known=None,currency='CAD',institution='CIBC'):
     from psycopg.types.json import Jsonb
     data = Path(path).read_bytes()
-    rows = parse_cibc(data, account_reference,account_type=account_type,account_last4=account_last4)
-    format_name='cibc-card-v1' if account_type=='credit_card' else 'cibc-deposit-v1'
+    from .acu import parse_acu
+    parsers={'CIBC':parse_cibc,'ACU':parse_acu}
+    if institution not in parsers:
+        raise ValueError('Unsupported institution')
+    rows = parsers[institution](data,account_reference,account_type=account_type,account_last4=account_last4)
+    format_name=('cibc-card-v1' if account_type=='credit_card' else 'cibc-deposit-v1') if institution=='CIBC' else 'acu-deposit-v1'
     if currency not in {'CAD','USD'}:
         raise ValueError('Supported export currencies are CAD and USD')
     if currency!='CAD':
@@ -32,11 +42,11 @@ def import_cibc(conn, path, account_reference, actor, *, apply=False,account_typ
     with conn.transaction():
         if apply:
             ensure_schema(conn)
-            conn.execute('SELECT pg_advisory_xact_lock(hashtext(%s))', ('cibc-import:' + account_reference.casefold(),))
+            conn.execute('SELECT pg_advisory_xact_lock(hashtext(%s))', (institution.casefold()+'-import:' + account_reference.casefold(),))
         with conn.cursor() as cur:
-            cur.execute('SELECT account_type,currency FROM accounting.accounts WHERE account_reference=%s',(account_reference,))
+            cur.execute('SELECT account_type,currency,institution FROM accounting.accounts WHERE account_reference=%s',(account_reference,))
             registered=cur.fetchone()
-            if registered and (registered['account_type']!=account_type or registered['currency']!=currency):
+            if registered and (registered['account_type']!=account_type or registered['currency']!=currency or registered['institution']!=institution):
                 raise ValueError('Account type or currency conflicts with the registered account')
             cur.execute('SELECT import_fingerprint FROM accounting.financial_transactions WHERE import_fingerprint=ANY(%s)',
                         ([r.fingerprint for r in rows],))
@@ -54,8 +64,8 @@ def import_cibc(conn, path, account_reference, actor, *, apply=False,account_typ
             if not apply:
                 return report
             cur.execute('''INSERT INTO accounting.accounts (account_reference,institution,account_type,primary_card_last4,currency)
-                VALUES (%s,'CIBC',%s,%s,%s) ON CONFLICT (account_reference) DO NOTHING''',
-                        (account_reference,account_type,account_last4 if account_type=='credit_card' else None,currency))
+                VALUES (%s,%s,%s,%s,%s) ON CONFLICT (account_reference) DO NOTHING''',
+                        (account_reference,institution,account_type,account_last4 if account_type=='credit_card' else None,currency))
             cur.execute('SELECT id,account_type,currency FROM accounting.accounts WHERE account_reference=%s',(account_reference,))
             account=cur.fetchone();account_id=account['id']
             if account['account_type']!=account_type:
@@ -79,12 +89,14 @@ def import_cibc(conn, path, account_reference, actor, *, apply=False,account_typ
                 raw = {'format': format_name, 'row': row.raw, 'kind': row.kind,
                        'export_date_semantics': 'bank_export_date; posting_vs_purchase_unspecified',
                        'source_sha256': digest, 'source_row': row.number}
+                if institution=='ACU':
+                    raw['redacted_columns']=['Unique ID']
                 cur.execute('''INSERT INTO accounting.financial_transactions
                     (institution,account_id,source_account_reference,transaction_date,amount,currency,
                      description,merchant_text,card_last4,import_fingerprint,raw_source)
-                    VALUES ('CIBC',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (import_fingerprint) DO NOTHING''',
-                            (account_id, account_reference, row.date, row.amount, currency,row.description, row.description,
+                            (institution,account_id, account_reference, row.date, row.amount, currency,row.description, row.description,
                              row.card_last4, row.fingerprint, Jsonb(raw)))
                 if row.card_last4:
                     cur.execute('''INSERT INTO accounting.account_numbers (account_id,number_kind,last4)

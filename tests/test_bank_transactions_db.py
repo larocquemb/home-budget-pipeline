@@ -238,3 +238,45 @@ def test_usd_account_retains_currency_and_never_matches_cad_receipts(bank_db,tmp
             save_allocations(conn,tx['id'],[{'amount':'12.34','category':'Food','expense_pk':42}],0,'Test','Checked',apply=True,receipt_service=LedgerQueryService(connect))
         save_allocations(conn,tx['id'],[{'amount':'12.34','category':'Food'}],0,'Test','USD allocation',apply=True)
         assert conn.execute('SELECT currency FROM accounting.accounts').fetchone()['currency']=='USD'
+
+
+def test_combined_acu_cibc_archive_preserves_institution_privacy_and_reimport(bank_db,tmp_path):
+    from home_budget_pipeline.transactions.tree_import import import_tree
+    connect,source=bank_db
+    root=tmp_path/'raw'
+    acu=root/'acu/chequing/x1234/2026/file.csv';acu.parent.mkdir(parents=True)
+    identifier='99999999999999999999'
+    acu.write_text('Unique ID,Date,Description,Amount,Balance\n'+
+                   f'{identifier},"Oct 31, 2026",INTEREST,$0.25,$25.25\n'+
+                   f'{identifier},"Oct 30, 2026",WITHDRAWAL,-$5.00,$25.00\n')
+    card=root/'cibc/visa/x5678/2026/card.csv';card.parent.mkdir(parents=True);card.write_bytes(source.read_bytes())
+    with connect() as conn:
+        preview=import_tree(conn,root,'Test',currencies={'cibc/visa/x5678':'USD'})
+        assert (preview['rows'],preview['new'])==(5,5)
+        import_tree(conn,root,'Test',apply=True,currencies={'cibc/visa/x5678':'USD'})
+        assert import_tree(conn,root,'Test')['new']==0
+        accounts=conn.execute('SELECT institution,currency FROM accounting.accounts ORDER BY institution').fetchall()
+        assert accounts==[{'institution':'ACU','currency':'CAD'},{'institution':'CIBC','currency':'USD'}]
+        retained=conn.execute("SELECT raw_source FROM accounting.financial_transactions WHERE institution='ACU'").fetchall()
+        assert all(identifier not in str(r) and r['raw_source']['redacted_columns']==['Unique ID'] for r in retained)
+        snapshots=conn.execute('SELECT raw_row FROM accounting.transaction_import_rows').fetchall()
+        assert all(identifier not in str(r) for r in snapshots)
+
+
+def test_account_nickname_changes_preserve_identity_currency_ownership_and_fingerprints(bank_db):
+    from home_budget_pipeline.transactions.accounts import register_account,record_ownership
+    connect,source=bank_db
+    with connect() as conn:
+        import_cibc(conn,source,'Stable account reference','Test',apply=True)
+        record_ownership(conn,'Stable account reference','5678','Primary',{'5678':'Primary'},'Test')
+        original=conn.execute('SELECT id,import_fingerprint FROM accounting.financial_transactions ORDER BY id').fetchall()
+        first=register_account(conn,'Stable account reference','CIBC','credit_card','5678','Friendly label','Test')
+        second=register_account(conn,'Stable account reference','CIBC','credit_card','5678','Renamed label','Test')
+        assert first['account_id']==second['account_id']
+        assert conn.execute('SELECT id,import_fingerprint FROM accounting.financial_transactions ORDER BY id').fetchall()==original
+        assert import_cibc(conn,source,'Stable account reference','Test')['new']==0
+        assert conn.execute('SELECT count(*) AS n FROM accounting.account_ownerships').fetchone()['n']==1
+        assert conn.execute('SELECT count(*) AS n FROM accounting.account_profile_audit').fetchone()['n']==2
+        with pytest.raises(ValueError,match='currency'):
+            register_account(conn,'Stable account reference','CIBC','credit_card','5678','Wrong currency','Test',currency='USD')
+        assert conn.execute('SELECT nickname FROM accounting.accounts').fetchone()['nickname']=='Renamed label'

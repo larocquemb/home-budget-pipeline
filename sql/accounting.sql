@@ -3,12 +3,24 @@ CREATE SCHEMA IF NOT EXISTS accounting;
 CREATE TABLE IF NOT EXISTS accounting.accounts (
  id BIGSERIAL PRIMARY KEY,
  account_reference TEXT NOT NULL UNIQUE,
+ nickname TEXT CHECK(nickname IS NULL OR (length(trim(nickname))>0 AND length(nickname)<=200)),
  institution TEXT NOT NULL,
  primary_card_last4 TEXT CHECK (primary_card_last4 IS NULL OR primary_card_last4 ~ '^[0-9]{4}$'),
  account_type TEXT NOT NULL DEFAULT 'credit_card',
  currency CHAR(3) NOT NULL DEFAULT 'CAD',
  archive_root TEXT,
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE accounting.accounts ADD COLUMN IF NOT EXISTS nickname TEXT
+ CHECK(nickname IS NULL OR (length(trim(nickname))>0 AND length(nickname)<=200));
+CREATE TABLE IF NOT EXISTS accounting.account_profile_audit (
+ id BIGSERIAL PRIMARY KEY,
+ account_id BIGINT NOT NULL REFERENCES accounting.accounts(id),
+ actor TEXT NOT NULL,
+ reason TEXT NOT NULL,
+ before_profile JSONB,
+ after_profile JSONB NOT NULL,
+ recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS accounting.account_numbers (
  id BIGSERIAL PRIMARY KEY,

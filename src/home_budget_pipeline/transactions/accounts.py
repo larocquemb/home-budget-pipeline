@@ -2,6 +2,49 @@
 import re
 
 
+def register_account(conn,reference,institution,account_type,last4,nickname,actor,*,currency='CAD',
+                     reason='User-confirmed account profile'):
+    """Register metadata without importing transactions or assigning owners."""
+    if institution not in {'CIBC','ACU'} or account_type not in {'credit_card','chequing','savings'}:
+        raise ValueError('Unsupported institution or account type')
+    if not re.fullmatch(r'\d{4}',last4) or currency not in {'CAD','USD'}:
+        raise ValueError('Use exactly four identifier digits and CAD or USD')
+    if not reference.strip() or re.search(r'\d{16}',reference):
+        raise ValueError('Use a reference label with last-four identifiers')
+    if not isinstance(nickname,str) or not nickname.strip() or len(nickname)>200 or re.search(r'\d{16}',nickname):
+        raise ValueError('A nickname of 1–200 characters is required')
+    if not actor.strip() or not reason.strip():
+        raise ValueError('Actor and reason are required')
+    from psycopg.types.json import Jsonb
+    import json
+    with conn.transaction():
+        cur=conn.cursor()
+        cur.execute('SELECT * FROM accounting.accounts WHERE account_reference=%s FOR UPDATE',(reference,))
+        before=cur.fetchone()
+        if before and (before['institution']!=institution or before['account_type']!=account_type or before['currency']!=currency):
+            raise ValueError('Account identity or currency conflicts with registered metadata')
+        cur.execute('''INSERT INTO accounting.accounts(account_reference,institution,account_type,currency,primary_card_last4,nickname)
+            VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(account_reference) DO UPDATE SET nickname=EXCLUDED.nickname,
+                primary_card_last4=COALESCE(accounting.accounts.primary_card_last4,EXCLUDED.primary_card_last4)
+            RETURNING *''',(reference,institution,account_type,currency,last4 if account_type=='credit_card' else None,nickname.strip()))
+        after=cur.fetchone()
+        if after['institution']!=institution or after['account_type']!=account_type or after['currency']!=currency:
+            raise ValueError('Account identity or currency conflicts with registered metadata')
+        kind='card' if account_type=='credit_card' else 'bank_account'
+        cur.execute('SELECT last4 FROM accounting.account_numbers WHERE account_id=%s AND number_kind=%s', (after['id'],kind))
+        known={r['last4'] for r in cur.fetchall()}
+        if ((kind=='card' and after['primary_card_last4']!=last4)
+                       or (kind=='bank_account' and known and last4 not in known)):
+            raise ValueError('Last-four identifier conflicts with the registered account')
+        cur.execute('''INSERT INTO accounting.account_numbers(account_id,number_kind,last4)
+            VALUES(%s,%s,%s) ON CONFLICT DO NOTHING''',(after['id'],kind,last4))
+        if before!=after:
+            cur.execute('''INSERT INTO accounting.account_profile_audit(account_id,actor,reason,before_profile,after_profile)
+                VALUES(%s,%s,%s,%s,%s)''',(after['id'],actor,reason,
+                    Jsonb(json.loads(json.dumps(before,default=str))),Jsonb(json.loads(json.dumps(after,default=str)))))
+        return {'account_id':after['id'],'nickname':after['nickname'],'currency':after['currency']}
+
+
 def record_ownership(conn, reference, primary_last4, primary_owner, cardholders, actor, archive_root=None,
                      reason='User-confirmed account and linked card ownership'):
     if re.search(r'\d{16}',reference):
@@ -62,7 +105,7 @@ def record_ownership(conn, reference, primary_last4, primary_owner, cardholders,
 
 
 def account_rows(service):
-    return service._fetch('''SELECT a.id,a.account_reference,a.institution,a.primary_card_last4,a.currency,
+    return service._fetch('''SELECT a.id,a.account_reference,a.nickname,a.institution,a.primary_card_last4,a.currency,
         a.account_type,n.number_kind,n.last4,o.owner_name,o.ownership_role,o.effective_from,o.effective_to,o.asserted_at,o.basis
         FROM accounting.accounts a LEFT JOIN accounting.account_numbers n ON n.account_id=a.id
         LEFT JOIN accounting.account_ownerships o ON o.account_number_id=n.id
