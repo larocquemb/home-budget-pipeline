@@ -112,7 +112,7 @@ def test_category_rules_search_is_parameterized():
 def service_with(rows=(), columns=(), responses=()):
     cursor = FakeCursor(rows, columns, responses)
     connection = FakeConnection(cursor)
-    service = LedgerQueryService(connect=lambda: connection)
+    service = LedgerQueryService(connect=lambda: connection, accounting_connect=lambda: connection)
     return service, connection, cursor
 
 
@@ -253,5 +253,5 @@ def test_transactions_join_persisted_reconciliation_results():
     service.transaction_reconciliation(limit=20)
 
     sql, _ = cursor.executed[1]
-    assert "FROM budget.financial_transactions" in sql
-    assert "budget.transaction_expense_reconciliation" in sql
+    assert "FROM accounting.financial_transactions" in sql
+    assert "accounting.transaction_allocations" in sql

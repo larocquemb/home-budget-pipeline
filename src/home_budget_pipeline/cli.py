@@ -49,6 +49,8 @@ def build_parser(prog: str = "ledger") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog, description="BrownRook Ledger operations.")
     parser.add_argument("--env-file", help="Load explicit settings before command defaults, e.g. .env.dev; place before the command.")
     commands = parser.add_subparsers(dest="command", required=True)
+    from .transactions.commands import add_commands as add_transaction_commands
+    add_transaction_commands(commands)
 
     development = commands.add_parser("development", help="Configure and validate the isolated Arsene development backends.")
     development.add_argument("action", choices=("credentials", "configure", "check", "bootstrap", "replay"))

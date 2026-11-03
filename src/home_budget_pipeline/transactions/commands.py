@@ -1,0 +1,161 @@
+"""Manual bank import, reporting and audit operations."""
+import json
+import os
+import getpass
+import subprocess
+import sys
+from pathlib import Path
+
+from .workflows import ensure_schema, import_cibc, save_allocations, receipt_candidates
+
+
+def add_commands(commands):
+    parser = commands.add_parser('transactions', help='Import bank records, suggest receipt links and record balanced splits.')
+    sub = parser.add_subparsers(dest='transaction_command', required=True)
+    setup = sub.add_parser('setup', help='Add bank provenance and allocation tables without rebuilding data.')
+    setup.add_argument('--apply', action='store_true')
+    setup.set_defaults(handler=run)
+    imp = sub.add_parser('import-cibc', help='Preview/import a headerless CIBC card or deposit-account CSV (CAD).')
+    imp.add_argument('path', type=Path)
+    imp.add_argument('--account-reference', required=True, help='Stable account label; reuse it for subsequent downloads.')
+    imp.add_argument('--apply', action='store_true')
+    imp.add_argument('--account-type',choices=('credit_card','chequing','savings'),default='credit_card')
+    imp.add_argument('--account-last4',help='Required for deposit accounts; exactly four digits.')
+    imp.add_argument('--currency',choices=('CAD','USD'),default='CAD')
+    imp.set_defaults(handler=run)
+    tree=sub.add_parser('import-tree',help='Preview/import CIBC, CIBC US and ACU institution/product/xLAST4/[year/]CSV archives.')
+    tree.add_argument('root',type=Path)
+    tree.add_argument('--apply',action='store_true')
+    tree.add_argument('--account-currency',action='append',default=[],metavar='[BANK/]PRODUCT/xLAST4=USD',
+                      help='Explicit currency for an account folder; repeat as needed. Existing accounts retain their registered currency.')
+    tree.set_defaults(handler=run)
+    view=sub.add_parser('ledger',help='Read the consolidated CAD activity ledger, sorted by bank date.')
+    view.add_argument('--account',default='',help='Nickname or last four digits.')
+    view.add_argument('--from-date')
+    view.add_argument('--to-date')
+    view.add_argument('--direction',choices=('asc','desc'),default='desc')
+    view.add_argument('--limit',type=int,default=100)
+    view.add_argument('--offset',type=int,default=0)
+    view.add_argument('--json',action='store_true')
+    view.set_defaults(handler=run)
+    rates=sub.add_parser('fx-update',help='Fetch and retain Bank of Canada daily USD/CAD rates for imported transactions.')
+    rates.set_defaults(handler=run)
+    scan=sub.add_parser('scan',help='Discover settled downloads in the configured transaction folder and import only new or changed files.')
+    scan.add_argument('--retry-failed',action='store_true',help='Compatibility flag; manual scans already retry failed files.')
+    scan.set_defaults(handler=run)
+    status=sub.add_parser('status',help='Show automatic transaction import state and errors.')
+    status.set_defaults(handler=run)
+    services=sub.add_parser('services',help='Inspect or disable the legacy development watcher; development imports are manual.')
+    services.add_argument('action',choices=('stop','status','logs'))
+    services.set_defaults(handler=run)
+    matches = sub.add_parser('suggest', help='Read-only receipt candidates; never confirm links or enrich receipts.')
+    matches.add_argument('--transaction-id', type=int)
+    matches.set_defaults(handler=run)
+    split = sub.add_parser('allocate', help='Preview/save a complete balanced allocation with audit history.')
+    split.add_argument('transaction_id', type=int)
+    split.add_argument('--plan', type=Path, required=True, help='JSON: expected_version, reason, allocations.')
+    split.add_argument('--apply', action='store_true')
+    split.set_defaults(handler=run)
+    migration=sub.add_parser('migrate-receipt-store',help='Preview/copy legacy bank rows into the configured separate accounting database; preserve originals.')
+    migration.add_argument('--apply',action='store_true')
+    migration.set_defaults(handler=run)
+    ownership=sub.add_parser('ownership',help='Record account ownership and linked cardholders using only last-four identifiers.')
+    ownership.add_argument('--plan',type=Path,required=True)
+    ownership.add_argument('--apply',action='store_true')
+    ownership.set_defaults(handler=run)
+    profile=sub.add_parser('account-profile',help='Preview/register account nickname and last-four metadata without importing transactions.')
+    profile.add_argument('--plan',type=Path,required=True,help='Private JSON list of account profile records.')
+    profile.add_argument('--apply',action='store_true')
+    profile.set_defaults(handler=run)
+    for p in (setup, imp, tree, scan, split, migration, ownership,profile,rates):
+        p.add_argument('--actor', default=os.getenv('LEDGER_ACTOR') or getpass.getuser(),
+                       help='Optional audit identity override; defaults to LEDGER_ACTOR or the local OS user.')
+
+
+def run(args):
+    if args.transaction_command=='services':
+        from ..local_operations import ROOT,_env_path
+        if _env_path(args)!=ROOT/'.env.dev':
+            raise ValueError('Native transaction discovery uses the repository .env.dev')
+        return subprocess.run([sys.executable,str(ROOT/'scripts/transaction_services.py'),args.action],cwd=ROOT).returncode
+    from ..web.queries import LedgerQueryService
+    service = LedgerQueryService()
+    from .database import service as accounting_service
+    bank=accounting_service()
+    action = args.transaction_command
+    if action=='ledger':
+        from datetime import date
+        from .ledger import ledger_rows,text_table
+        report=ledger_rows(bank,account=args.account,start=date.fromisoformat(args.from_date) if args.from_date else None,
+            end=date.fromisoformat(args.to_date) if args.to_date else None,limit=args.limit,offset=args.offset,direction=args.direction)
+        if args.json:
+            print(json.dumps(report,default=str,indent=2))
+        else:
+            print(text_table(report['rows']))
+            print(f"Showing {len(report['rows'])} of {report['total']} rows; {report['missing_rates']} rows lack CAD conversion rates.")
+        return 0
+    if action=='fx-update':
+        from .ledger import update_rates
+        with bank._connect() as conn:
+            report=update_rates(conn,args.actor)
+        print(json.dumps(report,default=str,indent=2));return 0
+    if action in {'scan','status'}:
+        from .discovery import scan,status,source_root
+        with bank._connect() as conn:
+            report=status(conn) if action=='status' else scan(conn,source_root(),args.actor,
+                settle_seconds=float(os.getenv('TRANSACTION_DISCOVERY_SETTLE_SECONDS','10')),retry_failed=True,immediate=True)
+        print(json.dumps(report,default=str,indent=2))
+        return 1 if action=='scan' and report.get('failed') else 0
+    if action == 'suggest':
+        where = ' WHERE id=%s' if args.transaction_id is not None else ''
+        rows = bank._fetch('SELECT * FROM accounting.financial_transactions' + where + ' ORDER BY transaction_date DESC,id',
+                              (args.transaction_id,) if where else ())
+        report = [{'transaction_id': t['id'], 'date': t['transaction_date'], 'amount': t['amount'],
+                   'description': t['description'], 'candidates': receipt_candidates(service, t)} for t in rows]
+    else:
+        if args.apply and not (args.actor or '').strip():
+            raise ValueError('Audit identity is empty; configure LEDGER_ACTOR or use --actor')
+        with bank._connect() as conn:
+            if action == 'setup':
+                if args.apply:
+                    ensure_schema(conn)
+                report = {'applied': args.apply, 'operation': 'add transaction import/allocation tables'}
+            elif action == 'import-cibc':
+                report = import_cibc(conn,args.path,args.account_reference,args.actor or 'preview',apply=args.apply,
+                                    account_type=args.account_type,account_last4=args.account_last4,currency=args.currency)
+            elif action=='import-tree':
+                from .tree_import import import_tree
+                currencies={}
+                for item in args.account_currency:
+                    if '=' not in item:
+                        raise ValueError('Currency overrides use [institution/]product/xLAST4=USD')
+                    key,value=item.split('=',1)
+                    if key.casefold() in currencies and currencies[key.casefold()]!=value.upper():
+                        raise ValueError('Conflicting account currency overrides')
+                    currencies[key.casefold()]=value.upper()
+                report=import_tree(conn,args.root,args.actor or 'preview',apply=args.apply,currencies=currencies)
+            elif action=='migrate-receipt-store':
+                from .migrate import migrate
+                with service._connect() as source:
+                    report=migrate(source,conn,apply=args.apply)
+            elif action=='ownership':
+                from .accounts import record_ownership
+                plan=json.loads(args.plan.read_text())
+                if args.apply:
+                    report=record_ownership(conn,actor=args.actor,**plan)
+                else:
+                    report={'applied':False,'operation':'record account/card ownership','account_reference':plan['reference']}
+            elif action=='account-profile':
+                from .accounts import register_account
+                plan=json.loads(args.plan.read_text())
+                if not isinstance(plan,list):
+                    raise ValueError('Account profile plan must be a list')
+                with conn.transaction():
+                    report=[register_account(conn,actor=args.actor,**entry) for entry in plan] if args.apply else {'applied':False,'accounts':len(plan)}
+            else:
+                plan = json.loads(args.plan.read_text())
+                report = save_allocations(conn, args.transaction_id, plan['allocations'],
+                                          plan['expected_version'], args.actor or 'preview', plan['reason'], apply=args.apply,
+                                          receipt_service=service)
+    print(json.dumps(report, default=str, indent=2))
+    return 0

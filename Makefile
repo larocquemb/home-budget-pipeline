@@ -166,6 +166,11 @@ dev-db-reset:
 	@$(PYTHON) scripts/development_backend.py reset --confirm "$(CONFIRM)"
 
 .PHONY: dev-backend-credentials dev-backend-configure dev-backend-check dev-backend-bootstrap dev-test-db-bootstrap dev-test-db-reset
+.PHONY: dev-accounting-check dev-accounting-setup
+dev-accounting-check:
+	@$(PYTHON) scripts/accounting_backend.py
+dev-accounting-setup:
+	@$(PYTHON) scripts/accounting_backend.py --apply
 dev-backend-credentials:
 	@$(PYTHON) scripts/development_backend.py credentials
 

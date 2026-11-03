@@ -612,7 +612,9 @@ def retired_duplicate_review():
 @app.get(f"{BASE_PATH}/transactions", response_class=HTMLResponse)
 def transactions_page(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), service: LedgerQueryService = Depends(query_service), identity: dict[str, str] = Depends(authenticated_identity)) -> str:
     result = service.transaction_reconciliation(limit=limit, offset=offset)
-    body = table(result.rows, (("transaction_id", "Transaction"), ("transaction_date", "Date"), ("description", "Description"), ("amount", "Amount"), ("payer", "Payer"), ("outcome", "Outcome"), ("score", "Score"), ("expense_pk", "Expense")), links={"expense_pk": f"{BASE_PATH}/expenses/{{value}}"}, money_columns={"amount"})
+    from .transaction_workflows import import_control
+    body = import_control()+f'<p><a href="{BASE_PATH}/transaction-imports">Import status</a> · <a href="{BASE_PATH}/cad-ledger">CAD ledger</a></p><p>Open a bank transaction to inspect receipt candidates and record confirmed splits. Purchases are positive; credits and card payments are negative.</p>'
+    body += table(result.rows, (("transaction_id", "Transaction"), ("account_nickname", "Account"), ("account_last4", "Account ending"), ("transaction_date", "Bank date"), ("description", "Description"), ("amount", "Amount"), ("currency", "Currency"), ("card_last4", "Card ending"), ("kind", "Kind"), ("allocation_count", "Confirmed allocations"), ("outcome", "Reconciliation"), ("expense_pk", "Expense")), links={"transaction_id": f"{BASE_PATH}/transactions/{{value}}", "expense_pk": f"{BASE_PATH}/expenses/{{value}}"}, money_columns={"amount"})
     body += pager(f"{BASE_PATH}/transactions", limit=limit, offset=offset, row_count=len(result.rows))
     return page("Transaction reconciliation", body, base_path=BASE_PATH, identity=identity)
 

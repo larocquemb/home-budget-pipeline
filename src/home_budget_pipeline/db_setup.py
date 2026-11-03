@@ -23,6 +23,8 @@ ANALYTICS_SCHEMA = SQL_DIR / "analytics_views.sql"
 DUPLICATE_SCHEMA = SQL_DIR / "receipt_deduplication.sql"
 RECEIPT_REPROCESS_SCHEMA = SQL_DIR / "receipt_reprocess_requests.sql"
 MERCHANT_ALIASES_DATA = SQL_DIR / "merchant_aliases.sql"
+FINANCIAL_SCHEMA = SQL_DIR / 'financial_transactions.sql'
+TRANSACTION_WORKFLOW_SCHEMA = SQL_DIR / 'transaction_workflows.sql'
 
 
 def _relation_exists(conn, qualified_name: str) -> bool:
@@ -40,6 +42,10 @@ def ensure_database_schema(conn) -> dict[str, bool]:
     if not _relation_exists(conn, "budget.expenses"):
         _execute_sql_file(conn, BASE_SCHEMA)
         base_created = True
+
+    if not _relation_exists(conn, 'budget.financial_transactions'):
+        _execute_sql_file(conn, FINANCIAL_SCHEMA)
+    _execute_sql_file(conn, TRANSACTION_WORKFLOW_SCHEMA)
 
     receipt_ocr_lines_created = not _relation_exists(conn, "budget.receipt_ocr_lines")
     receipt_ocr_learning_created = not _relation_exists(conn, "budget.receipt_ocr_runs")

@@ -30,6 +30,7 @@ from ..product_labels import product_name, corrected_reading, ocr_variants
 from ..receipts.catalogue import RECEIPT_CATALOGUE
 from .render import esc, money, page, pager
 from . import receipt_graph as _receipt_graph_routes
+from . import transaction_workflows as _transaction_workflow_routes
 from .receipt_delete_html import control as deletion_control, script as deletion_script
 from .receipt_fields import RECEIPT_DATETIME_SQL, receipt_datetime, receipt_date_note, duplicate_expense, receipt_status, request_processing_status, LATEST_REQUEST_JOIN, LATEST_REQUEST_COLUMNS
 

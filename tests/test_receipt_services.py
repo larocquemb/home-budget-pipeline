@@ -3,6 +3,13 @@ from pathlib import Path
 import plistlib
 
 
+def test_development_transaction_watcher_cannot_be_started():
+    import pytest
+    from home_budget_pipeline.cli import build_parser
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(['transactions','services','start'])
+
+
 def test_receipt_services_use_distinct_labels_logs_and_load_settings_at_runtime():
     spec = importlib.util.spec_from_file_location('receipt_services', 'scripts/receipt_services.py')
     module = importlib.util.module_from_spec(spec)

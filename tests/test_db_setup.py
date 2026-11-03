@@ -74,7 +74,7 @@ def _patch_upgrade_files(monkeypatch, paths):
 
 def test_existing_base_schema_applies_shared_upgrades_and_ensures_receipt_schema(tmp_path, monkeypatch):
     conn = MagicMock()
-    conn.execute.return_value.fetchone.side_effect = [("budget.expenses",), (None,), (None,), (None,)]
+    conn.execute.return_value.fetchone.side_effect = [("budget.expenses",), ("budget.financial_transactions",), (None,), (None,), (None,)]
     paths = _write_upgrade_files(tmp_path)
     _patch_upgrade_files(monkeypatch, paths)
 
@@ -96,13 +96,13 @@ def test_existing_base_schema_applies_shared_upgrades_and_ensures_receipt_schema
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.ocr_result_events(message_id text);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_reprocess_requests(request_id uuid);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_duplicate_links(id bigint);")
-    assert conn.commit.call_count == 12
+    assert conn.commit.call_count == 13
     ensure.assert_called_once_with(conn, paths["template"])
 
 
 def test_blank_database_loads_base_and_shared_schemas_before_receipt_schema(tmp_path, monkeypatch):
     conn = MagicMock()
-    conn.execute.return_value.fetchone.side_effect = [(None,), (None,), (None,), (None,)]
+    conn.execute.return_value.fetchone.side_effect = [(None,), (None,), (None,), (None,), (None,)]
 
     base = tmp_path / "schema_phase1.sql"
     base.write_text("CREATE SCHEMA budget;", encoding="utf-8")
@@ -128,5 +128,5 @@ def test_blank_database_loads_base_and_shared_schemas_before_receipt_schema(tmp_
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.ocr_result_events(message_id text);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_reprocess_requests(request_id uuid);")
     conn.execute.assert_any_call("CREATE TABLE IF NOT EXISTS budget.receipt_duplicate_links(id bigint);")
-    assert conn.commit.call_count == 13
+    assert conn.commit.call_count == 15
     ensure.assert_called_once_with(conn, paths["template"])
