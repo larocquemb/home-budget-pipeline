@@ -111,11 +111,14 @@ def service_plist(root: Path, name: str, threads: int | None = None) -> dict:
         config['KeepAlive'] = False
         config['StartInterval'] = 600
 
-    if name in {'web', 'progress'}:
-        script = 'mac_web_agent.py' if name == 'web' else 'receipt_progress.py'
+    if name in {'web', 'progress','transactions'}:
+        script = {'web':'mac_web_agent.py','progress':'receipt_progress.py','transactions':'transaction_discovery.py'}[name]
         config['ProgramArguments'] = [str(web_agent_bundle(root) / 'Contents/MacOS/LedgerWebAgent'), str(root / 'scripts' / script)]
         config['AssociatedBundleIdentifiers'] = [WEB_BUNDLE_ID]
         config['EnvironmentVariables'].update({'PYTHONHOME': sys.base_prefix, 'PYTHONPATH': os.pathsep.join(site.getsitepackages())})
+    if name=='transactions':
+        config['KeepAlive']=False
+        config['StartInterval']=30
 
     if is_worker(name) and threads is not None:
         config['EnvironmentVariables']['HOME_BUDGET_SERVICE_OCR_THREADS'] = str(threads)
@@ -165,7 +168,7 @@ def main() -> int:
         if not (ROOT / '.env.dev').is_file() or not (ROOT / '.venv/bin/ledger').is_file():
             parser.error('Configure .env.dev and install the project in .venv first')
         agents.mkdir(parents=True, exist_ok=True)
-        if names in {('web',), ('progress',)}:
+        if names in {('web',), ('progress',),('transactions',)}:
             prepare_web_agent(ROOT)
         logs = ROOT / '.local-services'
         logs.mkdir(mode=0o700, exist_ok=True)

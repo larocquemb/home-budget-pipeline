@@ -298,3 +298,67 @@ def test_us_institution_and_canadian_us_account_folder_import_as_usd(bank_db,tmp
         assert {r['institution'] for r in rows}=={'CIBC','CIBC US'}
         assert all(r['currency']=='USD' for r in rows)
         assert '123456789012' not in str(rows)
+
+
+def test_discovery_settles_imports_once_and_retains_source(bank_db,tmp_path):
+    from datetime import datetime,timezone,timedelta
+    from home_budget_pipeline.transactions.discovery import scan
+    from home_budget_pipeline.transactions.accounts import register_account
+    connect,source=bank_db
+    root=tmp_path/'raw';file=root/'cibc/visa/x5678/2026/file.csv'
+    file.parent.mkdir(parents=True);file.write_bytes(source.read_bytes())
+    now=datetime.now(timezone.utc)
+    with connect() as conn:
+        register_account(conn,'CIBC Visa x5678','CIBC','credit_card','5678','Test','Test')
+        first=scan(conn,root,'Test',now=now,retained_root=tmp_path/'retained')
+        assert first['waiting']==1 and first['new_transactions']==0
+        second=scan(conn,root,'Test',now=now+timedelta(seconds=11),retained_root=tmp_path/'retained')
+        assert second['new_transactions']==3
+        assert list((tmp_path/'retained').rglob('*.csv'))[0].read_bytes()==source.read_bytes()
+        third=scan(conn,root,'Test',now=now+timedelta(seconds=12),retained_root=tmp_path/'retained')
+        assert third['unchanged']==1 and third['new_transactions']==0
+        assert conn.execute('SELECT count(*) AS n FROM accounting.transaction_discovery_attempts').fetchone()['n']==1
+
+
+def test_discovery_bad_download_does_not_block_good_file_and_changed_source_resets_retry(bank_db,tmp_path):
+    from datetime import datetime,timezone,timedelta
+    from home_budget_pipeline.transactions.discovery import scan
+    from home_budget_pipeline.transactions.accounts import register_account
+    connect,source=bank_db
+    root=tmp_path/'raw';good=root/'cibc/visa/x5678/2026/good.csv'
+    good.parent.mkdir(parents=True);good.write_bytes(source.read_bytes())
+    bad=good.with_name('bad.csv');bad.write_text('unfinished\n')
+    now=datetime.now(timezone.utc)
+    with connect() as conn:
+        register_account(conn,'CIBC Visa x5678','CIBC','credit_card','5678','Test','Test')
+        scan(conn,root,'Test',now=now,retained_root=tmp_path/'retained')
+        result=scan(conn,root,'Test',now=now+timedelta(seconds=11),retained_root=tmp_path/'retained')
+        assert result['new_transactions']==3 and result['failed']==1
+        wait=scan(conn,root,'Test',now=now+timedelta(seconds=12),retained_root=tmp_path/'retained')
+        assert any(f['status']=='retry_wait' for f in wait['files'])
+        bad.write_text('2026-03-14,OTHER,7.99,,1234********5678\n')
+        scan(conn,root,'Test',now=now+timedelta(seconds=13),retained_root=tmp_path/'retained')
+        fixed=scan(conn,root,'Test',now=now+timedelta(seconds=24),retained_root=tmp_path/'retained')
+        assert fixed['new_transactions']==1 and fixed['failed']==0
+        assert conn.execute('SELECT count(*) AS n FROM accounting.financial_transactions').fetchone()['n']==4
+        assert conn.execute("SELECT count(*) AS n FROM accounting.transaction_discovery_attempts WHERE status='failed'").fetchone()['n']==1
+
+
+def test_discovery_recognizes_manual_import_and_requires_registered_currency(bank_db,tmp_path):
+    from datetime import datetime,timezone,timedelta
+    from home_budget_pipeline.transactions.discovery import scan
+    connect,source=bank_db
+    root=tmp_path/'raw';file=root/'cibc/visa/x5678/2026/file.csv'
+    file.parent.mkdir(parents=True);file.write_bytes(source.read_bytes())
+    now=datetime.now(timezone.utc)
+    with connect() as conn:
+        import_cibc(conn,file,'Manual stable label','Test',apply=True)
+        result=scan(conn,root,'Test',now=now,retained_root=tmp_path/'retained')
+        assert result['unchanged']==1
+        assert list((tmp_path/'retained').rglob('*.csv'))[0].read_bytes()==file.read_bytes()
+        other=root/'cibc/visa/x9012/2026/new.csv';other.parent.mkdir(parents=True)
+        other.write_text('2026-03-14,OTHER,7.99,,1234********9012\n')
+        scan(conn,root,'Test',now=now,retained_root=tmp_path/'retained')
+        rejected=scan(conn,root,'Test',now=now+timedelta(seconds=11),retained_root=tmp_path/'retained')
+        assert rejected['failed']==1 and rejected['new_transactions']==0
+        assert conn.execute('SELECT count(*) AS n FROM accounting.accounts').fetchone()['n']==1

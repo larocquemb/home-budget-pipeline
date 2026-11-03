@@ -13,14 +13,14 @@ PROFILES={'cibc':('CIBC',PRODUCTS,parse_cibc),
           'cibcus':('CIBC US',{'smart':('chequing','Smart'),'savings':('savings','Savings')},parse_cibcus)}
 
 
-def plans(conn, root, currencies=None):
+def plans(conn, root, currencies=None, *, files=None, contents=None):
     root=Path(root).resolve()
     if not root.is_dir():
         raise ValueError('Transaction archive root is not a directory')
     result=[]
     currencies={k.casefold():v for k,v in (currencies or {}).items()}
     used=set()
-    for file in sorted(root.rglob('*.csv')):
+    for file in sorted(root.rglob('*.csv') if files is None else files):
         parts=file.relative_to(root).parts
         if root.name.casefold() in PROFILES:
             bank=root.name.casefold();prefix=''
@@ -53,11 +53,11 @@ def plans(conn, root, currencies=None):
             raise ValueError('Supported export currencies are CAD and USD')
         if matches and matches[0]['currency']!=currency:
             raise ValueError('Currency override conflicts with the registered account')
-        parser(file.read_bytes(),reference,account_type=account_type,account_last4=last4)
+        parser(contents[file] if contents is not None else file.read_bytes(),reference,account_type=account_type,account_last4=last4)
         result.append((file,reference,account_type,last4,currency,institution))
     if not result:
         raise ValueError('No CSV exports found below the archive root')
-    if set(currencies)-used:
+    if files is None and set(currencies)-used:
         raise ValueError('Currency override did not match an archived account folder')
     return result
 

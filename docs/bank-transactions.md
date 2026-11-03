@@ -69,6 +69,44 @@ or the local OS username. No name is required on import commands. `--actor` is a
 optional override; it records who ran an operation and does not assign ownership
 or a payer to transactions.
 
+## Automatic download discovery
+
+Drop new exports into the configured `TRANSACTION_SOURCE_ROOT` using the existing
+institution/product/xLAST4/[year]/CSV layout. The native transaction discovery
+service checks every 30 seconds and imports stable new or changed files. No
+per-file command, path or personal name is required.
+
+```sh
+ledger --env-file .env.dev transactions services start
+ledger --env-file .env.dev transactions services status
+ledger --env-file .env.dev transactions status
+```
+
+The service starts at login after it has been enabled. Files must remain stable
+across two observations and pass `TRANSACTION_DISCOVERY_SETTLE_SECONDS` (default
+10 seconds) before processing. Unchanged source hashes are skipped; known manual
+imports are recognized. Original inputs are retained by hash beside the inbox in
+`transactions/retained`, with source artifacts and import attempts recorded in
+accounting. `TRANSACTION_RETAINED_ROOT` can override that location outside `raw`.
+
+Malformed downloads retain their failure status and retry with bounded backoff;
+they do not block other accounts. Corrected content resets the retry delay.
+Automatic imports require an existing account profile/currency, preventing a new
+unknown USD card from being assumed CAD. Current registered accounts are ready.
+
+**Transactions → Import status** shows discovered files, waiting/imported/failed
+states and retry times. For an immediate scan or a deliberate retry:
+
+```sh
+ledger --env-file .env.dev transactions scan
+ledger --env-file .env.dev transactions scan --retry-failed
+```
+
+Use `transactions services stop` to disable automatic startup, or `restart` to
+reload the agent. The service records its actor as `service:transaction-discovery`;
+unattended execution is not human work time. These operations use the accounting
+database independently of receipt processing and receipt rebuilds.
+
 ## Import CIBC MasterCard CSV
 
 Use the original five-column export without adding a header:

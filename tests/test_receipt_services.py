@@ -3,6 +3,17 @@ from pathlib import Path
 import plistlib
 
 
+def test_transaction_discovery_uses_periodic_non_overlapping_signed_agent():
+    spec=importlib.util.spec_from_file_location('transaction_agent_test','scripts/receipt_services.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    config=module.service_plist(Path('/Users/example/project'),'transactions')
+    assert config['RunAtLoad'] is True
+    assert config['KeepAlive'] is False
+    assert config['StartInterval']==30
+    assert config['ProgramArguments'][-1].endswith('/scripts/transaction_discovery.py')
+    assert config['AssociatedBundleIdentifiers']==[module.WEB_BUNDLE_ID]
+
+
 def test_receipt_services_use_distinct_labels_logs_and_load_settings_at_runtime():
     spec = importlib.util.spec_from_file_location('receipt_services', 'scripts/receipt_services.py')
     module = importlib.util.module_from_spec(spec)

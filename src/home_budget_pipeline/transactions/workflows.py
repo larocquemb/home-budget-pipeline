@@ -20,9 +20,9 @@ def import_cibc(conn, path, account_reference, actor, *, apply=False,account_typ
 
 
 def import_bank_csv(conn,path,account_reference,actor,*,apply=False,account_type='credit_card',
-                    account_last4=None,extra_known=None,currency='CAD',institution='CIBC'):
+                    account_last4=None,extra_known=None,currency='CAD',institution='CIBC',source_data=None):
     from psycopg.types.json import Jsonb
-    data = Path(path).read_bytes()
+    data = Path(path).read_bytes() if source_data is None else source_data
     from .acu import parse_acu
     from .cibcus import parse_cibcus
     parsers={'CIBC':parse_cibc,'ACU':parse_acu,'CIBC US':parse_cibcus}

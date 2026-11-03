@@ -130,6 +130,30 @@ CREATE TABLE IF NOT EXISTS accounting.source_artifacts (
     backup_status TEXT NOT NULL DEFAULT 'independent backup unverified',
     PRIMARY KEY (import_id,source_uri)
 );
+CREATE TABLE IF NOT EXISTS accounting.transaction_discovery (
+ source_uri TEXT PRIMARY KEY,
+ root_uri TEXT NOT NULL,
+ source_sha256 TEXT NOT NULL,
+ source_size BIGINT NOT NULL,
+ source_mtime_ns BIGINT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('waiting','imported','failed')),
+ observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ imported_at TIMESTAMPTZ,
+ attempt_count INTEGER NOT NULL DEFAULT 0,
+ retry_after TIMESTAMPTZ,
+ error_summary TEXT
+);
+CREATE TABLE IF NOT EXISTS accounting.transaction_discovery_attempts (
+ id BIGSERIAL PRIMARY KEY,
+ source_uri TEXT NOT NULL,
+ source_sha256 TEXT NOT NULL,
+ retained_uri TEXT,
+ status TEXT NOT NULL CHECK(status IN ('imported','failed')),
+ actor TEXT NOT NULL,
+ result JSONB NOT NULL,
+ occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE INDEX IF NOT EXISTS idx_transaction_import_rows_transaction
     ON accounting.transaction_import_rows(transaction_id);
 CREATE TABLE IF NOT EXISTS accounting.transaction_allocations (

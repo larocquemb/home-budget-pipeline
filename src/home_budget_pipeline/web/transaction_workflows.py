@@ -145,3 +145,17 @@ def accounts_page(identity:dict=Depends(authenticated_identity)):
 def accounts_api(_:dict=Depends(authenticated_identity)):
     from ..transactions.accounts import account_rows
     return account_rows(accounting_service())
+
+
+@app.get(f'{BASE_PATH}/transaction-imports',response_class=HTMLResponse)
+def transaction_imports_page(identity:dict=Depends(authenticated_identity)):
+    from ..transactions.discovery import status
+    from pathlib import Path
+    with accounting_service()._connect() as conn:
+        rows=status(conn)
+    for row in rows:
+        row['file']=str(Path(row['source_uri']).relative_to(row['root_uri']))
+    body='<p>New downloads in the configured archive are discovered automatically. Waiting files are settling; failed files retain their errors and retry automatically.</p>'
+    body+=table(rows,(('file','Download'),('status','Status'),('checked_at','Last checked'),
+                     ('imported_at','Imported'),('retry_after','Next retry'),('error_summary','Issue')))
+    return page('Transaction imports',body,base_path=BASE_PATH,identity=identity)

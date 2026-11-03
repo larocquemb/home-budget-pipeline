@@ -2,6 +2,8 @@
 import json
 import os
 import getpass
+import subprocess
+import sys
 from pathlib import Path
 
 from .workflows import ensure_schema, import_cibc, save_allocations, receipt_candidates
@@ -27,6 +29,14 @@ def add_commands(commands):
     tree.add_argument('--account-currency',action='append',default=[],metavar='[BANK/]PRODUCT/xLAST4=USD',
                       help='Explicit currency for an account folder; repeat as needed. Existing accounts retain their registered currency.')
     tree.set_defaults(handler=run)
+    scan=sub.add_parser('scan',help='Discover settled downloads in the configured transaction folder and import only new or changed files.')
+    scan.add_argument('--retry-failed',action='store_true',help='Retry failed files without waiting for automatic backoff.')
+    scan.set_defaults(handler=run)
+    status=sub.add_parser('status',help='Show automatic transaction import state and errors.')
+    status.set_defaults(handler=run)
+    services=sub.add_parser('services',help='Control automatic native Mac transaction discovery.')
+    services.add_argument('action',choices=('start','stop','restart','status','logs'))
+    services.set_defaults(handler=run)
     matches = sub.add_parser('suggest', help='Read-only receipt candidates; never confirm links or enrich receipts.')
     matches.add_argument('--transaction-id', type=int)
     matches.set_defaults(handler=run)
@@ -46,17 +56,29 @@ def add_commands(commands):
     profile.add_argument('--plan',type=Path,required=True,help='Private JSON list of account profile records.')
     profile.add_argument('--apply',action='store_true')
     profile.set_defaults(handler=run)
-    for p in (setup, imp, tree, split, migration, ownership,profile):
+    for p in (setup, imp, tree, scan, split, migration, ownership,profile):
         p.add_argument('--actor', default=os.getenv('LEDGER_ACTOR') or getpass.getuser(),
                        help='Optional audit identity override; defaults to LEDGER_ACTOR or the local OS user.')
 
 
 def run(args):
+    if args.transaction_command=='services':
+        from ..local_operations import ROOT,_env_path
+        if _env_path(args)!=ROOT/'.env.dev':
+            raise ValueError('Native transaction discovery uses the repository .env.dev')
+        return subprocess.run([sys.executable,str(ROOT/'scripts/transaction_services.py'),args.action],cwd=ROOT).returncode
     from ..web.queries import LedgerQueryService
     service = LedgerQueryService()
     from .database import service as accounting_service
     bank=accounting_service()
     action = args.transaction_command
+    if action in {'scan','status'}:
+        from .discovery import scan,status,source_root
+        with bank._connect() as conn:
+            report=status(conn) if action=='status' else scan(conn,source_root(),args.actor,
+                settle_seconds=float(os.getenv('TRANSACTION_DISCOVERY_SETTLE_SECONDS','10')),retry_failed=args.retry_failed)
+        print(json.dumps(report,default=str,indent=2))
+        return 1 if action=='scan' and report.get('failed') else 0
     if action == 'suggest':
         where = ' WHERE id=%s' if args.transaction_id is not None else ''
         rows = bank._fetch('SELECT * FROM accounting.financial_transactions' + where + ' ORDER BY transaction_date DESC,id',
