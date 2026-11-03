@@ -93,3 +93,35 @@ def test_real_duplicate_decision_preserves_purchase_and_originals(action):
             conn.execute('DELETE FROM budget.receipt_evidence WHERE source_sha256=ANY(%s)', (shas,))
             if expense is not None:
                 conn.execute('DELETE FROM budget.expenses WHERE id=%s', (expense,))
+
+
+@pytest.mark.parametrize('shared',[False,True])
+def test_receipt_delete_restore_preserves_items_and_active_totals(shared):
+    from home_budget_pipeline.web.receipt_deletion import change
+    connect = lambda: psycopg.connect(os.environ['TEST_DATABASE_URL'],row_factory=dict_row)
+    shas = [uuid.uuid4().hex * 2 for _ in range(2 if shared else 1)]
+    expense = None
+    try:
+        with connect() as conn:
+            expense = conn.execute("INSERT INTO budget.expenses(source,order_id,expense_total) VALUES ('scanned',%s,12.34) RETURNING id",(str(uuid.uuid4()),)).fetchone()['id']
+            conn.execute("INSERT INTO budget.expense_items(expense_pk,item_name,line_total,budget_category) VALUES (%s,'Synthetic product',12.34,'Groceries')",(expense,))
+            for sha in shas:
+                conn.execute("INSERT INTO budget.receipt_evidence(expense_pk,evidence_type,source_reference,source_sha256,raw_text) VALUES (%s,'scanned',%s,%s,'Original OCR')",(expense,sha+'.pdf',sha))
+            before = conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=%s',(expense,)).fetchall()
+        change(connect,shas[0],deleted=True,actor='Test reviewer')
+        with connect() as conn:
+            active = conn.execute('SELECT expense_total FROM budget.analytics_expenses WHERE expense_pk=%s',(expense,)).fetchall()
+            assert bool(active) == shared
+            assert conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=%s',(expense,)).fetchall() == before
+        change(connect,shas[0],deleted=False,actor='Test reviewer')
+        with connect() as conn:
+            assert conn.execute('SELECT expense_total FROM budget.analytics_expenses WHERE expense_pk=%s',(expense,)).fetchone()['expense_total'] == before[0]['line_total']
+            assert conn.execute('SELECT * FROM budget.expense_items WHERE expense_pk=%s',(expense,)).fetchall() == before
+            assert conn.execute('SELECT raw_text FROM budget.receipt_evidence WHERE source_sha256=%s',(shas[0],)).fetchone()['raw_text'] == 'Original OCR'
+            assert conn.execute('SELECT count(*) AS n FROM lineage.receipt_events WHERE source_sha256=%s',(shas[0],)).fetchone()['n'] == 2
+    finally:
+        with connect() as conn:
+            conn.execute('DELETE FROM lineage.receipt_events WHERE source_sha256=ANY(%s)',(shas,))
+            conn.execute('DELETE FROM budget.receipt_evidence WHERE source_sha256=ANY(%s)',(shas,))
+            if expense is not None:
+                conn.execute('DELETE FROM budget.expenses WHERE id=%s',(expense,))

@@ -34,7 +34,8 @@ FROM budget.expenses e
 LEFT JOIN budget.accounts a ON a.id = e.account_id
 LEFT JOIN budget.expense_reconciliation_status r ON r.expense_pk = e.id
 LEFT JOIN budget.expense_data_quality_status q ON q.expense_pk = e.id
-WHERE NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'duplicate_merge');
+WHERE NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'duplicate_merge')
+  AND NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'receipt_deleted');
 
 CREATE OR REPLACE VIEW budget.analytics_expense_items AS
 SELECT
@@ -62,7 +63,8 @@ JOIN budget.expenses e ON e.id = ei.expense_pk
 LEFT JOIN budget.accounts a ON a.id = e.account_id
 LEFT JOIN budget.expense_categories ec ON ec.category_name = ei.budget_category
 LEFT JOIN budget.category_groups cg ON cg.id = ec.group_id
-WHERE NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'duplicate_merge');
+WHERE NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'duplicate_merge')
+  AND NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'receipt_deleted');
 
 CREATE OR REPLACE VIEW budget.analytics_category_spend AS
 SELECT
@@ -79,6 +81,7 @@ JOIN budget.expenses e ON e.id = ei.expense_pk
 LEFT JOIN budget.expense_categories ec ON ec.category_name = ei.budget_category
 LEFT JOIN budget.category_groups cg ON cg.id = ec.group_id
 WHERE NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'duplicate_merge')
+  AND NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'receipt_deleted')
 GROUP BY
     COALESCE(e.order_date, e.transaction_datetime::date),
     COALESCE(ei.budget_category, 'Uncategorized'),

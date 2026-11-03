@@ -97,4 +97,4 @@ def test_default_list_filters_archive_and_history_pagination_retains_choice():
         def _fetch(self,sql,params):
             return ({'total_count':30},) if 'COUNT(*)' in sql else ()
     html=web.receipts_page(limit=10,offset=0,include_archived=True,service=PageService(),identity={'user':'test'})
-    assert 'Show archived sources' in html and 'include_archived=true' in html
+    assert 'Show archived or deleted receipts' in html and 'include_archived=true' in html

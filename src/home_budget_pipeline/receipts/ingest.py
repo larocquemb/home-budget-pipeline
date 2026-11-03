@@ -1771,6 +1771,7 @@ def upsert_receipt(conn, receipt: ScannedReceipt, schema: str = "budget") -> int
                     ELSE EXCLUDED.raw_payload END
             WHERE NOT (COALESCE(expenses.raw_payload, '{{}}'::jsonb) ? 'item_allocation_correction')
               AND NOT (COALESCE(expenses.raw_payload, '{{}}'::jsonb) ? 'duplicate_merge')
+              AND NOT (COALESCE(expenses.raw_payload, '{{}}'::jsonb) ? 'receipt_deleted')
             RETURNING id
             """,
             (receipt.canonical_order_id, Path(receipt.path).name, receipt.source_reference,

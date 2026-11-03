@@ -190,7 +190,9 @@ class LedgerQueryService:
         status: Optional[str] = None,
         max_items: int = 4,
     ) -> Page:
-        where = "WHERE e.extraction_status = %s" if status else ""
+        where = "WHERE NOT (COALESCE(e.raw_payload, '{}'::jsonb) ? 'receipt_deleted')"
+        if status:
+            where += " AND e.extraction_status = %s"
         params: list[Any] = [status] if status else []
         sql = f"""
             SELECT e.id AS expense_pk,
@@ -225,7 +227,9 @@ class LedgerQueryService:
               JOIN budget.expenses e ON e.id=a.expense_pk
               LEFT JOIN LATERAL (
                   SELECT merchant,raw_payload FROM budget.receipt_evidence
-                   WHERE expense_pk=a.expense_pk AND (raw_payload->>'store' IS NOT NULL
+                   WHERE expense_pk=a.expense_pk
+                     AND NOT (COALESCE(raw_payload, '{}'::jsonb) ? 'receipt_deleted')
+                     AND (raw_payload->>'store' IS NOT NULL
                         OR raw_payload->>'store_address' IS NOT NULL
                         OR raw_payload->>'store_phone' IS NOT NULL
                         OR raw_payload->>'tax_registration_number' IS NOT NULL)
