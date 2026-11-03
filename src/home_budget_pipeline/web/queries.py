@@ -922,7 +922,7 @@ class LedgerQueryService:
         bank=LedgerQueryService(self._accounting_connect or connect)
         sql = """
             SELECT ft.id AS transaction_id, ft.transaction_date, ft.posting_date,
-                   ft.amount, ft.description, ft.payer, ft.payer_source,
+                   ft.amount, ft.currency, ft.description, ft.payer, ft.payer_source,
                    ft.card_last4, ft.raw_source->>'kind' AS kind,
                    (SELECT count(*) FROM accounting.transaction_allocations a WHERE a.transaction_id=ft.id) AS allocation_count,
                    NULL::bigint AS expense_pk,

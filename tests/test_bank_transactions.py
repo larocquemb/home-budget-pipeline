@@ -57,6 +57,17 @@ def test_accounting_connection_never_falls_back_to_receipt_database(monkeypatch)
         connect()
 
 
+def test_deposit_export_uses_account_identifier_without_inventing_a_payment_card():
+    data=b'2026-03-12,WITHDRAWAL,25.00,\n2026-03-13,DEPOSIT,,40.00\n'
+    rows=parse_cibc(data,'Example chequing x1234',account_type='chequing',account_last4='1234')
+    assert [(r.amount,r.kind,r.card_last4) for r in rows]==[(Decimal('25.00'),'withdrawal',None),(Decimal('-40.00'),'deposit',None)]
+    assert len(rows[0].raw)==4
+    other=parse_cibc(data,'Example savings x5678',account_type='savings',account_last4='5678')
+    assert rows[0].fingerprint!=other[0].fingerprint
+    with pytest.raises(ValueError,match='account-last4'):
+        parse_cibc(data,'Example chequing',account_type='chequing')
+
+
 def test_balanced_split_and_refund_use_decimal_cents():
     rows = normalize_allocations([{'amount':'0.10','category':'Food'}, {'amount':'0.20','category':'Home','expense_pk':5}], Decimal('.30'))
     assert sum(r['amount'] for r in rows) == Decimal('.30')

@@ -182,3 +182,59 @@ def test_legacy_migration_copies_and_verifies_without_deleting_source(bank_db):
     with connect() as conn:
         assert conn.execute('SELECT count(*) AS n FROM budget.financial_transactions').fetchone()['n']==1
         assert conn.execute('SELECT count(*) AS n FROM accounting.financial_transactions').fetchone()['n']==1
+
+
+def test_tree_preview_apply_and_overlap_counts_agree_without_partial_import(bank_db,tmp_path):
+    from home_budget_pipeline.transactions.tree_import import import_tree
+    connect,_=bank_db
+    root=tmp_path/'cibc'
+    a=root/'smart/x1234/2026/one.csv';a.parent.mkdir(parents=True)
+    a.write_text('2026-03-12,ATM,25.00,\n')
+    b=a.with_name('overlap.csv');b.write_text(a.read_text()+'2026-03-13,DEPOSIT,,40.00\n')
+    c=root/'eadvantage/x5678/two.csv';c.parent.mkdir(parents=True);c.write_text('2026-03-12,INTEREST,,0.05\n')
+    with connect() as conn:
+        preview=import_tree(conn,root,'Test')
+        assert (preview['rows'],preview['new'],preview['already_imported'])==(4,3,1)
+        assert conn.execute('SELECT count(*) AS n FROM accounting.accounts').fetchone()['n']==0
+        applied=import_tree(conn,root,'Test',apply=True)
+        assert applied['new']==preview['new']
+        assert import_tree(conn,root,'Test',apply=True)['new']==0
+        assert conn.execute('SELECT count(*) AS n FROM accounting.financial_transactions WHERE card_last4 IS NOT NULL').fetchone()['n']==0
+        assert conn.execute('SELECT count(*) AS n FROM accounting.account_numbers').fetchone()['n']==2
+        assert conn.execute('SELECT count(*) AS n FROM accounting.account_ownerships').fetchone()['n']==0
+        c.write_text('bad file\n')
+        with pytest.raises(ValueError):
+            import_tree(conn,root,'Test',apply=True)
+        assert conn.execute('SELECT count(*) AS n FROM accounting.financial_transactions').fetchone()['n']==3
+
+
+def test_tree_reuses_existing_primary_card_account_reference(bank_db,tmp_path):
+    from home_budget_pipeline.transactions.tree_import import import_tree
+    from home_budget_pipeline.transactions.accounts import record_ownership
+    connect,source=bank_db
+    with connect() as conn:
+        import_cibc(conn,source,'Existing stable label','Test',apply=True)
+        record_ownership(conn,'Existing stable label','5678','Primary',{'5678':'Primary'},'Test')
+        file=tmp_path/'cibc/mastercard/x5678/2026/card.csv';file.parent.mkdir(parents=True);file.write_bytes(source.read_bytes())
+        report=import_tree(conn,tmp_path/'cibc','Test')
+        assert report['new']==0
+        assert report['files'][0]['account_reference']=='Existing stable label'
+
+
+def test_usd_account_retains_currency_and_never_matches_cad_receipts(bank_db,tmp_path):
+    from home_budget_pipeline.transactions.tree_import import import_tree
+    connect,source=bank_db
+    file=tmp_path/'cibc/visa/x5678/2026/card.csv';file.parent.mkdir(parents=True);file.write_bytes(source.read_bytes())
+    with connect() as conn:
+        report=import_tree(conn,tmp_path/'cibc','Test',apply=True,currencies={'visa/x5678':'USD'})
+        assert report['files'][0]['currency']=='USD'
+        assert import_tree(conn,tmp_path/'cibc','Test')['new']==0
+        tx=conn.execute('SELECT * FROM accounting.financial_transactions WHERE amount>0 LIMIT 1').fetchone()
+        assert tx['currency']=='USD'
+        assert receipt_candidates(LedgerQueryService(connect),tx)==()
+        with pytest.raises(ValueError,match='conflicts'):
+            import_tree(conn,tmp_path/'cibc','Test',currencies={'visa/x5678':'CAD'})
+        with pytest.raises(ValueError,match='currency'):
+            save_allocations(conn,tx['id'],[{'amount':'12.34','category':'Food','expense_pk':42}],0,'Test','Checked',apply=True,receipt_service=LedgerQueryService(connect))
+        save_allocations(conn,tx['id'],[{'amount':'12.34','category':'Food'}],0,'Test','USD allocation',apply=True)
+        assert conn.execute('SELECT currency FROM accounting.accounts').fetchone()['currency']=='USD'

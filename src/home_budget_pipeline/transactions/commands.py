@@ -11,11 +11,20 @@ def add_commands(commands):
     setup = sub.add_parser('setup', help='Add bank provenance and allocation tables without rebuilding data.')
     setup.add_argument('--apply', action='store_true')
     setup.set_defaults(handler=run)
-    imp = sub.add_parser('import-cibc', help='Preview/import a headerless five-column CIBC card CSV (CAD).')
+    imp = sub.add_parser('import-cibc', help='Preview/import a headerless CIBC card or deposit-account CSV (CAD).')
     imp.add_argument('path', type=Path)
     imp.add_argument('--account-reference', required=True, help='Stable account label; reuse it for subsequent downloads.')
     imp.add_argument('--apply', action='store_true')
+    imp.add_argument('--account-type',choices=('credit_card','chequing','savings'),default='credit_card')
+    imp.add_argument('--account-last4',help='Required for deposit accounts; exactly four digits.')
+    imp.add_argument('--currency',choices=('CAD','USD'),default='CAD')
     imp.set_defaults(handler=run)
+    tree=sub.add_parser('import-tree',help='Preview/import product/xLAST4/[year/]CSV exports below a CIBC archive root.')
+    tree.add_argument('root',type=Path)
+    tree.add_argument('--apply',action='store_true')
+    tree.add_argument('--account-currency',action='append',default=[],metavar='PRODUCT/xLAST4=USD',
+                      help='Explicit currency for an account folder; repeat as needed. Existing accounts retain their registered currency.')
+    tree.set_defaults(handler=run)
     matches = sub.add_parser('suggest', help='Read-only receipt candidates; never confirm links or enrich receipts.')
     matches.add_argument('--transaction-id', type=int)
     matches.set_defaults(handler=run)
@@ -31,7 +40,7 @@ def add_commands(commands):
     ownership.add_argument('--plan',type=Path,required=True)
     ownership.add_argument('--apply',action='store_true')
     ownership.set_defaults(handler=run)
-    for p in (setup, imp, split, migration, ownership):
+    for p in (setup, imp, tree, split, migration, ownership):
         p.add_argument('--actor', default=None, help='Required for writes; person responsible for the operation.')
 
 
@@ -56,7 +65,19 @@ def run(args):
                     ensure_schema(conn)
                 report = {'applied': args.apply, 'operation': 'add transaction import/allocation tables'}
             elif action == 'import-cibc':
-                report = import_cibc(conn, args.path, args.account_reference, args.actor or 'preview', apply=args.apply)
+                report = import_cibc(conn,args.path,args.account_reference,args.actor or 'preview',apply=args.apply,
+                                    account_type=args.account_type,account_last4=args.account_last4,currency=args.currency)
+            elif action=='import-tree':
+                from .tree_import import import_tree
+                currencies={}
+                for item in args.account_currency:
+                    if '=' not in item:
+                        raise ValueError('Currency overrides use product/xLAST4=USD')
+                    key,value=item.split('=',1)
+                    if key.casefold() in currencies and currencies[key.casefold()]!=value.upper():
+                        raise ValueError('Conflicting account currency overrides')
+                    currencies[key.casefold()]=value.upper()
+                report=import_tree(conn,args.root,args.actor or 'preview',apply=args.apply,currencies=currencies)
             elif action=='migrate-receipt-store':
                 from .migrate import migrate
                 with service._connect() as source:

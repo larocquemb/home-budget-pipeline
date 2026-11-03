@@ -101,6 +101,71 @@ Use complete date ranges that include all same-day identical entries. Correction
 to dates/descriptions and independently imported partial exports require review;
 fingerprints are not proof that two records represent the same purchase.
 
+## Import a CIBC archive folder
+
+`import-tree` supports both five-column card exports and four-column deposit
+exports (date, description, withdrawal, deposit). It recognizes `mastercard` and
+`visa` as credit cards, `smart` as chequing, and `eAdvantage` as savings. Use the
+last four digits in an `x1234` account folder; a year folder below it is optional.
+For example: `smart/x1234/2026/2026-11-03.csv`.
+
+Preview all files first:
+
+```sh
+ledger --env-file .env.dev transactions import-tree /private/transactions/raw/cibc
+```
+
+Then import them:
+
+```sh
+ledger --env-file .env.dev transactions import-tree /private/transactions/raw/cibc \
+  --apply --actor 'Paul La Rocque'
+```
+
+The command validates all files before writing and applies the folder in one
+database transaction. Preview totals account for overlapping files within the
+folder as well as records already imported. Existing primary-card account labels
+are reused to preserve fingerprints. New accounts get a product/last-four label;
+unknown owners stay unassigned. Repeating the command imports only new records.
+
+### USD accounts
+
+New accounts default to CAD. Declare a USD account explicitly on its first import:
+
+```sh
+ledger --env-file .env.dev transactions import-tree /private/transactions/raw/cibc \
+  --account-currency visa/x1234=USD
+```
+
+Review the per-file currency in the preview, then add `--apply --actor 'Paul La Rocque'`.
+The account retains its registered currency for subsequent folder imports; a
+conflicting override is rejected. For a single file, use `--currency USD` with
+`import-cibc`. Original USD amounts are retained without conversion. Folder totals
+count rows and do not add CAD and USD monetary amounts together.
+
+Receipt-currency verification currently supports CAD; USD transactions do not
+receive CAD receipt suggestions or allow unverified cross-currency receipt links.
+USD category/person allocations can be saved in USD. CAD reporting would need a
+separate converted amount, exchange rate, rate date and source; no conversion or
+exchange rate is currently inferred from an export.
+
+Deposit-account withdrawals are positive and deposits negative, following the
+same outflow/inflow sign convention as the bank transaction ledger. These generic
+types do not assume whether a row is spending, income, a refund or a transfer.
+No payment-card number is invented for a deposit account. Transaction exports
+alone do not establish an opening balance or current bank balance.
+
+A single deposit-account file can also be imported explicitly:
+
+```sh
+ledger --env-file .env.dev transactions import-cibc /private/export.csv \
+  --account-reference 'CIBC Smart x1234' --account-type chequing --account-last4 1234
+```
+
+Add `--apply --actor 'Paul La Rocque'` after reviewing its preview. Use `savings`
+for a savings account. Do not pass the full bank account number.
+
+
 ## Review receipt candidates
 
 Open **Transactions**, then select a transaction. Candidates have an exact amount

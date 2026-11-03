@@ -62,8 +62,8 @@ def record_ownership(conn, reference, primary_last4, primary_owner, cardholders,
 
 
 def account_rows(service):
-    return service._fetch('''SELECT a.id,a.account_reference,a.institution,a.primary_card_last4,
-        n.number_kind,n.last4,o.owner_name,o.ownership_role,o.effective_from,o.effective_to,o.asserted_at,o.basis
-        FROM accounting.accounts a LEFT JOIN accounting.account_ownerships o ON o.account_id=a.id
-        LEFT JOIN accounting.account_numbers n ON n.id=o.account_number_id
+    return service._fetch('''SELECT a.id,a.account_reference,a.institution,a.primary_card_last4,a.currency,
+        a.account_type,n.number_kind,n.last4,o.owner_name,o.ownership_role,o.effective_from,o.effective_to,o.asserted_at,o.basis
+        FROM accounting.accounts a LEFT JOIN accounting.account_numbers n ON n.account_id=a.id
+        LEFT JOIN accounting.account_ownerships o ON o.account_number_id=n.id
         ORDER BY a.id,o.ownership_role,n.last4''')

@@ -75,6 +75,8 @@ Purchases are positive; credits and payments are negative.</p></div>'''
         return page('Card payment', body + '<p>This is a transfer paying the card balance. It is excluded from expense allocations.</p>', base_path=BASE_PATH, identity=identity)
     suggestions = receipt_candidates(service, tx)
     body += '<h2>Receipt candidates</h2><p>Suggestions use equal amounts and dates within seven days. Check the original receipt, merchant and card before confirming. A bank description does not change the receipt extraction.</p>'
+    if tx['currency']!='CAD':
+        body+='<p>Receipt matching is unavailable until the receipt currency can be verified. Allocations remain in the original account currency.</p>'
     body += table(suggestions, (('expense_pk','Expense'),('merchant','Merchant'),('store','Store'),
                                 ('transaction_datetime','Receipt date'),('date_source','Date source'),('date_distance_days','Days apart'),
                                 ('total','Total'),('extraction_status','Extraction')),
@@ -131,9 +133,9 @@ form.onsubmit=async e=>{
 def accounts_page(identity:dict=Depends(authenticated_identity)):
     from ..transactions.accounts import account_rows
     rows=account_rows(accounting_service())
-    body='<p>Accounts are identified by the primary card’s last four digits. Full account and card numbers are not stored. Ownership assertions are separate from historical payer attribution.</p>'
-    body+=table(rows,(('account_reference','Account'),('institution','Institution'),('primary_card_last4','Primary ending'),
-                     ('last4','Linked card ending'),('owner_name','Owner / cardholder'),('ownership_role','Role'),
+    body='<p>Accounts use last-four identifiers. Shared card accounts use the primary card ending. Full account and card numbers are not stored. Ownership assertions are separate from historical payer attribution.</p>'
+    body+=table(rows,(('account_reference','Account'),('institution','Institution'),('account_type','Type'),('currency','Currency'),('primary_card_last4','Primary card ending'),
+                     ('last4','Account / card ending'),('owner_name','Owner / cardholder'),('ownership_role','Role'),
                      ('effective_from','Effective from'),('effective_to','Effective to'),('asserted_at','Recorded at')))
     body+='<p>Blank effective dates mean historical ownership dates have not been supplied.</p>'
     return page('Accounts and ownership',body,base_path=BASE_PATH,identity=identity)

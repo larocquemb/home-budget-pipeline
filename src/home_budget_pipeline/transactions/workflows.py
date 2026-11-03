@@ -14,10 +14,17 @@ def ensure_schema(conn):
     conn.execute((SQL_DIR / 'accounting.sql').read_text())
 
 
-def import_cibc(conn, path, account_reference, actor, *, apply=False):
+def import_cibc(conn, path, account_reference, actor, *, apply=False,account_type='credit_card',account_last4=None,extra_known=None,currency='CAD'):
     from psycopg.types.json import Jsonb
     data = Path(path).read_bytes()
-    rows = parse_cibc(data, account_reference)
+    rows = parse_cibc(data, account_reference,account_type=account_type,account_last4=account_last4)
+    format_name='cibc-card-v1' if account_type=='credit_card' else 'cibc-deposit-v1'
+    if currency not in {'CAD','USD'}:
+        raise ValueError('Supported export currencies are CAD and USD')
+    if currency!='CAD':
+        from dataclasses import replace
+        # Preserve historical CAD fingerprints while separating foreign currency.
+        rows=[replace(r,fingerprint=hashlib.sha256((r.fingerprint+':'+currency).encode()).hexdigest()) for r in rows]
     digest = hashlib.sha256(data).hexdigest()
     if not actor.strip():
         raise ValueError('An actor is required')
@@ -27,46 +34,62 @@ def import_cibc(conn, path, account_reference, actor, *, apply=False):
             ensure_schema(conn)
             conn.execute('SELECT pg_advisory_xact_lock(hashtext(%s))', ('cibc-import:' + account_reference.casefold(),))
         with conn.cursor() as cur:
+            cur.execute('SELECT account_type,currency FROM accounting.accounts WHERE account_reference=%s',(account_reference,))
+            registered=cur.fetchone()
+            if registered and (registered['account_type']!=account_type or registered['currency']!=currency):
+                raise ValueError('Account type or currency conflicts with the registered account')
             cur.execute('SELECT import_fingerprint FROM accounting.financial_transactions WHERE import_fingerprint=ANY(%s)',
                         ([r.fingerprint for r in rows],))
             existing = {r['import_fingerprint'] for r in cur.fetchall()}
+            existing.update(extra_known or ())
             report = {'rows': len(rows), 'new': sum(r.fingerprint not in existing for r in rows),
                       'already_imported': sum(r.fingerprint in existing for r in rows),
                       'date_from': min(r.date for r in rows).isoformat(),
                       'date_to': max(r.date for r in rows).isoformat(),
                       'debits': str(sum((r.amount for r in rows if r.amount > 0), Decimal(0))),
                       'credits': str(-sum((r.amount for r in rows if r.amount < 0), Decimal(0))),
-                      'kinds': dict(Counter(r.kind for r in rows)), 'source_sha256': digest, 'applied': apply}
+                      'kinds': dict(Counter(r.kind for r in rows)), 'source_sha256': digest, 'applied': apply,'currency':currency}
+            if extra_known is not None:
+                extra_known.update(r.fingerprint for r in rows)
             if not apply:
                 return report
-            cur.execute('''INSERT INTO accounting.accounts (account_reference,institution)
-                VALUES (%s,'CIBC') ON CONFLICT (account_reference) DO NOTHING''', (account_reference,))
-            cur.execute('SELECT id FROM accounting.accounts WHERE account_reference=%s',(account_reference,))
-            account_id=cur.fetchone()['id']
+            cur.execute('''INSERT INTO accounting.accounts (account_reference,institution,account_type,primary_card_last4,currency)
+                VALUES (%s,'CIBC',%s,%s,%s) ON CONFLICT (account_reference) DO NOTHING''',
+                        (account_reference,account_type,account_last4 if account_type=='credit_card' else None,currency))
+            cur.execute('SELECT id,account_type,currency FROM accounting.accounts WHERE account_reference=%s',(account_reference,))
+            account=cur.fetchone();account_id=account['id']
+            if account['account_type']!=account_type:
+                raise ValueError('Existing account has a different account type')
+            if account['currency']!=currency:
+                raise ValueError('Existing account has a different currency; no conversion is inferred')
+            if account_type!='credit_card':
+                cur.execute('''INSERT INTO accounting.account_numbers(account_id,number_kind,last4)
+                    VALUES(%s,'bank_account',%s) ON CONFLICT DO NOTHING''',(account_id,account_last4))
             cur.execute('''INSERT INTO accounting.transaction_imports
                 (source_sha256,source_name,account_reference,format,row_count,actor)
-                VALUES (%s,%s,%s,'cibc-card-v1',%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (source_sha256,account_reference) DO UPDATE
                     SET source_sha256=EXCLUDED.source_sha256 RETURNING id''',
-                        (digest, Path(path).name, account_reference, len(rows), actor))
+                        (digest, Path(path).name, account_reference, format_name,len(rows), actor))
             import_id = cur.fetchone()['id']
             cur.execute('''INSERT INTO accounting.source_artifacts(import_id,source_uri,source_sha256)
                 VALUES (%s,%s,%s) ON CONFLICT(import_id,source_uri) DO NOTHING''',
                         (import_id,str(Path(path).resolve()),digest))
             for row in rows:
-                raw = {'format': 'cibc-card-v1', 'row': row.raw, 'kind': row.kind,
+                raw = {'format': format_name, 'row': row.raw, 'kind': row.kind,
                        'export_date_semantics': 'bank_export_date; posting_vs_purchase_unspecified',
                        'source_sha256': digest, 'source_row': row.number}
                 cur.execute('''INSERT INTO accounting.financial_transactions
                     (institution,account_id,source_account_reference,transaction_date,amount,currency,
                      description,merchant_text,card_last4,import_fingerprint,raw_source)
-                    VALUES ('CIBC',%s,%s,%s,%s,'CAD',%s,%s,%s,%s,%s)
+                    VALUES ('CIBC',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (import_fingerprint) DO NOTHING''',
-                            (account_id, account_reference, row.date, row.amount, row.description, row.description,
+                            (account_id, account_reference, row.date, row.amount, currency,row.description, row.description,
                              row.card_last4, row.fingerprint, Jsonb(raw)))
-                cur.execute('''INSERT INTO accounting.account_numbers (account_id,number_kind,last4)
-                    VALUES (%s,'card',%s) ON CONFLICT (account_id,number_kind,last4) DO NOTHING''',
-                            (account_id,row.card_last4))
+                if row.card_last4:
+                    cur.execute('''INSERT INTO accounting.account_numbers (account_id,number_kind,last4)
+                        VALUES (%s,'card',%s) ON CONFLICT (account_id,number_kind,last4) DO NOTHING''',
+                                (account_id,row.card_last4))
                 cur.execute('''INSERT INTO accounting.transaction_import_rows
                     (import_id,row_number,transaction_id,raw_row)
                     SELECT %s,%s,id,%s FROM accounting.financial_transactions WHERE import_fingerprint=%s
@@ -137,6 +160,8 @@ def save_allocations(conn, transaction_id, rows, expected_version, actor, reason
             if version != expected_version:
                 raise ValueError('Allocations changed; reload the transaction before saving')
             after = normalize_allocations(rows, tx['amount'])
+            if tx['currency']!='CAD' and any(r['expense_pk'] or r['receipt_source_sha256'] for r in after):
+                raise ValueError('Receipt currency is not verified for this account; record allocations without a receipt link')
             for r in after:
                 if r['expense_pk']:
                     if receipt_service is None:
@@ -172,7 +197,7 @@ def save_allocations(conn, transaction_id, rows, expected_version, actor, reason
 def receipt_candidates(service, transaction):
     """Exact amount and bounded date suggestions; never modify receipt fields."""
     from ..web.receipt_fields import RECEIPT_DATETIME_SQL
-    if transaction['amount'] <= 0:
+    if transaction['amount'] <= 0 or transaction.get('currency','CAD')!='CAD':
         return ()
     rows = service._fetch(f'''
         SELECT DISTINCT ON (e.id) e.id AS expense_pk, COALESCE(re.merchant,e.store_name) AS merchant,
