@@ -11,6 +11,7 @@ home-budget-category-catalog \
   "$destination/002-categories.sql"
 cp "$repo_root/sql/analytics_views.sql" "$destination/003-analytics-views.sql"
 cp "$repo_root/sql/financial_transactions.sql" "$destination/004-financial-transactions.sql"
+cat "$repo_root/sql/transaction_workflows.sql" >> "$destination/004-financial-transactions.sql"
 cp "$repo_root/sql/receipt_deduplication.sql" "$destination/005-receipt-deduplication.sql"
 cp "$repo_root/sql/schema_constraints.sql" "$destination/006-schema-constraints.sql"
 cp "$repo_root/sql/receipt_processing.sql" "$destination/007-receipt-processing.sql"

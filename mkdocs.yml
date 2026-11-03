@@ -50,6 +50,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - User guide: user-guide.md
+  - Bank transactions and splits: bank-transactions.md
   - Solution architecture: solution-architecture.md
   - Receipt processing:
       - Backlog processing: receipt-processing.md

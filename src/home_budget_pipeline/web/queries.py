@@ -920,6 +920,8 @@ class LedgerQueryService:
         sql = """
             SELECT ft.id AS transaction_id, ft.transaction_date, ft.posting_date,
                    ft.amount, ft.description, ft.payer, ft.payer_source,
+                   ft.card_last4, ft.raw_source->>'kind' AS kind,
+                   (SELECT count(*) FROM budget.transaction_allocations a WHERE a.transaction_id=ft.id) AS allocation_count,
                    r.expense_pk, r.outcome, r.score, r.candidate_count,
                    r.candidate_details
               FROM budget.financial_transactions ft
