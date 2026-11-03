@@ -172,3 +172,5 @@ def apply(receipt, observations):
         receipt.transaction_date = date_part(value)
     if 'card_last4' in decisions:
         receipt.card_last4 = decisions['card_last4']['value']
+    from .financial_header import apply as apply_financial_header
+    apply_financial_header(receipt, observations)

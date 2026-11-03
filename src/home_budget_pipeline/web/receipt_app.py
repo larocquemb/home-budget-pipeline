@@ -242,6 +242,8 @@ def _receipt_detail(service: LedgerQueryService, source_sha256: str) -> dict[str
             }
             for item in expense["items"]
         )
+    if evidence and hasattr(service, 'receipt_source_comparison'):
+        receipt['source_comparison'] = service.receipt_source_comparison(evidence)
     receipt["evidence"] = evidence
     receipt['stored_extraction_status'] = (evidence or {}).get('extraction_status') or (expense or {}).get('extraction_status')
     receipt['extraction_status'] = receipt['stored_extraction_status']
@@ -694,6 +696,9 @@ def receipt_page(
 <div><strong>Accounting record</strong><br>{canonical_expense}</div>
 </div></div>"""
 
+    if not deleted:
+        from .scan_completeness_html import render as render_scan_completeness
+        header += render_scan_completeness(receipt, BASE_PATH)
     header += deletion_control(source_sha256, deleted)
     if deleted:
         header += '<p class="card">Deleted from the active ledger. The original document and recorded extraction are retained. Restore this receipt to use it again.</p>'

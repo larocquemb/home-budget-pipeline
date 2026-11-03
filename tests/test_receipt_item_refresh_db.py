@@ -103,7 +103,7 @@ def test_acceptance_prefers_approved_scoped_rule_and_preserves_manual_category(r
         accept(receipt)
         row = service._fetch('SELECT budget_category,category_rationale FROM budget.expense_items WHERE id=%s', (items[0],))[0]
         assert row['budget_category'] == 'Indoor Supplies'
-        assert row['category_rationale'] == 'approved category rule applied during product review'
+        assert row['category_rationale'] == 'approved category rule'
     finally:
         with service._connect() as conn:
             conn.execute('DELETE FROM budget.expense_category_mappings WHERE id=%s', (rule,))

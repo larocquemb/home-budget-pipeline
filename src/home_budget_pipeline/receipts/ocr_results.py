@@ -212,12 +212,15 @@ class OcrResultMessage:
             "subtotal", "tax", "total", "payment_method", "card_last4", "payer",
             "items", "text", "extraction_confidence", "extraction_status", "review_reasons",
         }
-        if set(receipt) - {'store', 'store_address', 'store_phone', 'tax_registration_number', 'field_decisions'} != required_receipt:
+        if set(receipt) - {'store', 'store_address', 'store_phone', 'tax_registration_number', 'field_decisions', 'page_text'} != required_receipt:
             raise InvalidOcrResultMessage("receipt payload has unexpected fields")
+        if 'page_text' in receipt and (not isinstance(receipt['page_text'], list)
+                or not all(isinstance(page, str) for page in receipt['page_text'])):
+            raise InvalidOcrResultMessage('receipt page_text must be an array of strings')
         if not isinstance(receipt.get('field_decisions', {}), dict):
             raise InvalidOcrResultMessage('receipt field_decisions must be an object')
         for name, decision in receipt.get('field_decisions', {}).items():
-            if (name not in {'card_last4', 'transaction_datetime', 'items'} or not isinstance(decision, dict)
+            if (name not in {'card_last4', 'transaction_datetime', 'items', 'financial_header', 'scan_completeness'} or not isinstance(decision, dict)
                     or decision.get('status') not in {'selected', 'conflict'}
                     or not isinstance(decision.get('candidates'), list)):
                 raise InvalidOcrResultMessage('receipt field decision is invalid')
@@ -479,6 +482,7 @@ def _receipt_payload(receipt: scan.ScannedReceipt) -> dict[str, Any]:
         "payer": receipt.payer,
         "items": [asdict(item) for item in receipt.items],
         "text": receipt.text,
+        "page_text": list(receipt.page_text),
         "extraction_confidence": receipt.extraction_confidence,
         "extraction_status": receipt.extraction_status,
         "review_reasons": list(receipt.review_reasons),
@@ -510,6 +514,7 @@ def receipt_from_message(message: OcrResultMessage) -> scan.ScannedReceipt:
         payer=payload["payer"],
         items=[scan.ScannedItem(**item) for item in payload["items"]],
         text=payload["text"],
+        page_text=payload.get("page_text") or [],
         extraction_confidence=payload["extraction_confidence"],
         extraction_status=payload["extraction_status"],
         review_reasons=payload["review_reasons"],

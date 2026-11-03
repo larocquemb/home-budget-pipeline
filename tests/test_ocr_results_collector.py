@@ -407,3 +407,20 @@ def test_collector_rechecks_current_rules_without_promoting_worker_review(tmp_pa
     assert event.payload['receipt']['extraction_status'] == worker_status
     if not balanced:
         assert 'item_total_mismatch' in restored.review_reasons
+
+
+def test_separate_page_text_survives_worker_collector_contract_and_legacy_messages(tmp_path):
+    source=tmp_path/'receipt.png';source.write_bytes(b'synthetic source')
+    receipt=result_receipt(source)
+    receipt.page_text=['First Sauce $4.20','Bread Rolls $3.20\nSUBTOTAL $7.40']
+    event=ocr_results.result_messages_for_receipt(receipt)[0]
+    restored=ocr_results.receipt_from_message(ocr_results.OcrResultMessage.from_bytes(event.to_bytes()))
+    assert restored.page_text==receipt.page_text
+    import json
+    legacy=json.loads(event.to_bytes())
+    legacy['payload']['receipt'].pop('page_text')
+    decoded=ocr_results.OcrResultMessage.from_bytes(json.dumps(legacy).encode())
+    assert ocr_results.receipt_from_message(decoded).page_text==[]
+    legacy['payload']['receipt']['page_text']='not an array'
+    with pytest.raises(ocr_results.InvalidOcrResultMessage,match='page_text'):
+        ocr_results.OcrResultMessage.from_bytes(json.dumps(legacy).encode())

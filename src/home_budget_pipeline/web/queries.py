@@ -214,6 +214,47 @@ class LedgerQueryService:
         params.extend([max_items, limit, offset])
         return Page(self._fetch(sql, tuple(params)), limit, offset)
 
+    def receipt_source_comparison(self, evidence):
+        """Compare a poor scan with a reconciled matching purchase, read-only."""
+        from ..receipts.scan_completeness import compare
+        from ..receipts.allocation import assess
+        timestamp=evidence.get('transaction_datetime')
+        merchant=evidence.get('merchant')
+        if not timestamp or not merchant or str(timestamp)[11:19] in ('00:00:00',''):
+            return None
+        rows=self._fetch("""
+            SELECT re.source_sha256,re.source_reference,re.expense_pk,
+                   e.receipt_item_subtotal AS subtotal,
+                   COALESCE(e.receipt_gst,0)+COALESCE(e.receipt_pst,0) AS tax,
+                   e.expense_total AS total,e.raw_payload->'items' AS items,
+                   (SELECT SUM(i.line_total) FROM budget.expense_items i
+                     WHERE i.expense_pk=e.id) AS canonical_item_sum
+              FROM budget.receipt_evidence re JOIN budget.expenses e ON e.id=re.expense_pk
+             WHERE re.source_sha256<>%s AND re.transaction_datetime=%s
+               AND lower(trim(re.merchant))=lower(trim(%s))
+               AND (re.card_last4 IS NULL OR %s::text IS NULL OR re.card_last4=%s)
+               AND re.extraction_status='complete'
+               AND NOT (COALESCE(re.raw_payload,'{}'::jsonb) ? 'receipt_deleted')
+               AND NOT (COALESCE(re.raw_payload,'{}'::jsonb) ? 'duplicate_merge')
+               AND COALESCE(re.raw_payload->>'source_archived','false')<>'true'
+               AND NOT (COALESCE(e.raw_payload,'{}'::jsonb) ? 'receipt_deleted')
+               AND NOT (COALESCE(e.raw_payload,'{}'::jsonb) ? 'duplicate_merge')
+             ORDER BY e.id LIMIT 20
+        """,(evidence['source_sha256'],timestamp,merchant,evidence.get('card_last4'),evidence.get('card_last4')))
+        comparisons=[]
+        for row in rows:
+            items=row.get('items') or []
+            if (not items or row.get('canonical_item_sum')!=row.get('subtotal')
+                    or not assess(items,row['subtotal'],row['tax'],row['total'])['reconciled']):
+                continue
+            comparison=compare(items,evidence.get('page_text') or [evidence.get('raw_text') or ''],
+                               (evidence.get('raw_payload') or {}).get('items') or [])
+            if comparison['coverage']<.5:
+                continue
+            comparisons.append({**comparison,'reference_sha256':row['source_sha256'],
+                'reference_expense_pk':row['expense_pk'],'reference_source':row['source_reference']})
+        return max(comparisons,key=lambda r:r['coverage']) if comparisons else None
+
     def expense_detail(self, expense_pk: int) -> dict[str, Any] | None:
         rows = self._fetch(
             """

@@ -214,7 +214,8 @@ def upsert_evidence(conn, receipt, schema: str = "budget", evidence_type: str = 
                 extraction_status = EXCLUDED.extraction_status,
                 extraction_confidence = EXCLUDED.extraction_confidence,
                 raw_text = EXCLUDED.raw_text,
-                page_text = EXCLUDED.page_text,
+                page_text = CASE WHEN jsonb_array_length(EXCLUDED.page_text)>0
+                    THEN EXCLUDED.page_text ELSE {schema}.receipt_evidence.page_text END,
                 raw_payload = EXCLUDED.raw_payload || CASE WHEN {schema}.receipt_evidence.raw_payload ? 'duplicate_merge'
                     THEN jsonb_build_object('duplicate_merge',{schema}.receipt_evidence.raw_payload->'duplicate_merge')
                     ELSE '{{}}'::jsonb END || CASE WHEN {schema}.receipt_evidence.raw_payload ? 'receipt_deleted'

@@ -26,6 +26,11 @@ def test_ocr_refresh_categorizes_and_preserves_reviewed_item_identity():
             ingest.ScannedItem('Unknown product',5,'BAKERY')])
     with psycopg.connect(TEST_DATABASE_URL) as conn:
         try:
+            # This test owns its taxonomy; a fresh CI database need not contain
+            # categories seeded by another test or a developer's budget.
+            group = conn.execute("INSERT INTO budget.category_groups(group_key,group_name) VALUES ('ocr-refresh-test','OCR refresh test') ON CONFLICT(group_key) DO UPDATE SET group_name=EXCLUDED.group_name RETURNING id").fetchone()[0]
+            for name in ('Groceries', 'Indoor Supplies'):
+                conn.execute('INSERT INTO budget.expense_categories(category_name,group_id) VALUES (%s,%s) ON CONFLICT(category_name) DO UPDATE SET is_active=TRUE', (name, group))
             with patch.object(ingest,'resolve_owner_from_db',return_value=None):
                 pk = ingest.upsert_receipt(conn,receipt)
                 rows = conn.execute('SELECT id,budget_category FROM budget.expense_items WHERE expense_pk=%s ORDER BY id',(pk,)).fetchall()

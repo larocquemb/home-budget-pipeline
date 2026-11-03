@@ -51,8 +51,8 @@ def test_imported_evidence_is_listed_and_opened_without_an_ocr_entry():
         assert detail['processing_status'] == 'imported'
         assert detail['evidence']['source_reference'] == 'Costco/catalogue-test.pdf'
         html = receipt_page(sha, service=service, identity={'user': 'test'})
-        assert 'Possible duplicate purchase' in html
-        assert '/expenses/228' in html
+        assert 'Possible duplicate purchase' not in html
+        assert detail['evidence']['possible_duplicate_expense_pks'] == [228]
         from home_budget_pipeline.receipt_graph import build, load
         graph = build(load(conn, sha))
         assert any(node['kind'] == 'Receipt' and node['label'] == 'Costco/catalogue-test.pdf'

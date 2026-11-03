@@ -252,6 +252,11 @@ receipts-graph:
 test:
 	$(PYTHON) -m pytest -q -m "not integration"
 
+# Requires an explicitly supplied isolated TEST_DATABASE_URL; never resets it.
+.PHONY: test-integration
+test-integration:
+	$(PYTHON) -m pytest -q -m integration $(INTEGRATION_TESTS)
+
 build-local:
 	$(PYTHON) -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
 
