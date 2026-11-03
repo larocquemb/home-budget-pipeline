@@ -107,6 +107,8 @@ def test_collector_roundtrip_persistence_and_display(tmp_path, monkeypatch):
     receipt = result_receipt(source)
     receipt.store_phone = '204-555-0123'
     receipt.tax_registration_number = '123456789RT0001'
+    from home_budget_pipeline.receipts.store_contact import registration_evidence
+    receipt.field_decisions['tax_registration_number']=registration_evidence('GST #123456789RT0001')
     receipt.items[0].department = 'GROCERY'
     event = ocr_results.result_messages_for_receipt(receipt)[0]
     restored = ocr_results.receipt_from_message(event)
@@ -123,6 +125,7 @@ def test_collector_roundtrip_persistence_and_display(tmp_path, monkeypatch):
     assert payload['items'][0]['department'] == 'GROCERY'
     assert payload['store_phone'] == receipt.store_phone
     assert payload['tax_registration_number'] == receipt.tax_registration_number
+    assert payload['field_decisions']['tax_registration_number']['value']=='123456789RT0001'
     summary = _post_ocr_text({'store_phone':restored.store_phone,'tax_registration_number':restored.tax_registration_number,'raw_payload':payload},None)
     assert 'Phone: 204-555-0123' in summary
     assert 'Tax registration (RT): 123456789RT0001' in summary
@@ -133,3 +136,21 @@ def test_collector_roundtrip_persistence_and_display(tmp_path, monkeypatch):
         item.pop('department')
     legacy = ocr_results.receipt_from_message(event)
     assert legacy.store_phone is None and legacy.items[0].department is None
+
+
+def test_optional_rt_uses_unique_cross_engine_support_and_retains_alternatives():
+    from home_budget_pipeline.receipts.store_contact import registration_evidence
+    def seen(value,engine,run='synthetic'):
+        return {'page_number':1,'status':'success','run_uuid':run,'engine':engine,
+                'text':'Example Shop\nGST #'+value}
+    observations=[seen('123456789RT0001','paddle'),seen('123456789RT0001','tesseract'),
+                  seen('123456739RT0001','tesseract')]
+    decision=registration_evidence('Example Shop\nGST #123456739RT0001',observations)
+    assert decision['value']=='123456789RT0001' and decision['reason']=='independent_engines_agree'
+    assert {c['value'] for c in decision['candidates']}=={'123456789RT0001','123456739RT0001'}
+    observations.append(seen('123456739RT0001','paddle'))
+    assert registration_evidence('Example Shop',observations)['value'] is None
+    # Repetition by one engine and unrelated runs do not create corroboration.
+    observations=[seen('123456789RT0001','paddle','one'),seen('123456789RT0001','tesseract','two'),
+                  seen('123456739RT0001','tesseract','one')]
+    assert registration_evidence('Example Shop',observations)['value'] is None

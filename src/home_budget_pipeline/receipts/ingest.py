@@ -1724,7 +1724,7 @@ def review_reasons_for(receipt: ScannedReceipt) -> List[str]:
         return ["unreadable_ocr"]
     reasons: List[str] = []
     reasons.extend(('possible_missing_page_content' if name=='scan_completeness' else 'conflicting_ocr_' + name) for name, decision in receipt.field_decisions.items()
-                   if decision.get('status') == 'conflict' and name!='store_phone')
+                   if decision.get('status') == 'conflict' and name not in {'store_phone','tax_registration_number'})
     if not receipt.merchant:
         reasons.append("missing_merchant")
     observations = [p for p in (getattr(receipt, 'ocr_run', {}) or {}).get('ocr_passes', [])

@@ -118,10 +118,13 @@ def resolve(text, observations):
     if not sources:
         return {}
     result = {}
-    from .store_contact import phone_evidence
+    from .store_contact import phone_evidence, registration_evidence
     phone=phone_evidence(text, observations)
     if phone['candidates']:
         result['store_phone']=phone
+    registration=registration_evidence(text, observations)
+    if registration['candidates']:
+        result['tax_registration_number']=registration
     from .header_evidence import resolve as resolve_header
     result.update(resolve_header(observations))
     for field, extractor in [('transaction_datetime', transaction_datetime_evidence),
@@ -178,7 +181,7 @@ def apply(receipt, observations):
         receipt.transaction_date = date_part(value)
     if 'card_last4' in decisions:
         receipt.card_last4 = decisions['card_last4']['value']
-    for field in ('merchant','store','store_phone'):
+    for field in ('merchant','store','store_phone','tax_registration_number'):
         if field in decisions:
             setattr(receipt,field,decisions[field]['value'])
     from .financial_header import apply as apply_financial_header
